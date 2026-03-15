@@ -1,0 +1,335 @@
+"""
+Sage — AI financial advisor powered by Claude Haiku.
+Tool-use loop with access to all financial data, persistent notes, and web search.
+"""
+import os
+import logging
+from pathlib import Path
+import anthropic
+import httpx
+
+from api.database import get_db
+
+logger = logging.getLogger("vaultic.sage")
+
+NOTES_PATH = Path(__file__).parent.parent / "data" / "sage_notes.md"
+MODEL = "claude-haiku-4-5-20251001"
+
+SYSTEM_PROMPT = """You are Sage — a personal CFO, wealth-building advisor, and financial thought partner. You are a man. You live inside Vaultic, the user's personal financial command center.
+
+You have direct, real-time access to their complete financial picture through your tools. Before answering any question about their finances, call the relevant tools to get current data — never make up numbers.
+
+You also have full internet access via web_search and fetch_page. Use these to:
+- Look up current stock prices, crypto prices, market data
+- Research tax rules, contribution limits, IRS guidelines
+- Find current mortgage rates, CD rates, HYSA rates
+- Research any financial topic the user asks about
+- Get news about their holdings or institutions
+
+Your personality:
+- Direct and confident — give specific advice, not generic disclaimers
+- Proactive — notice things the user hasn't asked about yet
+- Educational — explain the "why" behind your recommendations
+- Personal — always use their actual numbers, not hypotheticals
+
+Your financial tools cover:
+- All bank accounts, credit cards, mortgage (via Plaid)
+- 401k accounts: Vanguard, Voya, Insperity
+- Brokerage: Robinhood
+- Crypto: Coinbase, River (coming soon)
+- Manual entries: home value, car value, credit score
+- NFS/Investor360 accounts (Parker Financial IRAs, college fund) — may be entered manually
+- Net worth history and trends
+
+On every new conversation, read your notes first — they contain important context about the user's goals, situation, and preferences. Update your notes whenever you learn something worth remembering long-term.
+
+Keep responses concise but substantive. Use their actual numbers. Be the trusted financial advisor they can ask anything."""
+
+TOOLS = [
+    {
+        "name": "get_net_worth",
+        "description": "Get the latest net worth snapshot with full breakdown by category (liquid, invested, real estate, vehicles, crypto, liabilities)",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_net_worth_history",
+        "description": "Get net worth history over time for trend analysis",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "description": "Days of history to return (default 90)"}
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_accounts",
+        "description": "Get all connected accounts with current balances, types, and institution names",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_transactions",
+        "description": "Get recent transactions across all accounts for spending analysis",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Number of transactions to return (default 50, max 200)"}
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_manual_entries",
+        "description": "Get manually entered assets and values (home value, car value, credit score, other assets/liabilities)",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_notes",
+        "description": "Read your persistent notes about the user's financial goals, preferences, situation, and anything important to remember across sessions",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "update_notes",
+        "description": "Update your persistent notes. Use this to remember goals, decisions, important context, or anything the user wants you to keep in mind. This replaces the full notes file.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "notes": {"type": "string", "description": "Complete updated notes in markdown format"}
+            },
+            "required": ["notes"],
+        },
+    },
+    {
+        "name": "web_search",
+        "description": "Search the web for current financial data, market prices, tax rules, interest rates, news, or any information you need. Use this whenever the user asks about current prices, rates, or anything requiring up-to-date information.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query"}
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "fetch_page",
+        "description": "Fetch the text content of a specific web page — useful for reading a full article, IRS page, or detailed financial data after a web search returns relevant URLs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to fetch"}
+            },
+            "required": ["url"],
+        },
+    },
+]
+
+
+def _call_tool(name: str, inputs: dict) -> str:
+    try:
+        if name == "get_net_worth":
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT * FROM net_worth_snapshots ORDER BY snapped_at DESC LIMIT 1"
+                ).fetchone()
+            if not row:
+                return "No net worth data yet. Connect accounts and sync to get started."
+            return str(dict(row))
+
+        elif name == "get_net_worth_history":
+            days = inputs.get("days", 90)
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT snapped_at, total, liquid, invested, real_estate, vehicles, liabilities FROM net_worth_snapshots ORDER BY snapped_at DESC LIMIT ?",
+                    (days,)
+                ).fetchall()
+            return str([dict(r) for r in rows])
+
+        elif name == "get_accounts":
+            with get_db() as conn:
+                rows = conn.execute("""
+                    SELECT a.name, a.display_name, a.mask, a.type, a.subtype,
+                           a.institution_name, b.current, b.available, b.snapped_at
+                    FROM accounts a
+                    LEFT JOIN account_balances b ON b.account_id = a.id
+                        AND b.snapped_at = (SELECT MAX(snapped_at) FROM account_balances WHERE account_id = a.id)
+                    WHERE a.is_active = 1
+                    ORDER BY a.institution_name, a.name
+                """).fetchall()
+            return str([dict(r) for r in rows])
+
+        elif name == "get_transactions":
+            limit = min(inputs.get("limit", 50), 200)
+            with get_db() as conn:
+                rows = conn.execute("""
+                    SELECT t.date, t.amount, t.name, t.merchant_name, t.category, t.pending,
+                           a.name AS account_name, a.institution_name
+                    FROM transactions t
+                    JOIN accounts a ON a.id = t.account_id
+                    WHERE a.is_active = 1
+                    ORDER BY t.date DESC
+                    LIMIT ?
+                """, (limit,)).fetchall()
+            return str([dict(r) for r in rows])
+
+        elif name == "get_manual_entries":
+            with get_db() as conn:
+                rows = conn.execute(
+                    "SELECT name, category, value, notes, entered_at FROM manual_entries ORDER BY entered_at DESC"
+                ).fetchall()
+            return str([dict(r) for r in rows])
+
+        elif name == "get_notes":
+            if NOTES_PATH.exists():
+                return NOTES_PATH.read_text()
+            return "No notes yet."
+
+        elif name == "update_notes":
+            notes = inputs.get("notes", "")
+            NOTES_PATH.parent.mkdir(exist_ok=True)
+            NOTES_PATH.write_text(notes)
+            return "Notes updated."
+
+        elif name == "web_search":
+            return _tavily_search(inputs.get("query", ""))
+
+        elif name == "fetch_page":
+            return _fetch_page(inputs.get("url", ""))
+
+        return f"Unknown tool: {name}"
+    except Exception as e:
+        logger.error(f"Tool {name} error: {e}")
+        return f"Error calling {name}: {e}"
+
+
+def _tavily_search(query: str) -> str:
+    """
+    Search the web via Tavily's AI-native search API.
+
+    Why Tavily instead of Brave or Google Custom Search?
+    - Tavily returns an AI-synthesized direct answer in addition to raw results,
+      which lets Claude skip follow-up fetch_page calls for common questions
+      (e.g. "what is the 2025 401k contribution limit?").
+    - `include_answer: True` asks Tavily to generate a concise answer string
+      from its own model. Claude sees this at the top of the result, reducing
+      round-trips and token usage.
+    - We intentionally do NOT fire parallel fetches for each result URL here —
+      that would be slow and expensive for the vast majority of queries where
+      Tavily's snippets + direct answer are sufficient. Claude can call
+      fetch_page() explicitly if it needs the full body of a specific URL.
+    """
+    api_key = os.environ.get("TAVILY_API_KEY", "")
+    if not api_key:
+        return "Web search unavailable — TAVILY_API_KEY not configured in .env"
+    try:
+        resp = httpx.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": api_key,
+                "query": query,
+                "search_depth": "basic",
+                # include_answer: Tavily generates a short answer synthesized from
+                # search results — saves Claude from needing to infer it from snippets
+                "include_answer": True,
+                "max_results": 5,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        lines = [f"Search results for: {query}\n"]
+        if data.get("answer"):
+            lines.append(f"**Direct answer:** {data['answer']}\n")
+        for r in data.get("results", []):
+            lines.append(f"**{r.get('title', '')}**")
+            lines.append(f"URL: {r.get('url', '')}")
+            lines.append(r.get("content", ""))
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"Tavily search error: {e}")
+        return f"Search failed: {e}"
+
+
+def _fetch_page(url: str) -> str:
+    try:
+        resp = httpx.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Vaultic/1.0)"},
+            timeout=15,
+            follow_redirects=True,
+        )
+        resp.raise_for_status()
+        # Strip HTML tags simply
+        import re
+        text = re.sub(r"<style[^>]*>.*?</style>", "", resp.text, flags=re.DOTALL)
+        text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s{3,}", "\n\n", text)
+        return text[:8000]  # cap at 8k chars
+    except Exception as e:
+        logger.error(f"fetch_page error for {url}: {e}")
+        return f"Could not fetch page: {e}"
+
+
+def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
+    """
+    Run one turn of conversation with Sage.
+    Returns (sage_response_text, updated_messages).
+    """
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+    messages = list(messages) + [{"role": "user", "content": user_message}]
+
+    while True:
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        # model_dump() converts each Anthropic SDK content block (a typed Pydantic
+        # object like TextBlock or ToolUseBlock) into a plain dict. This is required
+        # for two reasons:
+        #  1. FastAPI/Pydantic cannot serialize SDK-typed objects when they appear
+        #     inside the `history` list returned to the frontend.
+        #  2. On subsequent turns, the messages list is passed back to
+        #     client.messages.create(). The Anthropic SDK accepts plain dicts for
+        #     message content, but NOT its own typed objects from a prior call.
+        # Without model_dump() here, Sage would 500 on any multi-turn conversation
+        # or any turn that involved a tool call.
+        messages.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
+
+        if resp.stop_reason == "end_turn":
+            text = ""
+            for block in resp.content:
+                if hasattr(block, "text"):
+                    text += block.text
+            return text.strip(), messages
+
+        if resp.stop_reason == "tool_use":
+            # Claude requested one or more tool calls in this turn.
+            # The Anthropic API allows multiple tool_use blocks in a single response
+            # (e.g. Claude might call get_accounts AND get_net_worth simultaneously).
+            # We execute all of them and bundle the results into a single "user" turn
+            # with multiple tool_result blocks — this is the required API shape for
+            # returning tool results back to the model.
+            tool_results = []
+            for block in resp.content:
+                if block.type == "tool_use":
+                    result = _call_tool(block.name, block.input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,   # must match the id from the tool_use block
+                        "content": result,
+                    })
+            # Append all results as a single user turn — the loop then calls Claude
+            # again with this updated context so it can generate its final response.
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            # stop_reason is something unexpected (e.g. "max_tokens") — break to
+            # avoid an infinite loop and fall through to the error return below.
+            break
+
+    return "I encountered an unexpected issue. Please try again.", messages

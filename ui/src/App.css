@@ -1,0 +1,352 @@
+:root {
+  --bg: #0f1117;
+  --bg2: #171b26;
+  --bg3: #1e2330;
+  --border: #2a2f3e;
+  --text: #e8eaf0;
+  --text2: #8b92a8;
+  --accent: #4f8ef7;
+  --accent-hover: #3a7ae8;
+  --green: #34d399;
+  --red: #f87171;
+  --yellow: #fbbf24;
+  --purple: #a78bfa;
+  --radius: 10px;
+  --sidebar-width: 220px;
+  --mobile-nav-height: 64px;
+}
+
+/* ── Layout ─────────────────────────────────── */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: 100vh;
+  grid-template-areas: "sidebar main";
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── Sidebar (desktop only) ─────────────────── */
+
+.sidebar {
+  grid-area: sidebar;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-brand {
+  padding: 24px 20px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-brand h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.5px;
+}
+
+.sidebar-brand span {
+  font-size: 11px;
+  color: var(--text2);
+  letter-spacing: 0.5px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 0;
+}
+
+.sidebar-nav a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  color: var(--text2);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+}
+
+.sidebar-nav a:hover { color: var(--text); background: var(--bg3); }
+
+.sidebar-nav a.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: rgba(79, 142, 247, 0.08);
+}
+
+.nav-icon { font-size: 16px; width: 18px; text-align: center; }
+
+.sidebar-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-footer button {
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text2);
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.sidebar-footer button:hover { color: var(--text); border-color: var(--text2); }
+
+/* ── Main content ───────────────────────────── */
+
+.main-content {
+  grid-area: main;
+  overflow-y: auto;
+  padding: 32px;
+  background: var(--bg);
+}
+
+/* ── Mobile bottom nav (hidden on desktop) ─── */
+
+.mobile-nav { display: none; }
+
+/* ── Page header ────────────────────────────── */
+
+.page-header { margin-bottom: 28px; }
+.page-header h2 { font-size: 24px; font-weight: 700; color: var(--text); }
+.page-header p { color: var(--text2); font-size: 14px; margin-top: 4px; }
+
+/* ── Cards ──────────────────────────────────── */
+
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 8px;
+}
+
+/* ── Net worth ──────────────────────────────── */
+
+.nw-total {
+  font-size: 48px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -2px;
+  line-height: 1;
+}
+
+.nw-total.positive { color: var(--green); }
+
+.category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.category-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.category-card .label {
+  font-size: 11px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 6px;
+}
+
+.category-card .value { font-size: 20px; font-weight: 700; color: var(--text); }
+.category-card .value.negative { color: var(--red); }
+
+/* ── Account list ───────────────────────────── */
+
+.account-list { display: flex; flex-direction: column; gap: 8px; }
+
+.account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  transition: border-color 0.15s;
+}
+
+.account-row:hover { border-color: var(--accent); }
+
+.account-info { flex: 1; }
+.account-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.account-meta { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+.account-balance { font-size: 16px; font-weight: 700; color: var(--text); text-align: right; }
+.account-balance.liability { color: var(--red); }
+
+/* ── Buttons ────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+}
+
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+.btn-danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+.btn-danger:hover { background: var(--red); color: #fff; }
+
+/* ── Forms ──────────────────────────────────── */
+
+.form-group { margin-bottom: 16px; }
+
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text2);
+  margin-bottom: 6px;
+}
+
+.form-input, .form-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 7px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus, .form-select:focus { border-color: var(--accent); }
+.form-select option { background: var(--bg2); }
+
+/* ── Empty state ────────────────────────────── */
+
+.empty-state { text-align: center; padding: 60px 20px; color: var(--text2); }
+.empty-state p { margin-bottom: 16px; font-size: 15px; }
+
+/* ── Badges ─────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.badge-investment { background: rgba(79,142,247,0.15); color: var(--accent); }
+.badge-depository { background: rgba(52,211,153,0.15); color: var(--green); }
+.badge-credit      { background: rgba(248,113,113,0.15); color: var(--red); }
+.badge-loan        { background: rgba(251,191,36,0.15); color: var(--yellow); }
+
+/* ── Mobile ─────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr var(--mobile-nav-height);
+    grid-template-areas:
+      "main"
+      "mobile-nav";
+  }
+
+  .sidebar { display: none; }
+
+  .main-content {
+    padding: 20px 16px;
+    padding-bottom: calc(var(--mobile-nav-height) + 16px);
+  }
+
+  .mobile-nav {
+    display: flex;
+    grid-area: mobile-nav;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: var(--mobile-nav-height);
+    z-index: 100;
+  }
+
+  .mobile-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    color: var(--text2);
+    text-decoration: none;
+    transition: color 0.15s;
+    padding: 8px 4px;
+  }
+
+  .mobile-nav-item.active { color: var(--accent); }
+  .mobile-nav-item:hover { color: var(--text); }
+
+  .mobile-nav-icon { font-size: 20px; }
+  .mobile-nav-label { font-size: 10px; font-weight: 600; letter-spacing: 0.3px; }
+
+  .page-header h2 { font-size: 20px; }
+
+  .nw-total { font-size: 36px; }
+
+  .category-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .card { padding: 16px; }
+
+  .account-row { padding: 12px 14px; }
+  .account-name { font-size: 13px; }
+  .account-balance { font-size: 14px; }
+
+  /* Sage button clears mobile nav */
+  .sage-float-btn { bottom: calc(var(--mobile-nav-height) + 16px) !important; }
+}
+
+@media (max-width: 480px) {
+  .category-grid { grid-template-columns: 1fr 1fr; }
+
+  .btn { padding: 8px 14px; font-size: 13px; }
+}

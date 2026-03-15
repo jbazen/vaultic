@@ -1,0 +1,32 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Database & data (never commit)
+data/
+
+# Claude Code settings (local only)
+.claude/
+
+.stuff
+
+# Frontend build
+ui/node_modules/
+ui/dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
