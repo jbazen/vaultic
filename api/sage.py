@@ -333,6 +333,38 @@ def _sanitize_messages(messages: list[dict]) -> list[dict]:
     return sanitized
 
 
+def _trim_history(messages: list[dict], keep: int = 40) -> list[dict]:
+    """
+    Trim message history to at most `keep` recent messages, always starting
+    on a plain user message (not a tool_result turn) so the resulting history
+    is structurally valid before sanitize runs.
+
+    Order of operations in chat():
+      1. trim   — drop old messages, find a safe start boundary
+      2. sanitize — remove any orphaned tool_use/tool_result pairs
+      3. append user message — add the new turn
+    Sanitize MUST run after trim so it can fix any pairs that were split by
+    the trim boundary. Running sanitize before trim is what caused the
+    messages.1 orphan bug — trim would then create new orphans that sanitize
+    never saw.
+    """
+    if len(messages) <= keep:
+        return messages
+    trimmed = messages[-keep:]
+    # Advance past any leading tool_result-only user turns (second half of a
+    # tool pair) to ensure we start on a genuine conversational user message.
+    for i, msg in enumerate(trimmed):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list) and content and all(
+            isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+        ):
+            continue  # this is a tool_result turn, not a safe start
+        return trimmed[i:]
+    return trimmed
+
+
 def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
     """
     Run one turn of conversation with Sage.
@@ -340,12 +372,10 @@ def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
     """
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
-    messages = _sanitize_messages(list(messages)) + [{"role": "user", "content": user_message}]
-
-    # Keep history to a rolling window to prevent context bloat in long sessions.
-    # Preserve the first 2 messages (initial context) + the most recent 60.
-    if len(messages) > 62:
-        messages = messages[:2] + messages[-60:]
+    # Order matters: trim → sanitize → append new user message.
+    messages = _trim_history(list(messages))
+    messages = _sanitize_messages(messages)
+    messages = messages + [{"role": "user", "content": user_message}]
 
     while True:
         resp = client.messages.create(
