@@ -342,10 +342,15 @@ def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
 
     messages = _sanitize_messages(list(messages)) + [{"role": "user", "content": user_message}]
 
+    # Keep history to a rolling window to prevent context bloat in long sessions.
+    # Preserve the first 2 messages (initial context) + the most recent 60.
+    if len(messages) > 62:
+        messages = messages[:2] + messages[-60:]
+
     while True:
         resp = client.messages.create(
             model=MODEL,
-            max_tokens=1024,
+            max_tokens=4096,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
@@ -390,8 +395,17 @@ def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
             # again with this updated context so it can generate its final response.
             messages.append({"role": "user", "content": tool_results})
         else:
-            # stop_reason is something unexpected (e.g. "max_tokens") — break to
-            # avoid an infinite loop and fall through to the error return below.
+            # Unexpected stop_reason (most likely "max_tokens" — response was
+            # cut off). Return whatever text was generated rather than a generic
+            # error — a partial answer is more useful than nothing.
+            text = ""
+            for block in resp.content:
+                if hasattr(block, "text"):
+                    text += block.text
+            if text.strip():
+                if resp.stop_reason == "max_tokens":
+                    text = text.strip() + " *(response cut off — ask me to continue)*"
+                return text.strip(), messages
             break
 
     return "I encountered an unexpected issue. Please try again.", messages
