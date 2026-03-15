@@ -5,22 +5,28 @@ on:
     branches: [main]
 
 jobs:
+  # ── 1. Run backend unit tests ────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Run tests
-        run: pytest
 
+      - name: Run tests
+        run: pytest --tb=short -q
+
+  # ── 2. Deploy to Oracle Cloud (only if tests pass) ───────────────────────────
   deploy:
     needs: test
     runs-on: ubuntu-latest
     if: success()
+
     steps:
       - uses: appleboy/ssh-action@v1.0.3
         with:
@@ -28,7 +34,23 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
             cd ~/vaultic
+
+            # Pull latest code
             git pull origin main
-            cd ui && npm ci && npm run build && cd ..
+
+            # Python deps — install into virtualenv so we don't touch system Python
+            source ~/vaultic-venv/bin/activate
+            pip install -q -r requirements.txt
+
+            # Build frontend
+            cd ui
+            npm ci --silent
+            npm run build
+            cd ..
+
+            # Restart API (systemd picks up any code changes)
             sudo systemctl restart vaultic-api.service
+
+            echo "Deploy complete"

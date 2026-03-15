@@ -109,6 +109,9 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN two_fa_enabled INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN totp_secret TEXT",
     "ALTER TABLE users ADD COLUMN totp_pending_secret TEXT",
+    "ALTER TABLE accounts ADD COLUMN source TEXT DEFAULT 'plaid'",
+    "ALTER TABLE account_balances ADD COLUMN native_balance REAL",
+    "ALTER TABLE account_balances ADD COLUMN unit_price REAL",
 ]
 
 

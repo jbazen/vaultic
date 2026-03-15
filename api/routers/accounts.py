@@ -20,8 +20,12 @@ async def list_accounts(_user: str = Depends(get_current_user)):
         rows = conn.execute("""
             SELECT
                 a.id, a.name, a.display_name, a.mask, a.official_name,
-                a.type, a.subtype, a.institution_name, a.is_manual, a.plaid_account_id,
-                b.current, b.available, b.limit_amount, b.snapped_at
+                a.type, a.subtype, a.institution_name, a.is_manual,
+                a.plaid_account_id AS coinbase_uuid,
+                a.source,
+                b.current, b.available, b.limit_amount,
+                b.native_balance, b.unit_price,
+                b.snapped_at
             FROM accounts a
             LEFT JOIN account_balances b ON b.account_id = a.id
                 AND b.snapped_at = (

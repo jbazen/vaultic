@@ -36,9 +36,11 @@ def _get_plaid_client():
 
 
 def sync_all():
-    """Sync all Plaid items: upsert accounts, snapshot balances, sync transactions."""
+    """Sync all Plaid items + Coinbase holdings, then snapshot net worth."""
     today = date.today().isoformat()
     security_log.log_sync_event(f"STARTED  date={today}")
+
+    # --- Plaid ---
     with get_db() as conn:
         items = conn.execute("SELECT * FROM plaid_items").fetchall()
 
@@ -52,6 +54,19 @@ def sync_all():
             logger.error(f"Sync failed for item {item['item_id']}: {e}")
             security_log.log_sync_event(f"ITEM_FAILED  item={item['item_id']}  error={e}")
             failed += 1
+
+    # --- Coinbase ---
+    try:
+        from api.coinbase_sync import sync_coinbase
+        sync_coinbase()
+    except Exception as e:
+        logger.error(f"Coinbase sync failed: {e}")
+        security_log.log_sync_event(f"COINBASE_FAILED  error={e}")
+
+    # Net worth snapshot is taken inside _sync_item for each Plaid item, but we
+    # call it once more here to capture Coinbase + any items that may have been
+    # skipped, ensuring today's snapshot always reflects the full picture.
+    _take_net_worth_snapshot(today)
 
     security_log.log_sync_event(f"COMPLETED  ok={ok}  failed={failed}")
 
@@ -201,7 +216,7 @@ def _take_net_worth_snapshot(today: str):
             "SELECT * FROM accounts WHERE is_active = 1 AND is_manual = 0"
         ).fetchall()
 
-        liquid = invested = liabilities = 0.0
+        liquid = invested = crypto = liabilities = 0.0
 
         for acct in accounts:
             row = conn.execute(
@@ -213,7 +228,9 @@ def _take_net_worth_snapshot(today: str):
             bal = row["current"]
             t, s = acct["type"], (acct["subtype"] or "")
 
-            if t == "depository" and s in ("checking", "savings", "money market", "paypal", "prepaid"):
+            if t == "crypto":
+                crypto += bal
+            elif t == "depository" and s in ("checking", "savings", "money market", "paypal", "prepaid"):
                 liquid += bal
             elif t == "investment" or s in ("401k", "ira", "roth", "pension"):
                 invested += bal
@@ -235,20 +252,21 @@ def _take_net_worth_snapshot(today: str):
         other_assets = _latest("other_asset")
         liabilities += _latest("other_liability")
 
-        total = liquid + invested + real_estate + vehicles + other_assets - liabilities
+        total = liquid + invested + crypto + real_estate + vehicles + other_assets - liabilities
 
         conn.execute("""
             INSERT INTO net_worth_snapshots
-                (snapped_at, total, liquid, invested, real_estate, vehicles, liabilities, other_assets)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (snapped_at, total, liquid, invested, crypto, real_estate, vehicles, liabilities, other_assets)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(snapped_at) DO UPDATE SET
-                total = excluded.total,
-                liquid = excluded.liquid,
-                invested = excluded.invested,
-                real_estate = excluded.real_estate,
-                vehicles = excluded.vehicles,
-                liabilities = excluded.liabilities,
+                total        = excluded.total,
+                liquid       = excluded.liquid,
+                invested     = excluded.invested,
+                crypto       = excluded.crypto,
+                real_estate  = excluded.real_estate,
+                vehicles     = excluded.vehicles,
+                liabilities  = excluded.liabilities,
                 other_assets = excluded.other_assets
-        """, (today, total, liquid, invested, real_estate, vehicles, liabilities, other_assets))
+        """, (today, total, liquid, invested, crypto, real_estate, vehicles, liabilities, other_assets))
 
     logger.info(f"Net worth snapshot {today}: ${total:,.0f}")

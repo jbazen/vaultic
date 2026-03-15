@@ -239,6 +239,13 @@ export async function saveParsedPDF(entries) {
   return res.json();
 }
 
+// --- Crypto ---
+export async function syncCoinbase() {
+  const res = await apiFetch("/api/crypto/sync", { method: "POST" });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Sync failed"); }
+  return res.json();
+}
+
 // --- Manual entries ---
 export async function getManualEntries() {
   const res = await apiFetch("/api/manual");

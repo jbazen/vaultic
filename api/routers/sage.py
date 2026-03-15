@@ -1,7 +1,7 @@
 import os
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from api.dependencies import get_current_user
 from api.sage import chat
@@ -44,26 +44,22 @@ async def sage_chat(body: ChatRequest, _user: str = Depends(get_current_user)):
 @router.post("/speak")
 async def sage_speak(body: SpeakRequest, _user: str = Depends(get_current_user)):
     """
-    Convert text to speech using OpenAI TTS. Returns a streaming MP3.
+    Convert text to speech using OpenAI TTS (async). Returns the full MP3.
 
-    Voice choice — "ballad":
-    The "ballad" voice is one of OpenAI's expressive, emotionally-aware voices
-    (introduced with the gpt-4o-audio family). It sounds more natural and
-    conversational than the older "onyx"/"alloy" voices — fitting for a personal
-    financial advisor persona. Requires a paid OpenAI account with credits at
-    platform.openai.com/billing (not covered by a ChatGPT subscription).
+    Voice — "fable": warm, expressive voice fitting Sage's advisor persona.
+    Valid tts-1 voices: nova, shimmer, echo, onyx, fable, alloy, ash, sage, coral.
+    Note: "ballad" is gpt-4o-audio only — not valid for tts-1.
 
-    Streaming approach — with_streaming_response vs .content:
-    - `.content` would download the entire MP3 into memory before returning anything
-      to the browser. For long Sage responses this adds noticeable latency.
-    - `with_streaming_response.create(...)` opens an HTTP streaming connection to
-      OpenAI and pipes bytes through to the browser as they arrive. The frontend
-      can start playback before the full audio is downloaded.
-    - The context manager (with ... as response) is required to keep the upstream
-      connection open while we iterate; it closes cleanly when the generator exits.
-    - The frontend fires one request per sentence (see SageChat.jsx speak()), so
-      each individual audio chunk is short — but streaming still reduces first-byte
-      latency, which matters for the first sentence where the user is waiting.
+    Why AsyncOpenAI + .content instead of sync streaming:
+    - The sync streaming approach (with_streaming_response + yield) runs in a
+      thread-pool worker, which adds overhead and can serialize concurrent requests.
+    - The frontend (SageChat.jsx) fires all sentence TTS requests in parallel and
+      does `await res.blob()` anyway — so true byte-level streaming provides no
+      benefit; the browser waits for the full audio before playback starts either way.
+    - Using AsyncOpenAI keeps the request fully async (no thread-pool blocking),
+      which is faster when multiple sentence TTS calls are in flight simultaneously.
+    - Sentence TTS payloads are short (5-20 words → ~20-80KB MP3), so holding
+      them in memory briefly is fine.
     """
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
@@ -71,18 +67,14 @@ async def sage_speak(body: SpeakRequest, _user: str = Depends(get_current_user))
 
     try:
         import openai
-        client = openai.OpenAI(api_key=api_key)
-
-        def audio_stream():
-            with client.audio.speech.with_streaming_response.create(
-                model="tts-1",
-                voice="ballad",      # Expressive, natural-sounding voice for Sage's persona
-                input=body.text[:4096],
-                response_format="mp3",
-            ) as response:
-                yield from response.iter_bytes(chunk_size=4096)
-
-        return StreamingResponse(audio_stream(), media_type="audio/mpeg")
+        client = openai.AsyncOpenAI(api_key=api_key)
+        response = await client.audio.speech.create(
+            model="tts-1",
+            voice="fable",
+            input=body.text[:4096],
+            response_format="mp3",
+        )
+        return Response(response.content, media_type="audio/mpeg")
     except Exception as e:
         logger.error(f"TTS error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
