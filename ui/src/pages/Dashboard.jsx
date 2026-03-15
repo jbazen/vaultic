@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries, getRecentTransactions,
-  getPlaidItems, removePlaidItem, renameAccount,
+  getPlaidItems, removePlaidItem, renameAccount, syncCoinbase,
 } from "../api.js";
 import NetWorthChart from "../components/NetWorthChart.jsx";
 import PlaidLink from "../components/PlaidLink.jsx";
@@ -51,6 +51,16 @@ const MANUAL_CAT_LABELS = {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
+function fmtPrice(v) {
+  if (v == null) return "—";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(v);
+}
+
+function fmtCrypto(v, decimals = 8) {
+  if (v == null) return "—";
+  return Number(v).toFixed(decimals).replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
+}
+
 function StatCard({ label, value, color, icon, negative }) {
   return (
     <div className="category-card">
@@ -62,7 +72,76 @@ function StatCard({ label, value, color, icon, negative }) {
   );
 }
 
+function CryptoAccountRow({ account, onRenamed }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(account.display_name || account.name);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    if (!draft.trim()) return;
+    setSaving(true);
+    try { await renameAccount(account.id, draft.trim()); onRenamed(); setEditing(false); }
+    finally { setSaving(false); }
+  }
+
+  const label = account.display_name || account.name;
+  const currency = (account.subtype || "").toUpperCase();
+
+  return (
+    <div className="account-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div className="account-info">
+          {editing ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input className="form-input" style={{ width: 180, padding: "4px 8px", fontSize: 13 }}
+                value={draft} onChange={e => setDraft(e.target.value)} autoFocus
+                onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+              <button className="btn btn-primary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
+              <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)}>✕</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div className="account-name">{label}</div>
+              <button onClick={() => setEditing(true)} title="Rename"
+                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+            </div>
+          )}
+          <div className="account-meta"><span className="badge badge-crypto">crypto</span></div>
+        </div>
+        <div className="account-balance">{fmt(account.current)}</div>
+      </div>
+      <div style={{ display: "flex", gap: 24, fontSize: 13, color: "var(--text2)", paddingLeft: 4, flexWrap: "wrap" }}>
+        <div>
+          <span>Holdings: </span>
+          <span style={{ color: "var(--text)", fontWeight: 600, fontFamily: "monospace" }}>
+            {fmtCrypto(account.native_balance)} {currency}
+          </span>
+        </div>
+        <div>
+          <span>Price: </span>
+          <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmtPrice(account.unit_price)}/{currency}</span>
+        </div>
+        <div>
+          <span>Value: </span>
+          <span style={{ color: "var(--accent)", fontWeight: 600 }}>{fmtPrice(account.current)}</span>
+        </div>
+        {account.coinbase_uuid && (
+          <div>
+            <span>UUID: </span>
+            <span style={{ fontFamily: "monospace", fontSize: 11 }}>{account.coinbase_uuid}</span>
+          </div>
+        )}
+        {account.snapped_at && (
+          <div><span>Updated: </span><span>{fmtDate(account.snapped_at)}</span></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AccountRow({ account, onRenamed }) {
+  if (account.type === "crypto") return <CryptoAccountRow account={account} onRenamed={onRenamed} />;
+
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.display_name || account.name);
   const [saving, setSaving] = useState(false);
@@ -123,6 +202,7 @@ export default function Dashboard() {
   const [plaidItems, setPlaidItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
 
   async function load() {
     try {
@@ -153,6 +233,12 @@ export default function Dashboard() {
     setSyncing(true);
     try { await triggerSync(); await load(); }
     finally { setSyncing(false); }
+  }
+
+  async function handleCoinbaseSync() {
+    setCoinbaseSyncing(true);
+    try { await syncCoinbase(); await load(); }
+    finally { setCoinbaseSyncing(false); }
   }
 
   async function handleRemoveItem(itemId) {
@@ -193,10 +279,13 @@ export default function Dashboard() {
           <h2>Dashboard</h2>
           <p>Your complete financial picture</p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <PlaidLink onSuccess={load} />
+          <button className="btn btn-secondary" onClick={handleCoinbaseSync} disabled={coinbaseSyncing}>
+            {coinbaseSyncing ? "Syncing…" : "⟳ Coinbase"}
+          </button>
           <button className="btn btn-secondary" onClick={handleSync} disabled={syncing}>
-            {syncing ? "Syncing…" : "↻ Sync"}
+            {syncing ? "Syncing…" : "↻ Sync All"}
           </button>
         </div>
       </div>
