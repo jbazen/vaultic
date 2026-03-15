@@ -271,6 +271,68 @@ def _fetch_page(url: str) -> str:
         return f"Could not fetch page: {e}"
 
 
+def _sanitize_messages(messages: list[dict]) -> list[dict]:
+    """
+    Remove orphaned tool_use/tool_result pairs from message history.
+
+    The Anthropic API requires that every assistant message containing tool_use
+    blocks is immediately followed by a user message containing matching
+    tool_result blocks. This invariant can break when a request is interrupted
+    mid-tool-call (e.g. network error, server restart) — the tool_use gets
+    stored in sessionStorage but its tool_result never arrives.
+
+    On the next turn, Claude sees the dangling tool_use and returns a 400.
+    This function walks the history and drops any assistant message whose
+    tool_use IDs don't have a complete matching tool_result in the next message.
+    We also drop the following message if it's a partial/mismatched tool_result
+    turn, to keep the history coherent.
+    """
+    sanitized = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        content = msg.get("content", [])
+
+        if msg["role"] == "assistant" and isinstance(content, list):
+            tool_use_ids = {
+                b["id"] for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_use"
+            }
+            if tool_use_ids:
+                next_msg = messages[i + 1] if i + 1 < len(messages) else None
+                next_content = next_msg.get("content", []) if next_msg else []
+                result_ids = {
+                    b["tool_use_id"] for b in next_content
+                    if isinstance(b, dict) and b.get("type") == "tool_result"
+                } if isinstance(next_content, list) else set()
+
+                if tool_use_ids == result_ids:
+                    # Valid complete pair — keep both
+                    sanitized.append(msg)
+                    sanitized.append(next_msg)
+                    i += 2
+                    continue
+                else:
+                    # Orphaned tool_use — drop this message and the next if it
+                    # looks like a partial tool_result turn
+                    logger.warning(
+                        f"Dropping orphaned tool_use message (ids={tool_use_ids}, "
+                        f"got results for={result_ids})"
+                    )
+                    if next_msg and isinstance(next_content, list) and any(
+                        b.get("type") == "tool_result" for b in next_content
+                        if isinstance(b, dict)
+                    ):
+                        i += 2  # drop both
+                    else:
+                        i += 1  # drop just the orphaned assistant message
+                    continue
+
+        sanitized.append(msg)
+        i += 1
+    return sanitized
+
+
 def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
     """
     Run one turn of conversation with Sage.
@@ -278,7 +340,7 @@ def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
     """
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
-    messages = list(messages) + [{"role": "user", "content": user_message}]
+    messages = _sanitize_messages(list(messages)) + [{"role": "user", "content": user_message}]
 
     while True:
         resp = client.messages.create(
