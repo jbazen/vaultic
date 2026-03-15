@@ -12,13 +12,13 @@ import PlaidLink from "../components/PlaidLink.jsx";
 function fmt(v, opts = {}) {
   if (v == null) return "—";
   return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD", maximumFractionDigits: 0, ...opts
+    style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2, ...opts
   }).format(Math.abs(v));
 }
 
 function fmtSigned(v) {
   if (v == null) return "—";
-  const n = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Math.abs(v));
+  const n = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(v));
   return v < 0 ? `-${n}` : n;
 }
 

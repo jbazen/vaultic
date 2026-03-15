@@ -4,7 +4,7 @@ import PlaidLink from "../components/PlaidLink.jsx";
 
 function fmt(v) {
   if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Math.abs(v));
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(v));
 }
 
 function typeBadge(type) {
