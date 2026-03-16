@@ -155,10 +155,11 @@ export default function SageChat() {
   // Refs for always-on logic (stable across renders)
   const alwaysOnRef = useRef(false);
   const awakeRef = useRef(false);
-  const commandBuf = useRef("");       // accumulated command after wake word
+  const commandBuf = useRef("");       // accumulated command after wake word (browser fallback only)
   const silenceTimer = useRef(null);
   const continuousRec = useRef(null);
   const manualRec = useRef(null);      // for the manual mic button
+  const awakeWhisperRef = useRef(null); // {recorder, audioContext, stream, rafId} — Whisper capture after wake word
 
   // ── Persist session ──────────────────────────────────────────────────────────
 
@@ -313,11 +314,9 @@ export default function SageChat() {
     processAndAttach(Array.from(e.dataTransfer.files || []));
   }
 
-  // ── Whisper push-to-talk ──────────────────────────────────────────────────
+  // ── Whisper push-to-talk (click to start, click to stop) ────────────────
 
-  const canWhisper = !!navigator.mediaDevices?.getUserMedia &&
-    !!window.MediaRecorder &&
-    !!window.speechSynthesis; // proxy for modern browser
+  const canWhisper = !!navigator.mediaDevices?.getUserMedia && !!window.MediaRecorder;
 
   async function startWhisperRecording() {
     try {
@@ -329,7 +328,7 @@ export default function SageChat() {
         stream.getTracks().forEach(t => t.stop());
         const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         setWhisperRecording(false);
-        if (blob.size < 500) return; // too short, ignore
+        if (blob.size < 500) return;
         try {
           const { text } = await sageTranscribe(blob);
           if (text?.trim()) setInput(prev => (prev ? prev + " " + text.trim() : text.trim()));
@@ -347,6 +346,87 @@ export default function SageChat() {
 
   function stopWhisperRecording() {
     mediaRecorderRef.current?.stop();
+  }
+
+  function toggleWhisperRecording() {
+    if (whisperRecording) stopWhisperRecording();
+    else startWhisperRecording();
+  }
+
+  // ── Hey Sage: Whisper capture after wake word ─────────────────────────────
+  // Once "Hey Sage" is detected via browser speech, we immediately start a
+  // Whisper MediaRecorder. Web Audio API monitors volume levels — 3s of silence
+  // (avg amplitude < threshold) stops the recording and sends it to Whisper.
+  // This is dramatically more accurate than continuing with browser speech for
+  // the actual command, especially for financial terms and numbers.
+
+  async function startAwakeWhisperCapture() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const chunks = [];
+      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      mr.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        try { audioCtx.close(); } catch {}
+        awakeRef.current = false;
+        setAwake(false);
+        commandBuf.current = "";
+        setInput("");
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        if (blob.size < 500) return;
+        try {
+          const { text } = await sageTranscribe(blob);
+          if (text?.trim()) sendRef.current?.(text.trim());
+        } catch (err) {
+          setMessages(prev => [...prev, { role: "sage", text: `⚠️ Transcription failed: ${err.message}` }]);
+        }
+      };
+
+      mr.start(100);
+
+      const SILENCE_THRESHOLD = 8;   // avg frequency amplitude (0-255)
+      const SILENCE_MS = 3000;        // 3s of silence → auto-send
+      const MAX_MS = 30_000;          // 30s hard cap
+      let lastSoundTime = Date.now();
+      const startTime = Date.now();
+      let rafId;
+
+      function tick() {
+        if (!awakeWhisperRef.current) return; // stopped externally
+        analyser.getByteFrequencyData(dataArray);
+        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+        if (avg > SILENCE_THRESHOLD) lastSoundTime = Date.now();
+        const silent = Date.now() - lastSoundTime > SILENCE_MS;
+        const maxed = Date.now() - startTime > MAX_MS;
+        if (silent || maxed) {
+          stopAwakeWhisperCapture();
+          return;
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+      rafId = requestAnimationFrame(tick);
+
+      awakeWhisperRef.current = { recorder: mr, audioCtx, stream, rafId };
+    } catch {
+      awakeRef.current = false;
+      setAwake(false);
+    }
+  }
+
+  function stopAwakeWhisperCapture() {
+    const ref = awakeWhisperRef.current;
+    if (!ref) return;
+    awakeWhisperRef.current = null;
+    if (ref.rafId) cancelAnimationFrame(ref.rafId);
+    try { ref.recorder.stop(); } catch {}
   }
 
   // ── Send ─────────────────────────────────────────────────────────────────────
@@ -411,8 +491,6 @@ export default function SageChat() {
     let processed = 0; // how many results we've fully processed as final
 
     rec.onresult = (e) => {
-      // Build transcript from results we haven't finalized yet
-      let interim = "";
       for (let i = processed; i < e.results.length; i++) {
         const r = e.results[i];
         if (r.isFinal) {
@@ -420,34 +498,18 @@ export default function SageChat() {
           processed = i + 1;
 
           if (!awakeRef.current) {
-            // Look for wake word
+            // Listening for wake word only
             if (WAKE_REGEX.test(finalText)) {
               awakeRef.current = true;
               setAwake(true);
               setOpen(true);
               playActivationTone();
-              // Strip wake word, keep anything said after it
-              const after = finalText.replace(WAKE_REGEX, "").trim();
-              if (after) {
-                commandBuf.current = after;
-                setInput(after);
-                resetSilenceTimer();
-              }
+              // Switch to Whisper for the actual command — much more accurate
+              startAwakeWhisperCapture();
             }
-          } else {
-            // Awake — accumulate command
-            commandBuf.current = (commandBuf.current + " " + finalText).trim();
-            setInput(commandBuf.current);
-            resetSilenceTimer();
           }
-        } else {
-          interim += r[0].transcript;
+          // While awake, ignore browser speech — Whisper is capturing
         }
-      }
-
-      // Show live interim text while awake
-      if (awakeRef.current && interim) {
-        setInput((commandBuf.current + " " + interim).trim());
       }
     };
 
@@ -498,6 +560,7 @@ export default function SageChat() {
       continuousRec.current?.stop();
       continuousRec.current = null;
       if (silenceTimer.current) clearTimeout(silenceTimer.current);
+      stopAwakeWhisperCapture();
       commandBuf.current = "";
       setInput("");
     } else {
@@ -514,6 +577,7 @@ export default function SageChat() {
       continuousRec.current?.stop();
       manualRec.current?.stop();
       if (silenceTimer.current) clearTimeout(silenceTimer.current);
+      stopAwakeWhisperCapture();
     };
   }, []);
 
@@ -818,15 +882,12 @@ export default function SageChat() {
                 }}
               />
 
-              {/* Mic button — Whisper if available, browser speech fallback */}
+              {/* Mic button — click to start, click again to stop */}
               {!alwaysOn && (
                 canWhisper ? (
                   <button
-                    onMouseDown={startWhisperRecording}
-                    onMouseUp={stopWhisperRecording}
-                    onTouchStart={startWhisperRecording}
-                    onTouchEnd={stopWhisperRecording}
-                    title="Hold to record (Whisper AI transcription)"
+                    onClick={toggleWhisperRecording}
+                    title={whisperRecording ? "Click to stop recording" : "Click to record (Whisper AI)"}
                     style={{
                       width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
                       background: whisperRecording ? "#f87171" : "var(--bg3)",
@@ -835,7 +896,6 @@ export default function SageChat() {
                       cursor: "pointer", fontSize: 16,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       animation: whisperRecording ? "sage-awake-pulse 1s ease-in-out infinite" : "none",
-                      userSelect: "none",
                     }}>🎤</button>
                 ) : hasVoice ? (
                   <button
