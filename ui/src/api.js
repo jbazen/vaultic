@@ -113,16 +113,44 @@ export async function removePlaidItem(itemId) {
 }
 
 // --- Sage ---
-export async function sageChat(message, history = []) {
+export async function sageChat(message, history = [], attachments = []) {
   const res = await apiFetch("/api/sage/chat", {
     method: "POST",
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ message, history, attachments }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Sage error (${res.status})`);
   }
   return res.json();
+}
+
+export async function sageProcessFile(file) {
+  const token = getToken();
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch("/api/sage/process-file", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (res.status === 401) { clearToken(); window.dispatchEvent(new Event("auth:logout")); throw new Error("Session expired"); }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "File processing failed"); }
+  return res.json();
+}
+
+export async function sageTranscribe(audioBlob) {
+  const token = getToken();
+  const form = new FormData();
+  form.append("file", audioBlob, "audio.webm");
+  const res = await fetch("/api/sage/transcribe", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (res.status === 401) { clearToken(); window.dispatchEvent(new Event("auth:logout")); throw new Error("Session expired"); }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Transcription failed"); }
+  return res.json(); // { text: "..." }
 }
 
 export async function sageSpeak(text) {

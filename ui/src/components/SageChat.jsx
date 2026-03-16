@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { sageChat, sageSpeak } from "../api.js";
+import { sageChat, sageSpeak, sageProcessFile, sageTranscribe } from "../api.js";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -21,6 +21,16 @@ function TypingDots() {
 
 // ── Message bubble ────────────────────────────────────────────────────────────
 
+const FILE_ICONS = {
+  pdf: "📄", doc: "📝", docx: "📝", xls: "📊", xlsx: "📊", csv: "📊",
+  json: "{ }", yaml: "📋", yml: "📋", xml: "📋", html: "🌐", md: "📋",
+  txt: "📄", default: "📎",
+};
+function fileIcon(filename) {
+  const ext = (filename || "").split(".").pop().toLowerCase();
+  return FILE_ICONS[ext] || FILE_ICONS.default;
+}
+
 function Message({ msg }) {
   const isUser = msg.role === "user";
   return (
@@ -37,15 +47,36 @@ function Message({ msg }) {
           flexShrink: 0, marginRight: 8, marginTop: 2,
         }}>S</div>
       )}
-      <div style={{
-        maxWidth: "78%",
-        background: isUser ? "var(--accent)" : "var(--bg3)",
-        color: "var(--text)",
-        padding: "9px 13px",
-        borderRadius: isUser ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
-        fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
-      }}>
-        {msg.text}
+      <div style={{ maxWidth: "78%", display: "flex", flexDirection: "column", gap: 6 }}>
+        {/* Render any attachments above the text */}
+        {msg.attachments?.map((att, i) => (
+          att.type === "image" ? (
+            <img key={i} src={att.previewUrl}
+              style={{ maxWidth: "100%", maxHeight: 240, borderRadius: 10, objectFit: "contain",
+                border: "1px solid var(--border)" }} alt={att.filename} />
+          ) : (
+            <div key={i} style={{
+              background: "var(--bg3)", border: "1px solid var(--border)",
+              borderRadius: 8, padding: "6px 10px", fontSize: 12,
+              color: "var(--text2)", display: "flex", alignItems: "center", gap: 6,
+            }}>
+              <span>{fileIcon(att.filename)}</span>
+              <span>{att.filename}</span>
+              {att.truncated && <span style={{ color: "#f87171" }}>(truncated)</span>}
+            </div>
+          )
+        ))}
+        {msg.text && (
+          <div style={{
+            background: isUser ? "var(--accent)" : "var(--bg3)",
+            color: "var(--text)",
+            padding: "9px 13px",
+            borderRadius: isUser ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+            fontSize: 14, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
+          }}>
+            {msg.text}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -93,9 +124,17 @@ export default function SageChat() {
   const [alwaysOn, setAlwaysOn] = useState(false);
   const [awake, setAwake] = useState(false); // wake word detected, capturing command
 
+  const [pendingFiles, setPendingFiles] = useState([]); // [{type, content, media_type, filename, previewUrl, truncated}]
+  const [processingFile, setProcessingFile] = useState(false);
+  const [whisperRecording, setWhisperRecording] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const audioRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
   // sendRef: a stable ref that always points to the latest `send` callback.
   // The always-on silence timer (setTimeout in resetSilenceTimer) closes over
@@ -235,20 +274,98 @@ export default function SageChat() {
     window.speechSynthesis.speak(utt);
   }, []); // reads refs only — no stale closures, no deps needed
 
+  // ── File attachment ──────────────────────────────────────────────────────────
+
+  async function processAndAttach(files) {
+    if (!files?.length) return;
+    setProcessingFile(true);
+    const results = [];
+    for (const file of files) {
+      try {
+        const result = await sageProcessFile(file);
+        // For images, create a local preview URL from the base64
+        if (result.type === "image") {
+          result.previewUrl = `data:${result.media_type};base64,${result.content}`;
+        }
+        results.push(result);
+      } catch (err) {
+        setMessages(prev => [...prev, { role: "sage", text: `⚠️ Could not read ${file.name}: ${err.message}` }]);
+      }
+    }
+    setPendingFiles(prev => [...prev, ...results]);
+    setProcessingFile(false);
+  }
+
+  function removePendingFile(idx) {
+    setPendingFiles(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function handleFileInputChange(e) {
+    processAndAttach(Array.from(e.target.files || []));
+    e.target.value = "";
+  }
+
+  function handleDragOver(e) { e.preventDefault(); setDragOver(true); }
+  function handleDragLeave() { setDragOver(false); }
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    processAndAttach(Array.from(e.dataTransfer.files || []));
+  }
+
+  // ── Whisper push-to-talk ──────────────────────────────────────────────────
+
+  const canWhisper = !!navigator.mediaDevices?.getUserMedia &&
+    !!window.MediaRecorder &&
+    !!window.speechSynthesis; // proxy for modern browser
+
+  async function startWhisperRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      mr.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        setWhisperRecording(false);
+        if (blob.size < 500) return; // too short, ignore
+        try {
+          const { text } = await sageTranscribe(blob);
+          if (text?.trim()) setInput(prev => (prev ? prev + " " + text.trim() : text.trim()));
+        } catch (err) {
+          setMessages(prev => [...prev, { role: "sage", text: `⚠️ Transcription failed: ${err.message}` }]);
+        }
+      };
+      mediaRecorderRef.current = mr;
+      mr.start();
+      setWhisperRecording(true);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "sage", text: `⚠️ Mic access denied: ${err.message}` }]);
+    }
+  }
+
+  function stopWhisperRecording() {
+    mediaRecorderRef.current?.stop();
+  }
+
   // ── Send ─────────────────────────────────────────────────────────────────────
 
   const send = useCallback(async (text) => {
     const msg = (text || input).trim();
-    if (!msg || loading) return;
+    if ((!msg && pendingFiles.length === 0) || loading) return;
     setInput("");
     commandBuf.current = "";
 
-    const userMsg = { role: "user", text: msg };
+    const attachments = [...pendingFiles];
+    setPendingFiles([]);
+
+    const userMsg = { role: "user", text: msg, attachments: attachments.length ? attachments : undefined };
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
 
     try {
-      const { response, history: newHistory } = await sageChat(msg, history);
+      const { response, history: newHistory } = await sageChat(msg, history, attachments);
       setHistory(newHistory);
       setMessages(prev => [...prev, { role: "sage", text: response }]);
       if (!open) setUnread(n => n + 1);
@@ -258,7 +375,7 @@ export default function SageChat() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, history, open, speak]);
+  }, [input, loading, history, open, speak, pendingFiles]);
 
   // Keep sendRef pointing to the latest send() on every render.
   // This is the other half of the stale-closure fix: the silence timer in
@@ -489,16 +606,25 @@ export default function SageChat() {
         </button>
       )}
 
+      {/* Hidden file input */}
+      <input ref={fileInputRef} type="file" multiple style={{ display: "none" }}
+        accept=".pdf,.docx,.xlsx,.xls,.xlsm,.csv,.json,.yaml,.yml,.xml,.html,.htm,.md,.txt,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tiff"
+        onChange={handleFileInputChange} />
+
       {/* ── Chat panel ── */}
       {open && (
-        <div style={{
-          position: "fixed", bottom: 24, right: 24,
-          width: "min(420px, calc(100vw - 32px))",
-          height: "min(580px, calc(100vh - 100px))",
-          background: "var(--bg2)", border: "1px solid var(--border)",
-          borderRadius: 16, display: "flex", flexDirection: "column",
-          boxShadow: "0 8px 40px rgba(0,0,0,0.5)", zIndex: 1000, overflow: "hidden",
-        }}>
+        <div
+          onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
+          style={{
+            position: "fixed", bottom: 24, right: 24,
+            width: "min(420px, calc(100vw - 32px))",
+            height: "min(580px, calc(100vh - 100px))",
+            background: dragOver ? "var(--bg3)" : "var(--bg2)",
+            border: dragOver ? "2px dashed var(--accent)" : "1px solid var(--border)",
+            borderRadius: 16, display: "flex", flexDirection: "column",
+            boxShadow: "0 8px 40px rgba(0,0,0,0.5)", zIndex: 1000, overflow: "hidden",
+            transition: "border 0.15s, background 0.15s",
+          }}>
 
           {/* Header */}
           <div style={{
@@ -609,69 +735,137 @@ export default function SageChat() {
           </div>
 
           {/* Input */}
-          <div style={{
-            padding: "12px", borderTop: "1px solid var(--border)",
-            display: "flex", gap: 8, alignItems: "flex-end",
-          }}>
-            {/* Awake indicator */}
-            {awake && (
-              <div style={{
-                position: "absolute", bottom: 70, left: "50%", transform: "translateX(-50%)",
-                background: "rgba(52,211,153,0.15)", border: "1px solid #34d399",
-                borderRadius: 20, padding: "4px 14px", fontSize: 12, color: "#34d399",
-                display: "flex", alignItems: "center", gap: 6,
-              }}>
-                <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399",
-                  animation: "sage-bounce 1s ease-in-out infinite" }} />
-                Listening — speak now
+          <div style={{ padding: "12px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+
+            {/* Drag-over overlay hint */}
+            {dragOver && (
+              <div style={{ textAlign: "center", fontSize: 13, color: "var(--accent)", padding: "4px 0" }}>
+                Drop file to attach
               </div>
             )}
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder={awake ? "Listening…" : listening ? "Listening…" : "Ask Sage anything… or say \"Hey Sage\""}
-              rows={1}
-              style={{
-                flex: 1, background: "var(--bg3)",
-                border: `1px solid ${awake ? "#34d399" : "var(--border)"}`,
-                color: "var(--text)", borderRadius: 10, padding: "9px 12px",
-                fontSize: 14, resize: "none", outline: "none", lineHeight: 1.5,
-                maxHeight: 100, overflow: "auto", fontFamily: "inherit",
-                transition: "border-color 0.2s",
-              }}
-              onInput={e => {
-                e.target.style.height = "auto";
-                e.target.style.height = Math.min(e.target.scrollHeight, 100) + "px";
-              }}
-            />
-            {hasVoice && !alwaysOn && (
+
+            {/* Pending file chips */}
+            {pendingFiles.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {pendingFiles.map((f, i) => (
+                  <div key={i} style={{
+                    display: "flex", alignItems: "center", gap: 4,
+                    background: "var(--bg3)", border: "1px solid var(--border)",
+                    borderRadius: 20, padding: "3px 10px 3px 8px", fontSize: 12,
+                  }}>
+                    {f.type === "image"
+                      ? <img src={f.previewUrl} style={{ width: 18, height: 18, borderRadius: 3, objectFit: "cover" }} alt="" />
+                      : <span>{fileIcon(f.filename)}</span>
+                    }
+                    <span style={{ color: "var(--text)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {f.filename}
+                    </span>
+                    <button onClick={() => removePendingFile(i)}
+                      style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+              {/* Awake indicator */}
+              {awake && (
+                <div style={{
+                  position: "absolute", bottom: 80, left: "50%", transform: "translateX(-50%)",
+                  background: "rgba(52,211,153,0.15)", border: "1px solid #34d399",
+                  borderRadius: 20, padding: "4px 14px", fontSize: 12, color: "#34d399",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399",
+                    animation: "sage-bounce 1s ease-in-out infinite" }} />
+                  Listening — speak now
+                </div>
+              )}
+
+              {/* File attach button */}
               <button
-                onClick={listening ? stopListening : startListening}
-                title={listening ? "Stop" : "Push to talk"}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={processingFile}
+                title="Attach file (PDF, Word, Excel, image, JSON, CSV, …)"
                 style={{
                   width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
-                  background: listening ? "#f87171" : "var(--bg3)",
-                  border: `1px solid ${listening ? "#f87171" : "var(--border)"}`,
-                  color: listening ? "#fff" : "var(--text2)",
+                  background: "var(--bg3)", border: "1px solid var(--border)",
+                  color: processingFile ? "var(--accent)" : "var(--text2)",
                   cursor: "pointer", fontSize: 16,
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  animation: listening ? "sage-awake-pulse 1s ease-in-out infinite" : "none",
-                }}>🎤</button>
-            )}
-            <button
-              onClick={() => send()}
-              disabled={!input.trim() || loading}
-              style={{
-                width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
-                background: input.trim() && !loading ? "var(--accent)" : "var(--bg3)",
-                border: "1px solid var(--border)",
-                color: input.trim() && !loading ? "#fff" : "var(--text2)",
-                cursor: input.trim() && !loading ? "pointer" : "default",
-                fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
-                transition: "all 0.15s",
-              }}>➤</button>
+                }}>
+                {processingFile ? "⏳" : "📎"}
+              </button>
+
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder={awake ? "Listening…" : whisperRecording ? "Recording — release to transcribe…" : "Ask Sage anything…"}
+                rows={1}
+                style={{
+                  flex: 1, background: "var(--bg3)",
+                  border: `1px solid ${awake ? "#34d399" : whisperRecording ? "#f87171" : "var(--border)"}`,
+                  color: "var(--text)", borderRadius: 10, padding: "9px 12px",
+                  fontSize: 14, resize: "none", outline: "none", lineHeight: 1.5,
+                  maxHeight: 100, overflow: "auto", fontFamily: "inherit",
+                  transition: "border-color 0.2s",
+                }}
+                onInput={e => {
+                  e.target.style.height = "auto";
+                  e.target.style.height = Math.min(e.target.scrollHeight, 100) + "px";
+                }}
+              />
+
+              {/* Mic button — Whisper if available, browser speech fallback */}
+              {!alwaysOn && (
+                canWhisper ? (
+                  <button
+                    onMouseDown={startWhisperRecording}
+                    onMouseUp={stopWhisperRecording}
+                    onTouchStart={startWhisperRecording}
+                    onTouchEnd={stopWhisperRecording}
+                    title="Hold to record (Whisper AI transcription)"
+                    style={{
+                      width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                      background: whisperRecording ? "#f87171" : "var(--bg3)",
+                      border: `1px solid ${whisperRecording ? "#f87171" : "var(--border)"}`,
+                      color: whisperRecording ? "#fff" : "var(--text2)",
+                      cursor: "pointer", fontSize: 16,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      animation: whisperRecording ? "sage-awake-pulse 1s ease-in-out infinite" : "none",
+                      userSelect: "none",
+                    }}>🎤</button>
+                ) : hasVoice ? (
+                  <button
+                    onClick={listening ? stopListening : startListening}
+                    title={listening ? "Stop" : "Push to talk (browser)"}
+                    style={{
+                      width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                      background: listening ? "#f87171" : "var(--bg3)",
+                      border: `1px solid ${listening ? "#f87171" : "var(--border)"}`,
+                      color: listening ? "#fff" : "var(--text2)",
+                      cursor: "pointer", fontSize: 16,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      animation: listening ? "sage-awake-pulse 1s ease-in-out infinite" : "none",
+                    }}>🎤</button>
+                ) : null
+              )}
+
+              <button
+                onClick={() => send()}
+                disabled={(!input.trim() && pendingFiles.length === 0) || loading}
+                style={{
+                  width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                  background: (input.trim() || pendingFiles.length > 0) && !loading ? "var(--accent)" : "var(--bg3)",
+                  border: "1px solid var(--border)",
+                  color: (input.trim() || pendingFiles.length > 0) && !loading ? "#fff" : "var(--text2)",
+                  cursor: (input.trim() || pendingFiles.length > 0) && !loading ? "pointer" : "default",
+                  fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.15s",
+                }}>➤</button>
+            </div>
           </div>
         </div>
       )}

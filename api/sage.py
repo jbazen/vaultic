@@ -365,7 +365,7 @@ def _trim_history(messages: list[dict], keep: int = 40) -> list[dict]:
     return trimmed
 
 
-def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
+def chat(messages: list[dict], user_message: str, attachments: list[dict] | None = None) -> tuple[str, list[dict]]:
     """
     Run one turn of conversation with Sage.
     Returns (sage_response_text, updated_messages).
@@ -375,7 +375,33 @@ def chat(messages: list[dict], user_message: str) -> tuple[str, list[dict]]:
     # Order matters: trim → sanitize → append new user message.
     messages = _trim_history(list(messages))
     messages = _sanitize_messages(messages)
-    messages = messages + [{"role": "user", "content": user_message}]
+
+    # Build user content — plain string for text-only, list of blocks when
+    # attachments are present (images go as vision blocks, text files as text).
+    if attachments:
+        content_blocks = []
+        for att in attachments:
+            if att.get("type") == "image":
+                content_blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": att["media_type"],
+                        "data": att["content"],
+                    },
+                })
+            elif att.get("type") == "text":
+                snippet = att["content"][:8000]  # cap per attachment to avoid blowing context
+                truncation_note = " [truncated]" if att.get("truncated") else ""
+                content_blocks.append({
+                    "type": "text",
+                    "text": f"[Attached file: {att['filename']}{truncation_note}]\n\n{snippet}",
+                })
+        if user_message:
+            content_blocks.append({"type": "text", "text": user_message})
+        messages = messages + [{"role": "user", "content": content_blocks}]
+    else:
+        messages = messages + [{"role": "user", "content": user_message}]
 
     while True:
         resp = client.messages.create(
