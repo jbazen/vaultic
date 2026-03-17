@@ -242,7 +242,7 @@ function ManualInvestmentCard({ entry, onDelete }) {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>{fmt(entry.value)}</div>
           <div style={{ display: "flex", gap: 6 }}>
-            {hasHoldings && (
+            {(hasHoldings || entry.activity_summary) && (
               <button
                 onClick={() => setExpanded(e => !e)}
                 style={{
@@ -269,8 +269,39 @@ function ManualInvestmentCard({ entry, onDelete }) {
         </div>
       </div>
 
+      {/* Activity Summary */}
+      {entry.activity_summary && (
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+          gap: 10, marginTop: 12, padding: "12px 14px",
+          background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)",
+        }}>
+          {[
+            { label: "Beginning Balance", value: entry.activity_summary.beginning_balance, date: entry.activity_summary.beginning_date },
+            { label: "Additions / Withdrawals", value: entry.activity_summary.additions_withdrawals },
+            { label: "Net Change", value: entry.activity_summary.net_change, signed: true },
+            { label: "Ending Balance", value: entry.activity_summary.ending_balance, date: entry.activity_summary.ending_date },
+          ].map(({ label, value, date, signed }) => value != null ? (
+            <div key={label}>
+              <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>{label}{date ? ` (${date})` : ""}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: signed ? (value >= 0 ? "#34d399" : "#f87171") : "var(--text)" }}>
+                {signed && value > 0 ? "+" : ""}{fmt(value)}
+              </div>
+            </div>
+          ) : null)}
+          {entry.activity_summary.twr_pct != null && (
+            <div>
+              <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Time-Weighted Return</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: entry.activity_summary.twr_pct >= 0 ? "#34d399" : "#f87171" }}>
+                {entry.activity_summary.twr_pct > 0 ? "+" : ""}{entry.activity_summary.twr_pct.toFixed(2)}%
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Expanded detail */}
-      {expanded && hasHoldings && (
+      {expanded && (hasHoldings || entry.activity_summary) && (
         <div style={{ marginTop: 14 }}>
           {/* Asset allocation */}
           {holdingsTotal > 0 && (

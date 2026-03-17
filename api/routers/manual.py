@@ -30,6 +30,7 @@ async def list_entries(_user: str = Depends(get_current_user)):
         rows = conn.execute(
             "SELECT * FROM manual_entries ORDER BY category, entered_at DESC"
         ).fetchall()
+        import json as _json
         entries = [dict(row) for row in rows]
         for entry in entries:
             holding_rows = conn.execute(
@@ -37,6 +38,14 @@ async def list_entries(_user: str = Depends(get_current_user)):
                 (entry["id"],)
             ).fetchall()
             entry["holdings"] = [dict(h) for h in holding_rows]
+            # Parse summary_json string back to object for the frontend
+            if entry.get("summary_json"):
+                try:
+                    entry["activity_summary"] = _json.loads(entry["summary_json"])
+                except Exception:
+                    entry["activity_summary"] = None
+            else:
+                entry["activity_summary"] = None
     return entries
 
 

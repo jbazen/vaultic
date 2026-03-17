@@ -247,10 +247,24 @@ def _take_net_worth_snapshot(today: str):
             ).fetchone()
             return r["value"] if r else 0.0
 
-        real_estate = _latest("home_value")
-        vehicles = _latest("car_value")
-        other_assets = _latest("other_asset")
+        real_estate  = _latest("home_value")
+        vehicles     = _latest("car_value")
         liabilities += _latest("other_liability")
+
+        # Sum all manually-entered values per category (supports multiple entries, e.g. PDF-imported accounts)
+        def _sum_manual(category: str) -> float:
+            r = conn.execute(
+                "SELECT COALESCE(SUM(value), 0) FROM manual_entries WHERE category = ?",
+                (category,),
+            ).fetchone()
+            return float(r[0]) if r else 0.0
+
+        other_assets  = _sum_manual("other_asset")
+        invested     += _sum_manual("invested")
+        liquid       += _sum_manual("liquid")
+        crypto       += _sum_manual("crypto")
+        real_estate  += _sum_manual("real_estate")
+        vehicles     += _sum_manual("vehicles")
 
         total = liquid + invested + crypto + real_estate + vehicles + other_assets - liabilities
 

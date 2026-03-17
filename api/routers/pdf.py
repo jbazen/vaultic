@@ -15,19 +15,28 @@ from api import security_log
 logger = logging.getLogger("vaultic.pdf")
 router = APIRouter(prefix="/api/pdf", tags=["pdf"])
 
-PARSE_PROMPT = """You are a financial data extractor. Extract ALL accounts, holdings, and balances from this PDF financial statement.
+PARSE_PROMPT = """You are a financial data extractor. Extract ALL data from this PDF financial statement.
 
 Return ONLY a JSON array with this exact structure (no explanation, no markdown):
 [
   {
-    "name": "Account or asset name",
+    "name": "Account or portfolio name",
     "category": "one of: invested | liquid | real_estate | vehicles | crypto | other_asset | other_liability",
     "value": 12345.67,
-    "notes": "brief context: account type, institution, as-of date",
+    "notes": "institution, account type, account number (masked), as-of date",
+    "activity_summary": {
+      "beginning_balance": 598640.01,
+      "beginning_date": "1/1/2026",
+      "additions_withdrawals": 2800.00,
+      "net_change": -15325.26,
+      "ending_balance": 586114.75,
+      "ending_date": "3/16/2026",
+      "twr_pct": -2.54
+    },
     "holdings": [
       {
-        "name": "Security or fund name",
-        "ticker": "VTSAX",
+        "name": "Security, fund, or asset category name — use the EXACT name from the PDF (e.g. 'Large-Cap Growth', 'Vanguard 500 Index')",
+        "ticker": "VTSAX or null",
         "asset_class": "equities | fixed_income | cash | alternatives | other",
         "shares": 123.456,
         "price": 45.67,
@@ -43,15 +52,20 @@ Return ONLY a JSON array with this exact structure (no explanation, no markdown)
 ]
 
 Rules:
-- holdings array may be [] if no detailed holdings are visible for that account
-- Use positive values for assets; positive values for liabilities (category determines sign in the UI)
+- Create ONE entry per account or per asset category allocation section, whichever is more detailed
+- If the PDF shows both a portfolio-level 'Asset Category Allocation' section AND individual accounts, create:
+  * One entry for the overall portfolio with the asset category allocation as holdings (e.g. 'Large-Cap Growth', 'Large-Cap Blend', etc.)
+  * Separate entries for each individual account
+- activity_summary: fill in ONLY if the PDF has a period summary (beginning balance, net change, TWR, etc.); otherwise use null
+- holdings: use [] if no detailed holdings visible; use the EXACT names from the PDF — do NOT normalize or rename them
+- asset_class mappings: equities (stocks/ETFs/equity funds/any -Cap or Foreign or Emerging category), fixed_income (bonds/bond funds), cash (money market/cash equivalents), alternatives (infrastructure/real estate funds/commodities), other
+- Use positive values for assets; positive for liabilities (category determines sign)
 - invested = 401k, IRA, brokerage, mutual funds, investment accounts
 - liquid = checking, savings, money market, HSA
-- other_liability = loans, credit card balances, mortgages not tracked elsewhere
-- Include the statement date in notes if visible
-- Skip accounts with zero balance unless intentionally zero
+- other_liability = loans, credit cards, mortgages
+- Include statement date in notes if visible
+- Skip zero-balance entries unless intentional
 - Use null for numeric fields not present in the PDF
-- asset_class mappings: equities (stocks/ETFs/equity mutual funds), fixed_income (bonds/bond funds), cash (money market/cash/cash equivalents), alternatives (real estate funds/commodities/hedge funds), other (anything else)
 - If a value is a range, use the midpoint"""
 
 
@@ -175,10 +189,11 @@ class SaveParsedRequest(BaseModel):
 
 @router.post("/save")
 async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_user)):
-    """Save confirmed parsed entries as manual entries, including holdings.
+    """Save confirmed parsed entries as manual entries, including holdings and activity summary.
     Replaces any existing manual entry with the same name to prevent duplicates
     when re-importing an updated statement."""
     from datetime import date
+    import json as _json
     today = date.today().isoformat()
     saved = 0
     with get_db() as conn:
@@ -187,14 +202,16 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             category = str(e.get("category", "other_asset"))
             value = float(e.get("value", 0))
             notes = str(e.get("notes", ""))[:200]
+            summary = e.get("activity_summary")
+            summary_json = _json.dumps(summary) if summary else None
             if not name:
                 continue
             # Delete existing entry with same name so re-imports don't stack up.
             # ON DELETE CASCADE in manual_holdings removes stale holdings too.
             conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
             cursor = conn.execute(
-                "INSERT INTO manual_entries (name, category, value, notes, entered_at) VALUES (?,?,?,?,?)",
-                (name, category, value, notes, today)
+                "INSERT INTO manual_entries (name, category, value, notes, summary_json, entered_at) VALUES (?,?,?,?,?,?)",
+                (name, category, value, notes, summary_json, today)
             )
             entry_id = cursor.lastrowid
             saved += 1
