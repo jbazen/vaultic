@@ -333,7 +333,7 @@ def _sanitize_messages(messages: list[dict]) -> list[dict]:
     return sanitized
 
 
-def _trim_history(messages: list[dict], keep: int = 40) -> list[dict]:
+def _trim_history(messages: list[dict], keep: int = 20) -> list[dict]:
     """
     Trim message history to at most `keep` recent messages, always starting
     on a plain user message (not a tool_result turn) so the resulting history
