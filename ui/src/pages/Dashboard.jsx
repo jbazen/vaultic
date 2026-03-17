@@ -72,6 +72,46 @@ function StatCard({ label, value, color, icon, negative }) {
   );
 }
 
+const ASSET_CLASS_COLORS = {
+  equities:     "#4f8ef7",
+  fixed_income: "#a78bfa",
+  cash:         "#34d399",
+  alternatives: "#fbbf24",
+  other:        "#8b92a8",
+};
+const ASSET_CLASS_LABELS = {
+  equities: "Equities", fixed_income: "Fixed Income",
+  cash: "Cash", alternatives: "Alternatives", other: "Other",
+};
+
+function AllocationBar({ allocation, total }) {
+  if (!total) return null;
+  const entries = Object.entries(allocation).sort((a, b) => b[1] - a[1]);
+  return (
+    <div>
+      <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", marginBottom: 8 }}>
+        {entries.map(([cls, val]) => (
+          <div key={cls} style={{
+            width: `${(val / total * 100).toFixed(1)}%`,
+            background: ASSET_CLASS_COLORS[cls] || "#8b92a8",
+            transition: "width 0.3s",
+          }} />
+        ))}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px" }}>
+        {entries.map(([cls, val]) => (
+          <div key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: ASSET_CLASS_COLORS[cls] || "#8b92a8" }} />
+            <span style={{ color: "var(--text2)" }}>{ASSET_CLASS_LABELS[cls] || cls}</span>
+            <span style={{ color: "var(--text)", fontWeight: 600 }}>{(val / total * 100).toFixed(1)}%</span>
+            <span style={{ color: "var(--text2)" }}>{fmt(val)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CryptoAccountRow({ account, onRenamed }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.display_name || account.name);
@@ -208,7 +248,7 @@ export default function Dashboard() {
     try {
       const [nwData, hist, accts, manual, txns, items] = await Promise.all([
         getNetWorthLatest(),
-        getNetWorthHistory(365),
+        getNetWorthHistory(1825),
         getAccounts(),
         getManualEntries(),
         getRecentTransactions(20),
@@ -266,6 +306,16 @@ export default function Dashboard() {
   const carValue = latestManual["car_value"];
   const otherAssets = manualEntries.filter(e => e.category === "other_asset");
   const liabilities = manualEntries.filter(e => e.category === "other_liability");
+  const manualInvested = manualEntries.filter(e => e.category === "invested");
+
+  // Consolidated allocation across all manual investment holdings
+  const allHoldings = manualInvested.flatMap(e => e.holdings || []);
+  const allHoldingsTotal = allHoldings.reduce((s, h) => s + (h.value || 0), 0);
+  const allocationByClass = allHoldings.reduce((acc, h) => {
+    const cls = h.asset_class || "other";
+    acc[cls] = (acc[cls] || 0) + (h.value || 0);
+    return acc;
+  }, {});
 
   const total = nw?.total ?? null;
 
@@ -390,6 +440,37 @@ export default function Dashboard() {
           })
         )}
       </div>
+
+      {/* ── Manual Investment Accounts (PDF imported) ── */}
+      {manualInvested.length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>
+            Investment Accounts (Imported)
+          </div>
+          {allHoldingsTotal > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
+                Portfolio Allocation
+              </div>
+              <AllocationBar allocation={allocationByClass} total={allHoldingsTotal} />
+            </div>
+          )}
+          <div className="account-list">
+            {manualInvested.map(e => (
+              <div key={e.id} className="account-row">
+                <div className="account-info">
+                  <div className="account-name">{e.name}</div>
+                  <div className="account-meta">
+                    <span className="badge badge-investment">invested</span>
+                    {e.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{e.notes}</span>}
+                  </div>
+                </div>
+                <div className="account-balance">{fmt(e.value)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Other Assets & Liabilities ── */}
       {(otherAssets.length > 0 || liabilities.length > 0) && (

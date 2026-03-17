@@ -14,21 +14,42 @@ async def latest(_user: str = Depends(get_current_user)):
         ).fetchone()
     if not row:
         return {"message": "No data yet — connect accounts and sync to build your first snapshot."}
-    return dict(row)
+    d = dict(row)
+    # Investable = total minus illiquid physical assets
+    d["investable"] = (d.get("total") or 0) - (d.get("real_estate") or 0) - (d.get("vehicles") or 0)
+    return d
 
 
 @router.get("/history")
 async def history(
-    days: int = Query(default=365, le=1825),
+    days: int = Query(default=365, le=3650),
     _user: str = Depends(get_current_user),
 ):
-    """Net worth history for chart (default: 1 year)."""
+    """
+    Net worth history for chart.
+    - Returns daily points for <= 90 days of data
+    - Collapses to one point per month (last snapshot of each month) for longer ranges
+    - Each row includes `investable` = total - real_estate - vehicles
+    - Max range: 3650 days (10 years)
+    """
     with get_db() as conn:
         rows = conn.execute("""
             SELECT snapped_at, total, liquid, invested, crypto, real_estate,
-                   vehicles, liabilities, other_assets
+                   vehicles, liabilities, other_assets,
+                   (total - COALESCE(real_estate, 0) - COALESCE(vehicles, 0)) AS investable
             FROM net_worth_snapshots
+            WHERE snapped_at >= date('now', '-' || ? || ' days')
             ORDER BY snapped_at ASC
-            LIMIT ?
         """, (days,)).fetchall()
-    return [dict(row) for row in rows]
+
+    data = [dict(row) for row in rows]
+
+    # Monthly aggregation when range > 90 days (keep last snapshot per month)
+    if days > 90 and len(data) > 90:
+        monthly = {}
+        for row in data:
+            month_key = row["snapped_at"][:7]  # "YYYY-MM"
+            monthly[month_key] = row           # last day of month wins
+        data = list(monthly.values())
+
+    return data

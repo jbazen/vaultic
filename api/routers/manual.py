@@ -1,4 +1,4 @@
-"""Manual entries: home value, car value, credit score, custom assets/liabilities."""
+"""Manual entries: home value, car value, credit score, custom assets/liabilities, PDF-imported investments."""
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -8,7 +8,11 @@ from api import sync
 
 router = APIRouter(prefix="/api/manual", tags=["manual"])
 
-VALID_CATEGORIES = {"home_value", "car_value", "credit_score", "other_asset", "other_liability"}
+VALID_CATEGORIES = {
+    "home_value", "car_value", "credit_score",
+    "other_asset", "other_liability",
+    "invested", "liquid", "real_estate", "vehicles", "crypto",
+}
 
 
 class ManualEntryRequest(BaseModel):
@@ -16,17 +20,24 @@ class ManualEntryRequest(BaseModel):
     category: str
     value: float
     notes: str | None = None
-    entered_at: str | None = None  # ISO date string; defaults to today
+    entered_at: str | None = None
 
 
 @router.get("")
 async def list_entries(_user: str = Depends(get_current_user)):
-    """Latest entry per category plus full history."""
+    """All manual entries with their holdings."""
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM manual_entries ORDER BY category, entered_at DESC"
         ).fetchall()
-    return [dict(row) for row in rows]
+        entries = [dict(row) for row in rows]
+        for entry in entries:
+            holding_rows = conn.execute(
+                "SELECT * FROM manual_holdings WHERE manual_entry_id = ? ORDER BY value DESC",
+                (entry["id"],)
+            ).fetchall()
+            entry["holdings"] = [dict(h) for h in holding_rows]
+    return entries
 
 
 @router.post("")
@@ -39,7 +50,6 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
             INSERT INTO manual_entries (name, category, value, notes, entered_at)
             VALUES (?, ?, ?, ?, ?)
         """, (body.name, body.category, body.value, body.notes, entered_at))
-    # Refresh net worth snapshot for today
     try:
         sync._take_net_worth_snapshot(date.today().isoformat())
     except Exception:

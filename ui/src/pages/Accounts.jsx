@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase } from "../api.js";
+import { getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries } from "../api.js";
 import PlaidLink from "../components/PlaidLink.jsx";
 
 function fmt(v) {
@@ -170,18 +170,190 @@ function AccountRow({ account, onRenamed }) {
   );
 }
 
+const ASSET_CLASS_COLORS = {
+  equities: "#4f8ef7", fixed_income: "#a78bfa",
+  cash: "#34d399", alternatives: "#fbbf24", other: "#8b92a8",
+};
+const ASSET_CLASS_LABELS = {
+  equities: "Equities", fixed_income: "Fixed Income",
+  cash: "Cash", alternatives: "Alternatives", other: "Other",
+};
+
+function fmtPct(v) {
+  if (v == null) return "—";
+  return `${Number(v).toFixed(2)}%`;
+}
+function fmtNum(v, decimals = 4) {
+  if (v == null) return "—";
+  return Number(v).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: decimals });
+}
+
+function AllocationBar({ allocation, total }) {
+  if (!total) return null;
+  const entries = Object.entries(allocation).sort((a, b) => b[1] - a[1]);
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", marginBottom: 8 }}>
+        {entries.map(([cls, val]) => (
+          <div key={cls} style={{
+            width: `${(val / total * 100).toFixed(1)}%`,
+            background: ASSET_CLASS_COLORS[cls] || "#8b92a8",
+          }} />
+        ))}
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px" }}>
+        {entries.map(([cls, val]) => (
+          <div key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: ASSET_CLASS_COLORS[cls] || "#8b92a8" }} />
+            <span style={{ color: "var(--text2)" }}>{ASSET_CLASS_LABELS[cls] || cls}</span>
+            <span style={{ fontWeight: 600, color: "var(--text)" }}>{(val / total * 100).toFixed(1)}%</span>
+            <span style={{ color: "var(--text2)" }}>{fmt(val)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ManualInvestmentCard({ entry, onDelete }) {
+  const [expanded, setExpanded] = useState(false);
+  const holdings = entry.holdings || [];
+  const holdingsTotal = holdings.reduce((s, h) => s + (h.value || 0), 0);
+  const allocation = holdings.reduce((acc, h) => {
+    const cls = h.asset_class || "other";
+    acc[cls] = (acc[cls] || 0) + (h.value || 0);
+    return acc;
+  }, {});
+  const hasHoldings = holdings.length > 0;
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 12, marginBottom: 12 }}>
+      {/* Header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 15, color: "var(--text)" }}>{entry.name}</span>
+            <span className="badge badge-investment" style={{ fontSize: 11 }}>invested</span>
+          </div>
+          {entry.notes && (
+            <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>{entry.notes}</div>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>{fmt(entry.value)}</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {hasHoldings && (
+              <button
+                onClick={() => setExpanded(e => !e)}
+                style={{
+                  background: "none", border: "1px solid var(--border)",
+                  color: "var(--text2)", borderRadius: 6, padding: "3px 10px",
+                  cursor: "pointer", fontSize: 12,
+                }}
+              >
+                {expanded ? "▲ Hide" : "▼ Details"}
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={() => onDelete(entry.id)}
+                style={{
+                  background: "none", border: "1px solid var(--border)",
+                  color: "#f87171", borderRadius: 6, padding: "3px 8px",
+                  cursor: "pointer", fontSize: 12,
+                }}
+                title="Delete entry"
+              >✕</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded detail */}
+      {expanded && hasHoldings && (
+        <div style={{ marginTop: 14 }}>
+          {/* Asset allocation */}
+          {holdingsTotal > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
+                Asset Allocation
+              </div>
+              <AllocationBar allocation={allocation} total={holdingsTotal} />
+            </div>
+          )}
+
+          {/* Holdings table */}
+          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
+            Holdings
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  {["Security", "Class", "Ticker", "Shares", "Price", "Value ($)", "Pct. Assets (%)", "Principal ($)", "Gain/Loss ($)", "Gain/Loss (%)"].map(h => (
+                    <th key={h} style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Class" ? "left" : "right", color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {holdings.map((h, i) => {
+                  const glPos = h.gain_loss_dollars > 0;
+                  const glNeg = h.gain_loss_dollars < 0;
+                  return (
+                    <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name}</td>
+                      <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
+                        {h.asset_class && (
+                          <span style={{ background: ASSET_CLASS_COLORS[h.asset_class] + "22", color: ASSET_CLASS_COLORS[h.asset_class], borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 600 }}>
+                            {ASSET_CLASS_LABELS[h.asset_class] || h.asset_class}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{h.ticker || "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(h.shares, 4)}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{h.price != null ? fmt(h.price) : "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{h.value != null ? fmt(h.value) : "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{fmtPct(h.pct_assets)}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{h.principal != null ? fmt(h.principal) : "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
+                        {h.gain_loss_dollars != null ? (glPos ? "+" : "") + fmt(h.gain_loss_dollars) : "—"}
+                      </td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
+                        {h.gain_loss_pct != null ? (h.gain_loss_pct > 0 ? "+" : "") + fmtPct(h.gain_loss_pct) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: "2px solid var(--border)" }}>
+                  <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>Total</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>{fmt(holdingsTotal || entry.value)}</td>
+                  <td colSpan={4} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Accounts() {
   const [accounts, setAccounts] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [coinbaseStatus, setCoinbaseStatus] = useState(null);
+  const [manualEntries, setManualEntries] = useState([]);
 
   async function load() {
     try {
-      const [accts, its] = await Promise.all([getAccounts(), getPlaidItems()]);
+      const [accts, its, manual] = await Promise.all([getAccounts(), getPlaidItems(), getManualEntries()]);
       setAccounts(accts);
       setItems(its);
+      setManualEntries(manual);
     } finally {
       setLoading(false);
     }
@@ -286,6 +458,18 @@ export default function Accounts() {
             </div>
           );
         })
+      )}
+
+      {/* ── Manual Investment Accounts (PDF imported) ── */}
+      {manualEntries.filter(e => e.category === "invested").length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>
+            Investment Accounts (PDF Imported)
+          </div>
+          {manualEntries.filter(e => e.category === "invested").map(entry => (
+            <ManualInvestmentCard key={entry.id} entry={entry} />
+          ))}
+        </div>
       )}
     </div>
   );

@@ -98,6 +98,23 @@ CREATE TABLE IF NOT EXISTS manual_entries (
     entered_at DATE NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS manual_holdings (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    manual_entry_id   INTEGER NOT NULL REFERENCES manual_entries(id) ON DELETE CASCADE,
+    name              TEXT NOT NULL,
+    ticker            TEXT,
+    asset_class       TEXT,
+    shares            REAL,
+    price             REAL,
+    value             REAL,
+    pct_assets        REAL,
+    principal         REAL,
+    gain_loss_dollars REAL,
+    gain_loss_pct     REAL,
+    notes             TEXT,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # Run these migrations on existing databases to add new columns
@@ -112,6 +129,7 @@ MIGRATIONS = [
     "ALTER TABLE accounts ADD COLUMN source TEXT DEFAULT 'plaid'",
     "ALTER TABLE account_balances ADD COLUMN native_balance REAL",
     "ALTER TABLE account_balances ADD COLUMN unit_price REAL",
+    "CREATE TABLE IF NOT EXISTS manual_holdings (id INTEGER PRIMARY KEY AUTOINCREMENT, manual_entry_id INTEGER NOT NULL REFERENCES manual_entries(id) ON DELETE CASCADE, name TEXT NOT NULL, ticker TEXT, asset_class TEXT, shares REAL, price REAL, value REAL, pct_assets REAL, principal REAL, gain_loss_dollars REAL, gain_loss_pct REAL, notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
 ]
 
 

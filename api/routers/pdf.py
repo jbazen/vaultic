@@ -15,8 +15,7 @@ from api import security_log
 logger = logging.getLogger("vaultic.pdf")
 router = APIRouter(prefix="/api/pdf", tags=["pdf"])
 
-PARSE_PROMPT = """You are a financial data extractor. The user has uploaded a PDF financial statement.
-Extract ALL accounts, balances, and asset/liability values you can find.
+PARSE_PROMPT = """You are a financial data extractor. Extract ALL accounts, holdings, and balances from this PDF financial statement.
 
 Return ONLY a JSON array with this exact structure (no explanation, no markdown):
 [
@@ -24,18 +23,35 @@ Return ONLY a JSON array with this exact structure (no explanation, no markdown)
     "name": "Account or asset name",
     "category": "one of: invested | liquid | real_estate | vehicles | crypto | other_asset | other_liability",
     "value": 12345.67,
-    "notes": "brief context like account type, as-of date, institution"
+    "notes": "brief context: account type, institution, as-of date",
+    "holdings": [
+      {
+        "name": "Security or fund name",
+        "ticker": "VTSAX",
+        "asset_class": "equities | fixed_income | cash | alternatives | other",
+        "shares": 123.456,
+        "price": 45.67,
+        "value": 5641.23,
+        "pct_assets": 12.5,
+        "principal": 5000.00,
+        "gain_loss_dollars": 641.23,
+        "gain_loss_pct": 12.82,
+        "notes": "any other relevant detail or null"
+      }
+    ]
   }
 ]
 
 Rules:
-- Use positive values for assets, positive values for liabilities (the category determines sign)
-- "invested" = 401k, IRA, brokerage, mutual funds, investment accounts
-- "liquid" = checking, savings, money market, HSA
-- "other_liability" = loans, credit card balances, mortgages not tracked elsewhere
-- "other_asset" = anything that doesn't fit above
+- holdings array may be [] if no detailed holdings are visible for that account
+- Use positive values for assets; positive values for liabilities (category determines sign in the UI)
+- invested = 401k, IRA, brokerage, mutual funds, investment accounts
+- liquid = checking, savings, money market, HSA
+- other_liability = loans, credit card balances, mortgages not tracked elsewhere
 - Include the statement date in notes if visible
-- Skip accounts with zero balance unless they seem intentionally zero
+- Skip accounts with zero balance unless intentionally zero
+- Use null for numeric fields not present in the PDF
+- asset_class mappings: equities (stocks/ETFs/equity mutual funds), fixed_income (bonds/bond funds), cash (money market/cash/cash equivalents), alternatives (real estate funds/commodities/hedge funds), other (anything else)
 - If a value is a range, use the midpoint"""
 
 
@@ -78,7 +94,7 @@ async def ingest_pdf(
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
+            max_tokens=4096,
             messages=[{
                 "role": "user",
                 "content": f"{PARSE_PROMPT}\n\n---PDF TEXT---\n{full_text[:15000]}"
@@ -110,7 +126,7 @@ class SaveParsedRequest(BaseModel):
 
 @router.post("/save")
 async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_user)):
-    """Save confirmed parsed entries as manual entries."""
+    """Save confirmed parsed entries as manual entries, including holdings."""
     from datetime import date
     today = date.today().isoformat()
     saved = 0
@@ -122,10 +138,44 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             notes = str(e.get("notes", ""))[:200]
             if not name:
                 continue
-            conn.execute(
+            cursor = conn.execute(
                 "INSERT INTO manual_entries (name, category, value, notes, entered_at) VALUES (?,?,?,?,?)",
                 (name, category, value, notes, today)
             )
+            entry_id = cursor.lastrowid
             saved += 1
+
+            # Save holdings if present
+            holdings = e.get("holdings") or []
+            for h in holdings:
+                h_name = str(h.get("name", ""))[:200]
+                if not h_name:
+                    continue
+                def _f(k):
+                    v = h.get(k)
+                    try:
+                        return float(v) if v is not None else None
+                    except (TypeError, ValueError):
+                        return None
+                conn.execute("""
+                    INSERT INTO manual_holdings
+                        (manual_entry_id, name, ticker, asset_class, shares, price, value,
+                         pct_assets, principal, gain_loss_dollars, gain_loss_pct, notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    entry_id,
+                    h_name,
+                    h.get("ticker") or None,
+                    h.get("asset_class") or None,
+                    _f("shares"),
+                    _f("price"),
+                    _f("value"),
+                    _f("pct_assets"),
+                    _f("principal"),
+                    _f("gain_loss_dollars"),
+                    _f("gain_loss_pct"),
+                    str(h.get("notes", "") or "")[:200] or None,
+                ))
+
     security_log.log_server_event(f"PDF_SAVED  user={_user}  entries={saved}")
     return {"status": "saved", "count": saved}
