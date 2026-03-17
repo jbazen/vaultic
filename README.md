@@ -39,7 +39,7 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 - **PDF import** — parse Investor360/NFS account statements using Claude AI extraction (for Parker Financial IRA/college fund accounts that Plaid cannot reach)
 - **Manual entries** — home value, car value, credit score, and any other asset or liability
 - **Net worth history** — daily snapshots, historical charts
-- **Voice interface** — "Hey Sage" wake word, hands-free voice mode, OpenAI TTS (ballad voice) or free browser TTS
+- **Voice interface** — "Hey Sage" wake word, push-to-talk (Whisper), hands-free voice mode, OpenAI TTS (fable voice) or free browser TTS
 - **2FA (TOTP)** — Google Authenticator / Authy enrollment
 - **Security logging** — verbose audit log of every login, API call, sync event, and Sage query, with live tail viewer in the UI
 
@@ -54,7 +54,7 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 | **Frontend** | React 18, Vite |
 | **Account linking** | Plaid Python SDK + Plaid Link (React) |
 | **AI advisor** | Anthropic Claude Haiku (`claude-haiku-4-5-20251001`) |
-| **AI voice** | OpenAI TTS (`tts-1`, `ballad` voice) — optional |
+| **AI voice** | OpenAI TTS (`tts-1`, `fable` voice) — optional |
 | **Web search** | Tavily API (AI-optimized search for Sage) |
 | **PDF parsing** | pdfplumber + Claude Haiku extraction |
 | **Auth** | JWT (PyJWT) + bcrypt password hashing |
@@ -78,6 +78,7 @@ vaultic/
 │   ├── encryption.py        # Fernet encrypt/decrypt for Plaid access tokens
 │   ├── sage.py              # Sage AI engine: tool definitions, tool execution, Claude loop
 │   ├── security_log.py      # Audit logger: logins, API calls, syncs, Sage queries
+│   ├── coinbase_sync.py     # Coinbase Advanced Trade API: CDP JWT auth, fetch/store crypto balances
 │   ├── sync.py              # Plaid transaction sync (cursor-based), net worth snapshots
 │   ├── rate_limit.py        # In-memory sliding window: 60 Sage msgs/hr, 5 syncs/5min
 │   └── routers/
@@ -85,9 +86,10 @@ vaultic/
 │       ├── plaid.py         # /api/plaid/* — link token, exchange, sync, items
 │       ├── accounts.py      # /api/accounts/* — list, balances, transactions, rename
 │       ├── net_worth.py     # /api/net-worth/* — latest snapshot, history
-│       ├── manual.py        # /api/manual/* — CRUD for manual asset entries
-│       ├── sage.py          # /api/sage/* — chat endpoint, TTS endpoint
-│       └── pdf.py           # /api/pdf/* — PDF ingestion (pdfplumber + Haiku), save
+│       ├── manual.py        # /api/manual/* — CRUD for manual asset entries + holdings
+│       ├── sage.py          # /api/sage/* — chat endpoint, TTS endpoint (OpenAI fable voice)
+│       ├── crypto.py        # /api/crypto/* — Coinbase account data
+│       └── pdf.py           # /api/pdf/* — PDF ingestion (pdfplumber + Haiku), holdings + activity summary, save
 ├── ui/
 │   ├── public/
 │   │   └── favicon.png      # Tab icon + sidebar logo
@@ -189,11 +191,17 @@ User message → POST /api/sage/chat (rate limited: 60/hr)
 
 ```
 User drags PDF → /api/pdf/ingest (multipart, 20MB limit, 30 pages max)
-  → pdfplumber extracts text from all pages
-  → Claude Haiku parse prompt: extract account name, category, value, notes as JSON
+  → pdfplumber extracts text from all pages (up to 15,000 chars)
+  → Claude Haiku parse prompt: extract per-account entries with:
+      - name, category (invested/liquid/etc), value, notes
+      - activity_summary (beginning balance, net change, TWR %, date range)
+      - holdings[] (exact names, ticker, asset_class, shares, price, value, gain/loss)
+  → if response truncated (max_tokens): _salvage_json() recovers all complete objects
   → return parsed entries to frontend for review
-User reviews/edits → clicks Save → /api/pdf/save
-  → save confirmed entries as manual_entries rows
+User reviews/edits entries → clicks Save → /api/pdf/save
+  → DELETE existing manual_entry with same name (prevents re-import stacking)
+  → INSERT new manual_entry + all holdings rows
+  → net worth snapshot updated immediately
 ```
 
 ---
@@ -259,11 +267,30 @@ Daily net worth snapshots broken down by category: `liquid`, `invested`, `crypto
 ### `manual_entries`
 | Column | Type | Notes |
 |---|---|---|
-| name | TEXT | e.g. "Primary Home" |
-| category | TEXT | home_value, vehicle, credit_score, investment, liability, other |
+| name | TEXT | e.g. "Primary Home", "Parker IRA" |
+| category | TEXT | home_value, car_value, credit_score, other_asset, other_liability, invested, liquid, real_estate, vehicles, crypto |
 | value | REAL | |
-| notes | TEXT | |
+| notes | TEXT | Institution, account number (masked), as-of date |
+| summary_json | TEXT | JSON blob: beginning_balance, net_change, twr_pct, etc. (from PDF activity summaries) |
 | entered_at | DATE | |
+
+### `manual_holdings`
+Per-holding detail rows linked to a `manual_entries` row. Populated from PDF imports.
+
+| Column | Type | Notes |
+|---|---|---|
+| manual_entry_id | INTEGER FK | References manual_entries(id) ON DELETE CASCADE |
+| name | TEXT | Exact name from PDF (e.g. "Large-Cap Growth") |
+| ticker | TEXT | Symbol if available |
+| asset_class | TEXT | equities, fixed_income, cash, alternatives, other |
+| shares | REAL | |
+| price | REAL | |
+| value | REAL | |
+| pct_assets | REAL | % of portfolio |
+| principal | REAL | Cost basis |
+| gain_loss_dollars | REAL | |
+| gain_loss_pct | REAL | |
+| notes | TEXT | |
 
 ---
 
@@ -321,7 +348,9 @@ All endpoints except `/api/auth/login`, `/api/auth/verify-2fa`, and `/api/health
 | Method | Path | Description |
 |---|---|---|
 | POST | `/chat` | Send message, get response + updated history. Rate limited 60/hr. |
-| POST | `/speak` | Text → streaming MP3 via OpenAI TTS (ballad voice). One sentence per call for parallel fetch in frontend. |
+| POST | `/speak` | Text → MP3 via OpenAI TTS (fable voice). One sentence per call for parallel fetch in frontend. |
+| POST | `/transcribe` | Audio file → text via OpenAI Whisper. Used by push-to-talk and Hey Sage. |
+| POST | `/process-file` | Extract text from uploaded file (PDF, DOCX, XLSX, images, JSON, YAML) for Sage context. |
 
 ### PDF — `/api/pdf`
 | Method | Path | Description |
@@ -351,14 +380,19 @@ Sage is a conversational financial advisor built on Claude Haiku with a tool-use
 ### Voice Modes
 - **Off** — text only
 - **Browser (free)** — Web Speech API, prefers male voice if available
-- **AI voice (OpenAI)** — `tts-1` model, `ballad` voice (deep, natural male)
+- **AI voice (OpenAI)** — `tts-1` model, `fable` voice (expressive, natural male)
 
-### Hey Sage (Always-On)
-- Continuous Web Speech API with wake word detection (`hey sage`, `ok sage`, `hi sage`)
-- Two-tone activation sound on wake
-- 1.8-second silence timer auto-sends command
-- Green pulsing indicator when awake and listening
+### Hey Sage (Always-On Wake Word)
+- Browser Web Speech API listens continuously for wake word (`hey sage`, `ok sage`, `hi sage`)
+- On wake: switches to Whisper (OpenAI) via MediaRecorder for high-accuracy command capture
+- Web Audio API silence detection (3s) auto-sends command when you stop talking
+- Two-tone activation sound on wake; green pulsing indicator while listening
 - Stop button (⏹) appears in header while Sage is speaking
+
+### Push-to-Talk
+- 🎤 button in chat input — click to start recording, click again to send
+- OpenAI Whisper transcription for financial term accuracy
+- Works alongside Hey Sage — both modes can be used independently
 
 ### Session Persistence
 Chat history and conversation context are stored in `sessionStorage` — survive panel close/reopen and page navigation. The ↺ button clears both UI history and sessionStorage. Sage's long-term memory (goals, preferences, user context) lives in `data/sage_notes.md` and persists across browser sessions.
@@ -624,13 +658,13 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend — 80 tests total across:**
+**Backend unit tests across:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
-- `test_accounts.py` — Accounts, net worth, manual entries
+- `test_accounts.py` — Accounts, net worth (investable field, monthly aggregation), manual entries (all 10 categories)
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable
 - `test_users.py` — Create, delete, change password, admin endpoints
 - `test_sage.py` — Chat endpoint, tool dispatch, rate limiting (429)
-- `test_pdf.py` — PDF ingestion parsing, save to manual entries
+- `test_pdf.py` — PDF ingestion, `_salvage_json` recovery, duplicate prevention, holdings + activity_summary save
 - `test_rate_limit.py` — Sliding window rate limit behavior
 
 **Playwright E2E — 18 tests across:**
@@ -663,7 +697,7 @@ All costs are for personal use (single user, ~15 connected accounts).
 | **Oracle Cloud A1** | Hosting (2 OCPU, 12GB RAM) | **Free** (always-free tier) |
 | **Plaid** | Account data (bank, investment, mortgage) | **~$5–15/mo** (pay-as-you-go, ~$0.30–$1/item/mo) |
 | **Anthropic (Haiku)** | Sage AI chat | **~$1–3/mo** (input: $0.80/1M tokens, output: $4/1M tokens) |
-| **OpenAI TTS** | Sage voice (ballad) | **~$0.50–2/mo** (tts-1: $15/1M characters) |
+| **OpenAI TTS** | Sage voice (fable) | **~$0.50–2/mo** (tts-1: $15/1M characters) |
 | **Tavily** | Sage web search | **Free** (1,000 searches/month free tier) |
 | **Domain + SSL** | Custom domain (optional) | **~$1/mo** (Let's Encrypt SSL is free) |
 | **Total** | | **~$7–20/month** |
@@ -673,7 +707,7 @@ All costs are for personal use (single user, ~15 connected accounts).
 - **Plaid sandbox is free** — real account data requires Plaid Production access. Apply at `dashboard.plaid.com` as an individual developer with "Personal Finance Management" use case. No business registration required.
 - **Plaid pricing** is per connected item (institution), not per account. All Chase accounts count as one item (~$0.30–1/mo).
 - **Anthropic Haiku** is the cheapest Claude model. Even 50 conversations/day would cost ~$3/month.
-- **OpenAI TTS** requires billing credits at `platform.openai.com/billing`. Browser TTS fallback is always free.
+- **OpenAI TTS** requires billing credits at `platform.openai.com/billing`. Browser TTS fallback is always free. Whisper (push-to-talk + Hey Sage) also billed per minute (~$0.006/min) — negligible at personal use rates.
 - **Tavily** free tier resets monthly. At normal personal use (occasional Sage web searches), 1,000/month is more than enough.
 
 ### Comparison to Alternatives
@@ -698,8 +732,8 @@ All costs are for personal use (single user, ~15 connected accounts).
 | Robinhood | Brokerage | Plaid ✅ |
 | Rocket Mortgage | Mortgage | Plaid ✅ |
 | Optum / HealthEquity | HSA | Plaid ✅ |
-| Coinbase | Crypto | Planned (official API) |
-| River | Bitcoin | Planned (official API) |
+| Coinbase | Crypto | Coinbase Advanced Trade API ✅ |
+| River | Bitcoin | No retail API (B2B only) — moving BTC to Coinbase |
 | Parker Financial / NFS (Investor360) | IRAs, college fund | PDF Import ✅ |
 | Home value | Asset | Manual entry ✅ |
 | Car value | Asset | Manual entry ✅ |
@@ -714,9 +748,9 @@ Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client po
 ## Roadmap
 
 - [ ] **Budget module** — zero-based budgeting to replace EveryDollar; Plaid transactions auto-categorized into budget lines; Sage learns merchant → category mappings over time
-- [ ] **Coinbase integration** — official Coinbase API for live crypto balances
-- [ ] **River integration** — official River API for Bitcoin balance
-- [ ] **Plaid Production** — apply for production access, connect real accounts
+- [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth (completed)
+- [ ] **River** — no retail API available; plan to transfer BTC to Coinbase
+- [ ] **Plaid Production** — applied (pending approval); EIN obtained, security questionnaire submitted
 - [ ] **Tax module** — W-4 multi-job wizard, quarterly estimated tax calculator (1040-ES), capital gains tracker, withholding tracker
 - [x] **Test suite** — 80 backend unit tests + 18 Playwright E2E tests (completed)
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen
