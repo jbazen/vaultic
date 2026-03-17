@@ -175,7 +175,9 @@ class SaveParsedRequest(BaseModel):
 
 @router.post("/save")
 async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_user)):
-    """Save confirmed parsed entries as manual entries, including holdings."""
+    """Save confirmed parsed entries as manual entries, including holdings.
+    Replaces any existing manual entry with the same name to prevent duplicates
+    when re-importing an updated statement."""
     from datetime import date
     today = date.today().isoformat()
     saved = 0
@@ -187,6 +189,9 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             notes = str(e.get("notes", ""))[:200]
             if not name:
                 continue
+            # Delete existing entry with same name so re-imports don't stack up.
+            # ON DELETE CASCADE in manual_holdings removes stale holdings too.
+            conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
             cursor = conn.execute(
                 "INSERT INTO manual_entries (name, category, value, notes, entered_at) VALUES (?,?,?,?,?)",
                 (name, category, value, notes, today)
