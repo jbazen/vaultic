@@ -91,7 +91,7 @@ export default function Login({ onLogin }) {
         ) : (
           <form onSubmit={handle2FA}>
             <p style={{ color: "var(--text2)", fontSize: "13px", marginBottom: "20px", textAlign: "center" }}>
-              A verification code was sent to your phone. Enter it below.
+              Enter the 6-digit code from your authenticator app.
             </p>
             <div className="form-group">
               <label className="form-label">Verification Code</label>
