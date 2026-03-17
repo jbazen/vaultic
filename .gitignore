@@ -30,3 +30,6 @@ ui/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# A1.Flex hunter config (contains OCI credentials)
+.env.hunt
