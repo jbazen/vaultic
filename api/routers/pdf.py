@@ -55,6 +55,46 @@ Rules:
 - If a value is a range, use the midpoint"""
 
 
+def _salvage_json(raw: str) -> list:
+    """
+    Extract all complete top-level JSON objects from a possibly-truncated array string.
+    Walks char-by-char tracking brace depth and string state so it handles any
+    truncation point cleanly — entries cut off mid-object are simply skipped.
+    """
+    depth = 0
+    in_string = False
+    escape_next = False
+    obj_start = None
+    entries = []
+
+    for i, c in enumerate(raw):
+        if escape_next:
+            escape_next = False
+            continue
+        if c == "\\" and in_string:
+            escape_next = True
+            continue
+        if c == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0 and obj_start is not None:
+                try:
+                    entries.append(json.loads(raw[obj_start : i + 1]))
+                except json.JSONDecodeError:
+                    pass
+                obj_start = None
+
+    return entries
+
+
 @router.post("/ingest")
 async def ingest_pdf(
     file: UploadFile = File(...),
@@ -94,7 +134,7 @@ async def ingest_pdf(
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=4096,
+            max_tokens=8096,
             messages=[{
                 "role": "user",
                 "content": f"{PARSE_PROMPT}\n\n---PDF TEXT---\n{full_text[:15000]}"
@@ -106,10 +146,19 @@ async def ingest_pdf(
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.error(f"Claude JSON parse error: {e} — raw: {raw[:200]}")
-        raise HTTPException(status_code=422, detail="Could not parse Claude's response as JSON")
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            # Response was cut off mid-JSON (max_tokens). Walk the raw string and
+            # collect every complete top-level object so partial results aren't lost.
+            logger.warning(f"JSON truncated at char {e.pos}, attempting salvage")
+            parsed = _salvage_json(raw)
+            if not parsed:
+                logger.error(f"Salvage failed — raw: {raw[:200]}")
+                raise HTTPException(status_code=422, detail="Could not parse Claude's response as JSON")
+            logger.info(f"Salvaged {len(parsed)} entries from truncated response")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Claude API error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
