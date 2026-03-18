@@ -19,7 +19,6 @@ function fmt(v) {
 function fmtCrypto(v, decimals = 8) {
   if (v == null) return "—";
   const s = Number(v).toFixed(decimals);
-  // Trim trailing zeros but preserve meaningful precision
   return s.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
 }
 
@@ -54,8 +53,8 @@ function isLiability(type) {
 
 // ── Shared: EditableNotes ──────────────────────────────────────────────────────
 // Inline pencil-click editor for account descriptions/notes.
-// onSave(value) is called when the user commits; empty string clears the note.
-function EditableNotes({ notes, onSave, placeholder = "Add description…" }) {
+// Renders inline so it can sit on the same line as the type badge.
+function EditableNotes({ notes, onSave }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(notes || "");
   const [saving, setSaving] = useState(false);
@@ -68,8 +67,8 @@ function EditableNotes({ notes, onSave, placeholder = "Add description…" }) {
 
   if (editing) {
     return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <input className="form-input" style={{ width: 220, padding: "2px 6px", fontSize: 12 }}
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <input className="form-input" style={{ width: 200, padding: "2px 6px", fontSize: 12 }}
           value={draft} onChange={e => setDraft(e.target.value)} autoFocus
           onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
         <button className="btn btn-primary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
@@ -86,8 +85,23 @@ function EditableNotes({ notes, onSave, placeholder = "Add description…" }) {
   );
 }
 
+// ── Shared: Meta line ──────────────────────────────────────────────────────────
+// Badge + subtype/extra labels + editable notes + date — all on one line.
+// Used by all account row types to keep the layout consistent.
+function MetaLine({ type, subtype, notes, onSaveNotes, date, extra }) {
+  return (
+    <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px" }}>
+      {typeBadge(type)}
+      {subtype && <span style={{ color: "var(--text2)" }}>{subtype}</span>}
+      {extra}
+      <EditableNotes notes={notes} onSave={onSaveNotes} />
+      {date && <span style={{ color: "var(--text2)", opacity: 0.6 }}>· {date}</span>}
+    </div>
+  );
+}
+
 // ── Crypto Account Row ─────────────────────────────────────────────────────────
-// Full-detail row for Coinbase holdings: shows native balance, price, value, and last update.
+// Full-detail row for Coinbase holdings: native balance, unit price, value, sync date.
 function CryptoAccountRow({ account, onRenamed }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.display_name || account.name);
@@ -122,16 +136,16 @@ function CryptoAccountRow({ account, onRenamed }) {
                 style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
             </div>
           )}
-          <div className="account-meta">
-            {typeBadge("crypto")}
-            <span style={{ marginLeft: 6 }}>
-              <EditableNotes notes={account.notes} onSave={async v => { await updateAccountNotes(account.id, v); onRenamed(); }} />
-            </span>
-          </div>
+          <MetaLine
+            type="crypto"
+            notes={account.notes}
+            onSaveNotes={async v => { await updateAccountNotes(account.id, v); onRenamed(); }}
+            date={account.snapped_at ? fmtDate(account.snapped_at) : null}
+          />
         </div>
         <div className="account-balance">{fmt(account.current)}</div>
       </div>
-      {/* Crypto detail: native balance, price per unit, last sync time */}
+      {/* Crypto detail: native balance, unit price, USD value */}
       <div style={{ display: "flex", gap: 24, fontSize: 13, color: "var(--text2)", paddingLeft: 4, flexWrap: "wrap" }}>
         <div>
           <span>Holdings: </span>
@@ -147,19 +161,13 @@ function CryptoAccountRow({ account, onRenamed }) {
           <span>Value: </span>
           <span style={{ color: "var(--accent)", fontWeight: 600 }}>{fmtPrice(account.current)}</span>
         </div>
-        {account.snapped_at && (
-          <div>
-            <span>Updated: </span>
-            <span>{fmtDate(account.snapped_at)}</span>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
 // ── Standard Account Row ───────────────────────────────────────────────────────
-// Used for checking, savings, credit cards, loans, and other non-investment accounts.
+// Checking, savings, credit cards, loans. All use the same bordered box style.
 // Shows available balance for depository accounts and credit limit for credit accounts.
 function AccountRow({ account, onRenamed }) {
   if (account.type === "crypto") return <CryptoAccountRow account={account} onRenamed={onRenamed} />;
@@ -185,11 +193,17 @@ function AccountRow({ account, onRenamed }) {
   const label = account.display_name || account.name;
   const isLiab = isLiability(account.type);
 
-  // Depository: show available if it differs from current (pending transactions shift this)
-  const showAvailable = account.type === "depository" &&
-    account.available != null && account.available !== account.current;
-  // Credit: show credit limit when present
-  const showLimit = account.type === "credit" && account.limit_amount != null;
+  // Extra inline labels on the meta line
+  const extra = (
+    <>
+      {account.type === "depository" && account.available != null && account.available !== account.current && (
+        <span style={{ color: "var(--text2)", fontSize: 12 }}>Avail: {fmt(account.available)}</span>
+      )}
+      {account.type === "credit" && account.limit_amount != null && (
+        <span style={{ color: "var(--text2)", fontSize: 12 }}>Limit: {fmt(account.limit_amount)}</span>
+      )}
+    </>
+  );
 
   return (
     <div className="account-row">
@@ -209,29 +223,14 @@ function AccountRow({ account, onRenamed }) {
               style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
           </div>
         )}
-        <div className="account-meta">
-          {typeBadge(account.type)}
-          {account.subtype && <span style={{ marginLeft: 6, color: "var(--text2)" }}>{account.subtype}</span>}
-          {/* Available balance shown when it differs from current (pending transactions) */}
-          {showAvailable && (
-            <span style={{ marginLeft: 8, color: "var(--text2)", fontSize: 12 }}>
-              Avail: {fmt(account.available)}
-            </span>
-          )}
-          {/* Credit limit shown on credit card accounts */}
-          {showLimit && (
-            <span style={{ marginLeft: 8, color: "var(--text2)", fontSize: 12 }}>
-              Limit: {fmt(account.limit_amount)}
-            </span>
-          )}
-        </div>
-        {/* Editable description + last sync date on second meta line */}
-        <div style={{ marginTop: 2, fontSize: 12, color: "var(--text2)" }}>
-          <EditableNotes notes={account.notes} onSave={async v => { await updateAccountNotes(account.id, v); onRenamed(); }} />
-          {account.snapped_at && (
-            <span style={{ marginLeft: 8, opacity: 0.6 }}>· {fmtDate(account.snapped_at)}</span>
-          )}
-        </div>
+        <MetaLine
+          type={account.type}
+          subtype={account.subtype}
+          notes={account.notes}
+          onSaveNotes={async v => { await updateAccountNotes(account.id, v); onRenamed(); }}
+          date={account.snapped_at ? fmtDate(account.snapped_at) : null}
+          extra={extra}
+        />
       </div>
       <div className={`account-balance ${isLiab ? "liability" : ""}`}>
         {isLiab ? `-${fmt(account.current)}` : fmt(account.current)}
@@ -258,10 +257,7 @@ function AllocationBar({ allocation, total }) {
     <div style={{ marginBottom: 12 }}>
       <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", marginBottom: 8 }}>
         {entries.map(([cls, val]) => (
-          <div key={cls} style={{
-            width: `${(val / total * 100).toFixed(1)}%`,
-            background: ASSET_CLASS_COLORS[cls] || "#8b92a8",
-          }} />
+          <div key={cls} style={{ width: `${(val / total * 100).toFixed(1)}%`, background: ASSET_CLASS_COLORS[cls] || "#8b92a8" }} />
         ))}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px" }}>
@@ -279,8 +275,8 @@ function AllocationBar({ allocation, total }) {
 }
 
 // ── Manual Investment Card ─────────────────────────────────────────────────────
-// PDF-imported investment accounts. Click anywhere on the row (except action buttons)
-// to expand/collapse holdings. Shows activity summary, allocation bar, and holdings table.
+// PDF-imported investment account row. Uses the same bordered box style as all other
+// rows. Click the row (not buttons) to expand/collapse holdings and activity summary.
 function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
   const [expanded, setExpanded] = useState(false);
   const [excluded, setExcluded] = useState(!!entry.exclude_from_net_worth);
@@ -305,7 +301,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
     }
   }
 
-  // Click anywhere on the header row (except buttons) to toggle details
+  // Click the header area (not buttons) to toggle details
   function handleRowClick(e) {
     if (!hasDetails) return;
     if (e.target.closest("button, input, a")) return;
@@ -313,82 +309,61 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
   }
 
   return (
-    <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 12, marginBottom: 12 }}>
-      {/* Header row — click to expand/collapse */}
-      <div
-        onClick={handleRowClick}
-        style={{
-          display: "flex", justifyContent: "space-between", alignItems: "flex-start",
-          cursor: hasDetails ? "pointer" : "default",
-          borderRadius: 6,
-          padding: "4px 2px",
-          transition: "background 0.1s",
-        }}
-        onMouseEnter={e => { if (hasDetails) e.currentTarget.style.background = "var(--bg3)"; }}
-        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-      >
-        <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            {/* Chevron indicator showing expand state */}
+    <div className="account-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      {/* Header — click to expand */}
+      <div onClick={handleRowClick}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+          cursor: hasDetails ? "pointer" : "default" }}>
+        <div className="account-info" style={{ flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {hasDetails && (
-              <span style={{ color: "var(--text2)", fontSize: 11, transition: "transform 0.15s",
-                display: "inline-block", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+              <span style={{ color: "var(--text2)", fontSize: 11, display: "inline-block",
+                transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
             )}
-            <span style={{ fontWeight: 600, fontSize: 15, color: excluded ? "var(--text2)" : "var(--text)" }}>
+            <div className="account-name" style={{ color: excluded ? "var(--text2)" : "var(--text)" }}>
               {entry.name}
-            </span>
-            <span className="badge badge-investment" style={{ fontSize: 11 }}>invested</span>
+            </div>
+          </div>
+          {/* Badge + notes + imported date all on one meta line */}
+          <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px", marginLeft: hasDetails ? 18 : 0 }}>
+            <span className="badge badge-investment">invested</span>
             {excluded && (
               <span style={{ fontSize: 11, color: "#f59e0b", background: "#f59e0b22", borderRadius: 4, padding: "2px 6px", fontWeight: 600 }}>
-                excluded from net worth
+                excluded
               </span>
             )}
+            <EditableNotes
+              notes={entry.notes}
+              onSave={async v => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }}
+            />
+            {entry.entered_at && (
+              <span style={{ color: "var(--text2)", opacity: 0.6 }}>· Imported {fmtDate(entry.entered_at)}</span>
+            )}
           </div>
-          {entry.notes && (
-            <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2, marginLeft: hasDetails ? 18 : 0 }}>
-              {entry.notes}
-            </div>
-          )}
-          {entry.entered_at && (
-            <div style={{ fontSize: 11, color: "var(--text2)", opacity: 0.7, marginTop: 2, marginLeft: hasDetails ? 18 : 0 }}>
-              Imported {fmtDate(entry.entered_at)}
-            </div>
-          )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 16, color: excluded ? "var(--text2)" : "var(--text)" }}>
             {fmt(entry.value)}
           </div>
-          {/* Action buttons — clicks on these do NOT trigger row expand */}
           <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={handleToggleExclude}
-              disabled={toggling}
-              title={excluded ? "Include in net worth" : "Exclude from net worth (display only)"}
-              style={{
-                background: "none", border: "1px solid var(--border)",
+            <button onClick={handleToggleExclude} disabled={toggling}
+              title={excluded ? "Include in net worth" : "Exclude from net worth"}
+              style={{ background: "none", border: "1px solid var(--border)",
                 color: excluded ? "#34d399" : "#f59e0b", borderRadius: 6, padding: "3px 8px",
-                cursor: "pointer", fontSize: 12,
-              }}
-            >
+                cursor: "pointer", fontSize: 12 }}>
               {toggling ? "…" : excluded ? "+ Include" : "⊘ Exclude"}
             </button>
             {onDelete && (
-              <button
-                onClick={() => onDelete(entry.id)}
-                style={{
-                  background: "none", border: "1px solid var(--border)",
+              <button onClick={() => onDelete(entry.id)}
+                style={{ background: "none", border: "1px solid var(--border)",
                   color: "#f87171", borderRadius: 6, padding: "3px 8px",
-                  cursor: "pointer", fontSize: 12,
-                }}
-                title="Delete entry"
-              >✕</button>
+                  cursor: "pointer", fontSize: 12 }} title="Delete">✕</button>
             )}
           </div>
         </div>
       </div>
 
-      {/* Activity Summary — shown even when not fully expanded */}
+      {/* Activity summary — shown when entry has period data */}
       {entry.activity_summary && (
         <div style={{
           display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
@@ -419,7 +394,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
         </div>
       )}
 
-      {/* Expanded: allocation bar + holdings table */}
+      {/* Expanded holdings */}
       {expanded && holdings.length > 0 && (
         <div style={{ marginTop: 14 }}>
           {holdingsTotal > 0 && (
@@ -430,22 +405,16 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
               <AllocationBar allocation={allocation} total={holdingsTotal} />
             </div>
           )}
-
           <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
             Holdings
           </div>
-          {/* Note: Ticker, Shares, Price are blank for asset-allocation-style PDFs (e.g. Parker Financial)
-              because the statement lists category totals ("Large-Cap Growth") not individual securities. */}
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
                   {["Security", "Class", "Ticker", "Shares", "Price", "Value ($)", "% Assets", "Principal ($)", "Gain/Loss ($)", "Gain/Loss (%)"].map(h => (
-                    <th key={h} style={{
-                      padding: "6px 10px 8px",
-                      textAlign: h === "Security" || h === "Class" ? "left" : "right",
-                      color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12,
-                    }}>{h}</th>
+                    <th key={h} style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Class" ? "left" : "right",
+                      color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -495,15 +464,12 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
 }
 
 // ── Plaid Investment Detection ─────────────────────────────────────────────────
-// Returns true for Plaid-connected investment/retirement/brokerage accounts.
-// These get the expandable holdings + transactions view.
 function isPlaidInvestment(account) {
   if (account.is_manual) return false;
   return account.type === "investment" ||
     ["401k", "ira", "roth", "pension", "brokerage"].includes(account.subtype);
 }
 
-// Tab button style for Holdings / Transactions toggle
 function tabBtn(active) {
   return {
     background: active ? "var(--accent)" : "var(--bg)",
@@ -516,8 +482,6 @@ function tabBtn(active) {
 }
 
 // ── Plaid Holdings Table ───────────────────────────────────────────────────────
-// Shows current snapshot: security name, ticker, type, quantity, price, value,
-// cost basis, gain/loss, and % of account.
 function HoldingsTable({ holdings, totalValue }) {
   if (!holdings || holdings.length === 0) {
     return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No holdings data available.</div>;
@@ -528,11 +492,8 @@ function HoldingsTable({ holdings, totalValue }) {
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)" }}>
             {["Security", "Ticker", "Type", "Qty", "Price", "Value", "Cost Basis", "Gain/Loss $", "Gain/Loss %", "% Assets"].map(h => (
-              <th key={h} style={{
-                padding: "6px 10px 8px",
-                textAlign: h === "Security" || h === "Type" ? "left" : "right",
-                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12,
-              }}>{h}</th>
+              <th key={h} style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Type" ? "left" : "right",
+                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -576,7 +537,6 @@ function HoldingsTable({ holdings, totalValue }) {
 }
 
 // ── Investment Transactions Table ──────────────────────────────────────────────
-// Buy/sell/dividend/contribution history from Plaid investment sync.
 function InvestmentTransactionsTable({ transactions }) {
   if (!transactions || transactions.length === 0) {
     return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No investment transactions found.</div>;
@@ -587,11 +547,9 @@ function InvestmentTransactionsTable({ transactions }) {
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)" }}>
             {["Date", "Type", "Subtype", "Security", "Ticker", "Qty", "Amount", "Fees"].map(h => (
-              <th key={h} style={{
-                padding: "6px 10px 8px",
+              <th key={h} style={{ padding: "6px 10px 8px",
                 textAlign: ["Date", "Security", "Type", "Subtype"].includes(h) ? "left" : "right",
-                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12,
-              }}>{h}</th>
+                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
             ))}
           </tr>
         </thead>
@@ -615,13 +573,12 @@ function InvestmentTransactionsTable({ transactions }) {
 }
 
 // ── Plaid Investment Card ──────────────────────────────────────────────────────
-// Expandable card for Plaid-connected investment/retirement/brokerage accounts.
-// Lazily fetches holdings on first expand; transactions load when that tab is clicked.
-// Click anywhere on the header row (except buttons) to expand/collapse.
+// Expandable row for Plaid investment/retirement accounts. Uses the same bordered
+// box style as all other rows. Click header (not buttons) to expand/collapse.
 function PlaidInvestmentCard({ account, onRenamed }) {
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState("holdings");
-  const [holdings, setHoldings] = useState(null);    // null = not yet loaded
+  const [holdings, setHoldings] = useState(null);
   const [transactions, setTransactions] = useState(null);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -631,22 +588,16 @@ function PlaidInvestmentCard({ account, onRenamed }) {
   const label = account.display_name || account.name;
   const mask = account.mask ? ` (...${account.mask})` : "";
 
-  // Toggle expand and lazy-load holdings on first open
   async function handleToggle() {
     const next = !expanded;
     setExpanded(next);
     if (next && holdings === null) {
       setLoading(true);
-      try {
-        const data = await getAccountHoldings(account.id);
-        setHoldings(data);
-      } finally {
-        setLoading(false);
-      }
+      try { const data = await getAccountHoldings(account.id); setHoldings(data); }
+      finally { setLoading(false); }
     }
   }
 
-  // Click anywhere on the header row (except buttons/inputs) to toggle
   function handleRowClick(e) {
     if (e.target.closest("button, input, a")) return;
     handleToggle();
@@ -656,12 +607,8 @@ function PlaidInvestmentCard({ account, onRenamed }) {
     setActiveTab(tab);
     if (tab === "transactions" && transactions === null) {
       setLoading(true);
-      try {
-        const data = await getAccountInvestmentTransactions(account.id, 100, 0);
-        setTransactions(data);
-      } finally {
-        setLoading(false);
-      }
+      try { const data = await getAccountInvestmentTransactions(account.id, 100, 0); setTransactions(data); }
+      finally { setLoading(false); }
     }
   }
 
@@ -673,18 +620,10 @@ function PlaidInvestmentCard({ account, onRenamed }) {
   }
 
   return (
-    <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 14, marginBottom: 14 }}>
-      {/* Header row — click to expand/collapse (except buttons/inputs) */}
-      <div
-        onClick={handleRowClick}
-        style={{
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          cursor: "pointer", borderRadius: 6, padding: "4px 2px",
-          transition: "background 0.1s",
-        }}
-        onMouseEnter={e => { e.currentTarget.style.background = "var(--bg3)"; }}
-        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
-      >
+    <div className="account-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      {/* Header — click to expand */}
+      <div onClick={handleRowClick}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
         <div className="account-info">
           {editing ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -697,36 +636,31 @@ function PlaidInvestmentCard({ account, onRenamed }) {
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {/* Chevron indicates expanded state */}
-              <span style={{ color: "var(--text2)", fontSize: 11, transition: "transform 0.15s",
-                display: "inline-block", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+              <span style={{ color: "var(--text2)", fontSize: 11, display: "inline-block",
+                transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
               <div className="account-name">{label}{mask}</div>
               <button onClick={() => setEditing(true)} title="Rename"
                 style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
             </div>
           )}
-          <div className="account-meta" style={{ marginLeft: editing ? 0 : 18 }}>
-            {typeBadge(account.type)}
-            {account.subtype && <span style={{ marginLeft: 6, color: "var(--text2)" }}>{account.subtype}</span>}
-          </div>
-          <div style={{ marginTop: 2, fontSize: 12, marginLeft: editing ? 0 : 18 }}>
-            <EditableNotes notes={account.notes} onSave={async v => { await updateAccountNotes(account.id, v); onRenamed(); }} />
-            {account.snapped_at && (
-              <span style={{ marginLeft: 8, color: "var(--text2)", opacity: 0.6 }}>· {fmtDate(account.snapped_at)}</span>
-            )}
-          </div>
+          <MetaLine
+            type={account.type}
+            subtype={account.subtype}
+            notes={account.notes}
+            onSaveNotes={async v => { await updateAccountNotes(account.id, v); onRenamed(); }}
+            date={account.snapped_at ? fmtDate(account.snapped_at) : null}
+          />
         </div>
         <div className="account-balance">{fmt(account.current)}</div>
       </div>
 
-      {/* Expanded panel — tab bar + holdings or transactions */}
+      {/* Expanded panel */}
       {expanded && (
         <div style={{ marginTop: 14 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <button style={tabBtn(activeTab === "holdings")} onClick={() => handleTabChange("holdings")}>Holdings</button>
             <button style={tabBtn(activeTab === "transactions")} onClick={() => handleTabChange("transactions")}>Transactions</button>
           </div>
-
           {loading ? (
             <div style={{ color: "var(--text2)", fontSize: 13, padding: "8px 0" }}>Loading…</div>
           ) : activeTab === "holdings" ? (
@@ -736,6 +670,36 @@ function PlaidInvestmentCard({ account, onRenamed }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Manual Simple Row ──────────────────────────────────────────────────────────
+// HSA, property, vehicles, and liabilities. Uses the same bordered box style.
+// Badge + editable notes + date all on one line.
+function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, onRenamed }) {
+  return (
+    <div className="account-row">
+      <div className="account-info">
+        <div className="account-name">{entry.name}</div>
+        <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px" }}>
+          <span className={`badge ${badgeClass}`} style={{ fontSize: 11 }}>{badge}</span>
+          <EditableNotes
+            notes={entry.notes}
+            onSave={async v => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }}
+          />
+          {entry.entered_at && (
+            <span style={{ color: "var(--text2)", opacity: 0.6 }}>· {fmtDate(entry.entered_at)}</span>
+          )}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+        <div className={`account-balance ${negative ? "liability" : ""}`}>
+          {negative ? `-${fmt(entry.value)}` : fmt(entry.value)}
+        </div>
+        <button onClick={onDelete}
+          style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }} title="Delete">✕</button>
+      </div>
     </div>
   );
 }
@@ -787,7 +751,6 @@ export default function Accounts() {
     await load();
   }
 
-  // Group active accounts by institution name for card rendering
   const grouped = accounts.reduce((acc, a) => {
     const key = a.institution_name || "Manual";
     if (!acc[key]) acc[key] = [];
@@ -846,9 +809,7 @@ export default function Accounts() {
                 )}
               </div>
               <div className="account-list">
-                {accts.map(a => (
-                  <AccountRow key={a.id} account={a} onRenamed={load} />
-                ))}
+                {accts.map(a => <AccountRow key={a.id} account={a} onRenamed={load} />)}
               </div>
             </div>
           );
@@ -862,30 +823,29 @@ export default function Accounts() {
             Investment Accounts (PDF Imported)
           </div>
           <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 16 }}>
-            Click any row to expand holdings. Use "⊘ Exclude" on consolidated portfolio summaries to avoid double-counting individual accounts in your net worth.
+            Click any row to expand holdings. Use "⊘ Exclude" on consolidated portfolio summaries to avoid double-counting in net worth.
           </div>
-          {manualEntries.filter(e => e.category === "invested").map(entry => (
-            <ManualInvestmentCard
-              key={entry.id}
-              entry={entry}
-              onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
-              onToggleExclude={load}
-              onRenamed={load}
-            />
-          ))}
+          <div className="account-list">
+            {manualEntries.filter(e => e.category === "invested").map(entry => (
+              <ManualInvestmentCard key={entry.id} entry={entry}
+                onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+                onToggleExclude={load} onRenamed={load} />
+            ))}
+          </div>
         </div>
       )}
 
-      {/* ── HSA / Cash Accounts (liquid category) ── */}
+      {/* ── HSA / Cash Accounts ── */}
       {manualEntries.filter(e => e.category === "liquid").length > 0 && (
         <div className="card">
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>HSA / Cash Accounts</div>
-          {manualEntries.filter(e => e.category === "liquid").map((entry, i, arr) => (
-            <ManualSimpleRow key={entry.id} entry={entry} badge="liquid" badgeClass="badge-depository"
-              onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
-              onRenamed={load}
-              last={i === arr.length - 1} />
-          ))}
+          <div className="account-list">
+            {manualEntries.filter(e => e.category === "liquid").map(entry => (
+              <ManualSimpleRow key={entry.id} entry={entry} badge="liquid" badgeClass="badge-depository"
+                onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+                onRenamed={load} />
+            ))}
+          </div>
         </div>
       )}
 
@@ -893,61 +853,31 @@ export default function Accounts() {
       {manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)).length > 0 && (
         <div className="card">
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Property & Vehicles</div>
-          {manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)).map((entry, i, arr) => (
-            <ManualSimpleRow key={entry.id} entry={entry}
-              badge={{ home_value: "Home", car_value: "Vehicle", real_estate: "Real Estate", vehicles: "Vehicle" }[entry.category]}
-              badgeClass="badge-investment"
-              onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
-              onRenamed={load}
-              last={i === arr.length - 1} />
-          ))}
+          <div className="account-list">
+            {manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)).map(entry => (
+              <ManualSimpleRow key={entry.id} entry={entry}
+                badge={{ home_value: "Home", car_value: "Vehicle", real_estate: "Real Estate", vehicles: "Vehicle" }[entry.category]}
+                badgeClass="badge-investment"
+                onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+                onRenamed={load} />
+            ))}
+          </div>
         </div>
       )}
 
-      {/* ── Liabilities (Mortgage, Loans) ── */}
+      {/* ── Liabilities ── */}
       {manualEntries.filter(e => e.category === "other_liability").length > 0 && (
         <div className="card">
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Liabilities</div>
-          {manualEntries.filter(e => e.category === "other_liability").map((entry, i, arr) => (
-            <ManualSimpleRow key={entry.id} entry={entry} badge="Liability" badgeClass="badge-credit" negative
-              onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
-              onRenamed={load}
-              last={i === arr.length - 1} />
-          ))}
+          <div className="account-list">
+            {manualEntries.filter(e => e.category === "other_liability").map(entry => (
+              <ManualSimpleRow key={entry.id} entry={entry} badge="Liability" badgeClass="badge-credit" negative
+                onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+                onRenamed={load} />
+            ))}
+          </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Manual Simple Row ──────────────────────────────────────────────────────────
-// Used for HSA, property, vehicles, and liabilities — single-value manual entries
-// with an editable description and delete button.
-function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, onRenamed, last }) {
-  const fmtUSD = v => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v);
-  return (
-    <div style={{
-      display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "12px 0", borderBottom: last ? "none" : "1px solid var(--border)",
-    }}>
-      <div>
-        <div style={{ fontWeight: 600, fontSize: 14 }}>{entry.name}</div>
-        <div style={{ display: "flex", gap: 8, marginTop: 3, alignItems: "center" }}>
-          <span className={`badge ${badgeClass}`} style={{ fontSize: 11 }}>{badge}</span>
-          <EditableNotes
-            notes={entry.notes}
-            onSave={async v => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }}
-          />
-        </div>
-        <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>Updated {entry.entered_at}</div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontWeight: 700, fontSize: 16, color: negative ? "var(--red)" : undefined }}>
-          {negative ? "-" : ""}{fmtUSD(entry.value)}
-        </div>
-        <button onClick={onDelete}
-          style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }} title="Delete">✕</button>
-      </div>
     </div>
   );
 }
