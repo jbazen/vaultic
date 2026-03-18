@@ -342,9 +342,26 @@ export default function Dashboard() {
 
       {/* ── Net Worth Hero ── */}
       <div className="card">
-        <div className="card-title">Net Worth</div>
-        <div className={`nw-total ${total > 0 ? "positive" : ""}`}>
-          {total != null ? fmtSigned(total) : "—"}
+        <div style={{ display: "flex", gap: 40, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 4 }}>
+          <div>
+            <div className="card-title" style={{ marginBottom: 4 }}>Net Worth</div>
+            <div className={`nw-total ${total > 0 ? "positive" : ""}`} style={{ marginBottom: 0 }}>
+              {total != null ? fmtSigned(total) : "—"}
+            </div>
+          </div>
+          {nw?.investable != null && (
+            <div style={{ paddingBottom: 4 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 4 }}>
+                Investable Assets
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 700, color: "var(--accent)" }}>
+                {fmt(nw.investable)}
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>
+                excl. real estate &amp; vehicles
+              </div>
+            </div>
+          )}
         </div>
         {nw?.snapped_at && (
           <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 6 }}>
