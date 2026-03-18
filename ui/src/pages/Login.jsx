@@ -6,6 +6,7 @@ export default function Login({ onLogin }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // 2FA state
   const [needs2FA, setNeeds2FA] = useState(false);
@@ -79,8 +80,14 @@ export default function Login({ onLogin }) {
             </div>
             <div className="form-group">
               <label className="form-label">Password</label>
-              <input className="form-input" type="password" placeholder="Password" value={password}
-                onChange={e => setPassword(e.target.value)} required />
+              <div style={{ position: "relative" }}>
+                <input className="form-input" type={showPassword ? "text" : "password"} placeholder="Password" value={password}
+                  onChange={e => setPassword(e.target.value)} required style={{ paddingRight: "40px" }} />
+                <button type="button" onClick={() => setShowPassword(s => !s)}
+                  style={{ position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text2)", fontSize: "14px", padding: 0 }}>
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
             </div>
             {error && <p style={{ color: "var(--red)", fontSize: "13px", marginBottom: "12px" }}>{error}</p>}
             <button className="btn btn-primary" type="submit" disabled={loading}
