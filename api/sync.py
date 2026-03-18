@@ -395,10 +395,10 @@ def _take_net_worth_snapshot(today: str):
             else:
                 liquid += bal  # catch-all depository
 
-        # Manual entries — latest value per category
+        # Manual entries — latest value per category (excluding display-only entries)
         def _latest(category: str) -> float:
             r = conn.execute(
-                "SELECT value FROM manual_entries WHERE category = ? ORDER BY entered_at DESC LIMIT 1",
+                "SELECT value FROM manual_entries WHERE category = ? AND (exclude_from_net_worth IS NULL OR exclude_from_net_worth = 0) ORDER BY entered_at DESC LIMIT 1",
                 (category,),
             ).fetchone()
             return r["value"] if r else 0.0
@@ -407,10 +407,12 @@ def _take_net_worth_snapshot(today: str):
         vehicles     = _latest("car_value")
         liabilities += _latest("other_liability")
 
-        # Sum all manually-entered values per category (supports multiple entries, e.g. PDF-imported accounts)
+        # Sum all manually-entered values per category, skipping entries marked
+        # exclude_from_net_worth=1 (e.g. consolidated "Overall Portfolio" summaries
+        # that would double-count individual accounts already imported separately).
         def _sum_manual(category: str) -> float:
             r = conn.execute(
-                "SELECT COALESCE(SUM(value), 0) FROM manual_entries WHERE category = ?",
+                "SELECT COALESCE(SUM(value), 0) FROM manual_entries WHERE category = ? AND (exclude_from_net_worth IS NULL OR exclude_from_net_worth = 0)",
                 (category,),
             ).fetchone()
             return float(r[0]) if r else 0.0

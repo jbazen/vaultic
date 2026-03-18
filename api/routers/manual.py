@@ -66,6 +66,23 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
     return {"status": "saved"}
 
 
+@router.patch("/{entry_id}/exclude")
+async def toggle_exclude(entry_id: int, _user: str = Depends(get_current_user)):
+    """Toggle exclude_from_net_worth for an entry (e.g. consolidated portfolio summaries
+    that should display but not double-count individual accounts)."""
+    with get_db() as conn:
+        row = conn.execute("SELECT exclude_from_net_worth FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        new_val = 0 if row["exclude_from_net_worth"] else 1
+        conn.execute("UPDATE manual_entries SET exclude_from_net_worth = ? WHERE id = ?", (new_val, entry_id))
+    try:
+        sync._take_net_worth_snapshot(date.today().isoformat())
+    except Exception:
+        pass
+    return {"exclude_from_net_worth": new_val}
+
+
 @router.delete("/{entry_id}")
 async def delete_entry(entry_id: int, _user: str = Depends(get_current_user)):
     with get_db() as conn:

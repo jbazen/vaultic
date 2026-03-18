@@ -18,7 +18,9 @@ Restart=always
 RestartSec=5
 # .env is loaded by load_dotenv() in api/main.py, but EnvironmentFile makes
 # the vars available to the process environment as a safety net
-EnvironmentFile=/home/ubuntu/vaultic/.env
+# NOTE: Do NOT use EnvironmentFile here. systemd's parser mangles multi-line
+# PEM keys (like the Coinbase EC private key stored with \n sequences).
+# load_dotenv() in api/main.py handles .env loading correctly instead.
 
 [Install]
 WantedBy=multi-user.target

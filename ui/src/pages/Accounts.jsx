@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries,
-  getAccountHoldings, getAccountInvestmentTransactions,
+  getAccountHoldings, getAccountInvestmentTransactions, toggleExcludeFromNetWorth, deleteManualEntry,
 } from "../api.js";
 import PlaidLink from "../components/PlaidLink.jsx";
 
@@ -220,8 +220,10 @@ function AllocationBar({ allocation, total }) {
   );
 }
 
-function ManualInvestmentCard({ entry, onDelete }) {
+function ManualInvestmentCard({ entry, onDelete, onToggleExclude }) {
   const [expanded, setExpanded] = useState(false);
+  const [excluded, setExcluded] = useState(!!entry.exclude_from_net_worth);
+  const [toggling, setToggling] = useState(false);
   const holdings = entry.holdings || [];
   const holdingsTotal = holdings.reduce((s, h) => s + (h.value || 0), 0);
   const allocation = holdings.reduce((acc, h) => {
@@ -231,21 +233,37 @@ function ManualInvestmentCard({ entry, onDelete }) {
   }, {});
   const hasHoldings = holdings.length > 0;
 
+  async function handleToggleExclude() {
+    setToggling(true);
+    try {
+      const res = await toggleExcludeFromNetWorth(entry.id);
+      setExcluded(!!res.exclude_from_net_worth);
+      if (onToggleExclude) onToggleExclude();
+    } finally {
+      setToggling(false);
+    }
+  }
+
   return (
     <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 12, marginBottom: 12 }}>
       {/* Header row */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontWeight: 600, fontSize: 15, color: "var(--text)" }}>{entry.name}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600, fontSize: 15, color: excluded ? "var(--text2)" : "var(--text)" }}>{entry.name}</span>
             <span className="badge badge-investment" style={{ fontSize: 11 }}>invested</span>
+            {excluded && (
+              <span style={{ fontSize: 11, color: "#f59e0b", background: "#f59e0b22", borderRadius: 4, padding: "2px 6px", fontWeight: 600 }}>
+                excluded from net worth
+              </span>
+            )}
           </div>
           {entry.notes && (
             <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>{entry.notes}</div>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>{fmt(entry.value)}</div>
+          <div style={{ fontWeight: 700, fontSize: 16, color: excluded ? "var(--text2)" : "var(--text)" }}>{fmt(entry.value)}</div>
           <div style={{ display: "flex", gap: 6 }}>
             {(hasHoldings || entry.activity_summary) && (
               <button
@@ -259,6 +277,18 @@ function ManualInvestmentCard({ entry, onDelete }) {
                 {expanded ? "▲ Hide" : "▼ Details"}
               </button>
             )}
+            <button
+              onClick={handleToggleExclude}
+              disabled={toggling}
+              title={excluded ? "Include in net worth" : "Exclude from net worth (display only)"}
+              style={{
+                background: "none", border: "1px solid var(--border)",
+                color: excluded ? "#34d399" : "#f59e0b", borderRadius: 6, padding: "3px 8px",
+                cursor: "pointer", fontSize: 12,
+              }}
+            >
+              {toggling ? "…" : excluded ? "+ Include" : "⊘ Exclude"}
+            </button>
             {onDelete && (
               <button
                 onClick={() => onDelete(entry.id)}
@@ -725,11 +755,19 @@ export default function Accounts() {
       {/* ── Manual Investment Accounts (PDF imported) ── */}
       {manualEntries.filter(e => e.category === "invested").length > 0 && (
         <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
             Investment Accounts (PDF Imported)
           </div>
+          <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 16 }}>
+            Use "⊘ Exclude" on consolidated portfolio summaries to display them without double-counting individual accounts in your net worth.
+          </div>
           {manualEntries.filter(e => e.category === "invested").map(entry => (
-            <ManualInvestmentCard key={entry.id} entry={entry} />
+            <ManualInvestmentCard
+              key={entry.id}
+              entry={entry}
+              onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+              onToggleExclude={load}
+            />
           ))}
         </div>
       )}

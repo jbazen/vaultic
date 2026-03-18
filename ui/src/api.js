@@ -314,3 +314,8 @@ export async function deleteManualEntry(id) {
   const res = await apiFetch(`/api/manual/${id}`, { method: "DELETE" });
   return res.json();
 }
+
+export async function toggleExcludeFromNetWorth(id) {
+  const res = await apiFetch(`/api/manual/${id}/exclude`, { method: "PATCH" });
+  return res.json(); // { exclude_from_net_worth: 0 | 1 }
+}
