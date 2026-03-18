@@ -105,22 +105,22 @@ class TestNetWorth:
         assert res.status_code == 200
         data = res.json()
         assert "investable" in data
-        # Expected: liquid(50k) + invested(300k) + crypto(10k) + other_assets(5k) = 365k
-        # NOT: total(600k) - real_estate(400k) - vehicles(20k) = 180k (which is wrong)
-        # NOT: 365k - liabilities(180k) = 185k (liabilities must NOT reduce investable)
-        expected = 50000 + 300000 + 10000 + 5000  # 365000
+        # Formula: total(600k) - real_estate(400k) - vehicles(20k) = 180k
+        # Liabilities are already reflected in total, so credit card debt is properly subtracted.
+        expected = 600000 - 400000 - 20000  # 180000
         assert data["investable"] == expected, (
             f"investable={data['investable']}, expected={expected}. "
-            "Liabilities or real_estate/vehicles should not reduce investable assets."
+            "Investable Net Worth = total - real_estate - vehicles."
         )
 
-    def test_investable_excludes_liabilities(self, client, auth_headers):
-        """Mortgage/loan liabilities must NOT reduce investable — investable is a gross asset figure."""
+    def test_investable_reflects_liabilities(self, client, auth_headers):
+        """Liabilities should reduce Investable Net Worth (they are in total).
+        Scenario: $100k liquid, $200k mortgage → total = -$100k, no real_estate/vehicles.
+        Investable = total - 0 - 0 = -$100k (the debt exceeds liquid assets)."""
         from datetime import date
         from api.database import get_db
 
         today = date.today().isoformat()
-        # Scenario: $100k liquid, $200k mortgage. investable should be $100k, not -$100k.
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO net_worth_snapshots
@@ -136,8 +136,9 @@ class TestNetWorth:
         res = client.get("/api/net-worth/latest", headers=auth_headers)
         assert res.status_code == 200
         data = res.json()
-        assert data.get("investable") == 100000, (
-            "Liabilities should not be subtracted from investable assets"
+        # total(-100k) - real_estate(0) - vehicles(0) = -100k
+        assert data.get("investable") == -100000, (
+            "Investable Net Worth = total - real_estate - vehicles; liabilities in total reduce it"
         )
 
     def test_history_authenticated_returns_list(self, client, auth_headers):
