@@ -405,6 +405,63 @@ export default function Settings() {
       <Section title="Security Log">
         <SecurityLog />
       </Section>
+
+      <Section title="App Running Costs">
+        <AppCosts />
+      </Section>
+    </div>
+  );
+}
+
+const APP_COSTS = [
+  { service: "Oracle Cloud (hosting)",    cost: "$0.00/mo",   note: "Always-free E2.1.Micro tier" },
+  { service: "Cloudflare (DNS + SSL)",    cost: "$0.00/mo",   note: "Free plan + Origin Certificate" },
+  { service: "vaulticsage.com (domain)",  cost: "$0.87/mo",   note: "$10.46/yr via Cloudflare Registrar" },
+  { service: "Plaid (account linking)",   cost: "~$3–5/mo",   note: "Pay-as-you-go production; billed per product per connected item" },
+  { service: "Claude Haiku (Sage AI)",    cost: "~$1–3/mo",   note: "Per-token pricing at personal use rates" },
+  { service: "OpenAI TTS (Sage voice)",   cost: "~$0.50–2/mo",note: "tts-1, fable voice; requires credits at platform.openai.com/billing" },
+  { service: "Tavily (web search)",       cost: "$0.00/mo",   note: "Free tier — 1,000 searches/month" },
+  { service: "GitHub Actions (CI/CD)",    cost: "$0.00/mo",   note: "Free tier — 2,000 min/month" },
+];
+
+function AppCosts() {
+  const totalLow  = 5.37;   // 0+0+0.87+3+1+0.50+0+0
+  const totalHigh = 10.87;  // 0+0+0.87+5+3+2+0+0
+  return (
+    <div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border)" }}>
+            {["Service", "Cost", "Notes"].map((h, i) => (
+              <th key={h} style={{
+                textAlign: "left", padding: "6px 12px 10px",
+                fontSize: 11, fontWeight: 600, color: "var(--text2)",
+                textTransform: "uppercase", letterSpacing: "0.6px",
+                paddingLeft: i === 0 ? 0 : 12,
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {APP_COSTS.map((row, i) => (
+            <tr key={row.service} style={{ borderBottom: i < APP_COSTS.length - 1 ? "1px solid var(--border)" : "none" }}>
+              <td style={{ padding: "10px 0",       fontWeight: 500 }}>{row.service}</td>
+              <td style={{ padding: "10px 12px",    fontWeight: 700, color: "var(--accent)", whiteSpace: "nowrap" }}>{row.cost}</td>
+              <td style={{ padding: "10px 0 10px 12px", color: "var(--text2)", fontSize: 12 }}>{row.note}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 16, padding: "10px 14px", background: "var(--surface2)", borderRadius: 8,
+        display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>Estimated monthly total</span>
+        <span style={{ fontWeight: 700, fontSize: 16, color: "var(--accent)" }}>
+          ${totalLow.toFixed(2)} – ${totalHigh.toFixed(2)}/mo
+        </span>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11, color: "var(--text2)" }}>
+        vs. Monarch Money $15/mo · Copilot $13/mo · YNAB $15/mo
+      </div>
     </div>
   );
 }
