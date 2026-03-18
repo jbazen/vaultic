@@ -37,8 +37,8 @@ jobs:
             set -e
             cd /home/ubuntu/vaultic
 
-            # Pull latest code
-            git pull origin main
+            # Pull latest code (repo is public, HTTPS works without a deploy key)
+            git pull https://github.com/jbazen/vaultic.git main
 
             # Python deps — install into the project venv (matches systemd ExecStart path)
             .venv/bin/pip install -q -r requirements.txt
