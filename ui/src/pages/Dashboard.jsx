@@ -158,8 +158,9 @@ function CryptoAccountRow({ account, onRenamed }) {
   );
 }
 
-// Editable row for PDF-imported manual entries — same layout as Plaid account rows
-function ManualAccountRow({ entry, onRenamed }) {
+// Editable row for PDF-imported manual entries — same layout as Plaid account rows.
+// badge/badgeClass control the colored type pill; negative=true renders value in red.
+function ManualAccountRow({ entry, onRenamed, badge = "invested", badgeClass = "badge-investment", negative = false }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.name);
   const [saving, setSaving] = useState(false);
@@ -190,11 +191,18 @@ function ManualAccountRow({ entry, onRenamed }) {
           </div>
         )}
         <div className="account-meta">
-          <span className="badge badge-investment">invested</span>
+          <span className={`badge ${badgeClass}`}>{badge}</span>
           {entry.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{entry.notes}</span>}
         </div>
+        {entry.entered_at && (
+          <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>
+            Imported {fmtDate(entry.entered_at)}
+          </div>
+        )}
       </div>
-      <div className="account-balance">{fmt(entry.value)}</div>
+      <div className={`account-balance ${negative ? "liability" : ""}`}>
+        {negative ? `-${fmt(entry.value)}` : fmt(entry.value)}
+      </div>
     </div>
   );
 }
@@ -507,16 +515,8 @@ export default function Dashboard() {
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>HSA / Cash Accounts (Imported)</div>
           <div className="account-list">
             {manualLiquid.map(e => (
-              <div key={e.id} className="account-row">
-                <div className="account-info">
-                  <div className="account-name">{e.name}</div>
-                  <div className="account-meta">
-                    <span className="badge badge-depository">liquid</span>
-                    {e.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{e.notes}</span>}
-                  </div>
-                </div>
-                <div className="account-balance">{fmt(e.value)}</div>
-              </div>
+              <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                badge="liquid" badgeClass="badge-depository" />
             ))}
           </div>
         </div>
@@ -526,33 +526,15 @@ export default function Dashboard() {
       {(otherAssets.length > 0 || liabilities.length > 0) && (
         <div className="card">
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>Other Assets & Liabilities</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-            {otherAssets.length > 0 && (
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase",
-                  letterSpacing: "0.6px", marginBottom: 10 }}>Assets</div>
-                {otherAssets.map(e => (
-                  <div key={e.id} style={{ display: "flex", justifyContent: "space-between",
-                    padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-                    <span style={{ fontSize: 14, color: "var(--text)" }}>{e.name}</span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--green)" }}>{fmt(e.value)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {liabilities.length > 0 && (
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase",
-                  letterSpacing: "0.6px", marginBottom: 10 }}>Liabilities</div>
-                {liabilities.map(e => (
-                  <div key={e.id} style={{ display: "flex", justifyContent: "space-between",
-                    padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-                    <span style={{ fontSize: 14, color: "var(--text)" }}>{e.name}</span>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--red)" }}>-{fmt(e.value)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+          <div className="account-list">
+            {otherAssets.map(e => (
+              <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                badge="asset" badgeClass="badge-depository" />
+            ))}
+            {liabilities.map(e => (
+              <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                badge="liability" badgeClass="badge-credit" negative />
+            ))}
           </div>
         </div>
       )}
