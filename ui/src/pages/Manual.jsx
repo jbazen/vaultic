@@ -119,7 +119,7 @@ export default function Manual() {
               className="form-input"
               type="number"
               min="0"
-              step={form.category === "credit_score" ? "1" : "1000"}
+              step={form.category === "credit_score" ? "1" : "any"}
               placeholder={form.category === "credit_score" ? "750" : "0"}
               value={form.value}
               onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
