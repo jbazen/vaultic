@@ -181,13 +181,17 @@
 
 .account-list { display: flex; flex-direction: column; gap: 6px; }
 
-/* Two-column grid for account sections; collapses to 1 column on narrow screens */
+/* Two-column masonry layout for account sections; collapses to 1 column on narrow screens */
 .account-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  align-items: start;
+  columns: 2;
+  column-gap: 16px;
   margin-bottom: 20px;
+}
+
+/* Prevent cards from splitting across columns */
+.account-grid > .card {
+  break-inside: avoid;
+  margin-bottom: 16px;
 }
 
 .account-row {
@@ -350,7 +354,7 @@
   .account-row { padding: 10px 12px; }
   .account-name { font-size: 13px; }
   .account-balance { font-size: 14px; }
-  .account-grid { grid-template-columns: 1fr; }
+  .account-grid { columns: 1; }
 
   /* Sage button clears mobile nav */
   .sage-float-btn { bottom: calc(var(--mobile-nav-height) + 16px) !important; }

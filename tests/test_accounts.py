@@ -8,6 +8,60 @@ class TestAccounts:
         assert res.status_code == 200
         assert isinstance(res.json(), list)
 
+    def test_list_accounts_includes_notes_field(self, client, auth_headers):
+        """Each account row should include the notes field (may be null)."""
+        res = client.get("/api/accounts", headers=auth_headers)
+        assert res.status_code == 200
+        for acct in res.json():
+            assert "notes" in acct
+
+    def test_account_notes_requires_auth(self, client):
+        """PATCH /api/accounts/{id}/notes must reject unauthenticated requests."""
+        res = client.patch("/api/accounts/1/notes", json={"notes": "test"})
+        assert res.status_code == 401
+
+    def test_account_notes_nonexistent_returns_404(self, client, auth_headers):
+        """Updating notes on a non-existent account returns 404."""
+        res = client.patch("/api/accounts/999999/notes", headers=auth_headers, json={"notes": "test"})
+        assert res.status_code == 404
+
+    def test_account_notes_roundtrip(self, client, auth_headers):
+        """
+        Create an account directly in DB, set a note via PATCH, verify the note
+        is returned by GET /api/accounts and that clearing it stores NULL.
+        """
+        from api.database import get_db
+
+        # Insert a minimal account row so we have a real account_id to work with
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO accounts (name, type, is_active) VALUES ('Notes Test Account', 'depository', 1)"
+            )
+            acct = conn.execute(
+                "SELECT id FROM accounts WHERE name = 'Notes Test Account'"
+            ).fetchone()
+            acct_id = acct["id"]
+
+        # Set a note
+        res = client.patch(f"/api/accounts/{acct_id}/notes", headers=auth_headers, json={"notes": "  My custom note  "})
+        assert res.status_code == 200
+        assert res.json()["notes"] == "My custom note"  # stripped
+
+        # Verify it appears in the account list
+        accounts = client.get("/api/accounts", headers=auth_headers).json()
+        match = next((a for a in accounts if a["id"] == acct_id), None)
+        assert match is not None
+        assert match["notes"] == "My custom note"
+
+        # Clear the note (empty string → NULL)
+        res = client.patch(f"/api/accounts/{acct_id}/notes", headers=auth_headers, json={"notes": ""})
+        assert res.status_code == 200
+        assert res.json()["notes"] is None
+
+        accounts = client.get("/api/accounts", headers=auth_headers).json()
+        match = next((a for a in accounts if a["id"] == acct_id), None)
+        assert match["notes"] is None
+
 
 class TestNetWorth:
     def test_latest_unauthenticated_returns_401(self, client):
@@ -188,6 +242,66 @@ class TestManualEntries:
         """Toggling a non-existent entry ID should return 404."""
         res = client.patch("/api/manual/999999/exclude", headers=auth_headers)
         assert res.status_code == 404
+
+    def test_rename_manual_entry(self, client, auth_headers):
+        """PATCH /api/manual/{id}/rename should update name and optionally notes."""
+        # Create an entry to rename
+        client.post("/api/manual", headers=auth_headers, json={
+            "name": "Rename Me",
+            "category": "other_asset",
+            "value": 1000.0,
+        })
+        entries = client.get("/api/manual", headers=auth_headers).json()
+        entry = next((e for e in entries if e["name"] == "Rename Me"), None)
+        assert entry is not None
+        eid = entry["id"]
+
+        # Rename only the name
+        res = client.patch(f"/api/manual/{eid}/rename", headers=auth_headers, json={"name": "Renamed Asset"})
+        assert res.status_code == 200
+        assert res.json()["name"] == "Renamed Asset"
+
+    def test_rename_manual_entry_with_notes(self, client, auth_headers):
+        """PATCH /api/manual/{id}/rename should update both name and notes together."""
+        client.post("/api/manual", headers=auth_headers, json={
+            "name": "With Notes",
+            "category": "liquid",
+            "value": 2000.0,
+        })
+        entries = client.get("/api/manual", headers=auth_headers).json()
+        entry = next((e for e in entries if e["name"] == "With Notes"), None)
+        eid = entry["id"]
+
+        # Pass both name and notes
+        res = client.patch(f"/api/manual/{eid}/rename", headers=auth_headers,
+                           json={"name": "With Notes Updated", "notes": "HSA via PDF import"})
+        assert res.status_code == 200
+        assert res.json()["name"] == "With Notes Updated"
+        assert res.json()["notes"] == "HSA via PDF import"
+
+    def test_rename_manual_entry_empty_name_returns_400(self, client, auth_headers):
+        """Empty or whitespace-only name should return 400."""
+        client.post("/api/manual", headers=auth_headers, json={
+            "name": "Entry For Empty Name Test",
+            "category": "other_asset",
+            "value": 100.0,
+        })
+        entries = client.get("/api/manual", headers=auth_headers).json()
+        entry = next((e for e in entries if e["name"] == "Entry For Empty Name Test"), None)
+        eid = entry["id"]
+
+        res = client.patch(f"/api/manual/{eid}/rename", headers=auth_headers, json={"name": "   "})
+        assert res.status_code == 400
+
+    def test_rename_manual_entry_nonexistent_returns_404(self, client, auth_headers):
+        """Renaming a non-existent entry should return 404."""
+        res = client.patch("/api/manual/999999/rename", headers=auth_headers, json={"name": "Ghost"})
+        assert res.status_code == 404
+
+    def test_rename_manual_entry_requires_auth(self, client):
+        """Rename endpoint should reject unauthenticated requests."""
+        res = client.patch("/api/manual/1/rename", json={"name": "Hacker"})
+        assert res.status_code == 401
 
     def test_delete_entry(self, client, auth_headers):
         # Add an entry

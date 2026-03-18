@@ -184,11 +184,27 @@ export async function renameAccount(accountId, displayName) {
   return res.json();
 }
 
+// --- Account notes ---
+// Saves a user-written description for any Plaid or Coinbase account.
+// Empty string clears the note (stored as NULL server-side).
+export async function updateAccountNotes(accountId, notes) {
+  const res = await apiFetch(`/api/accounts/${accountId}/notes`, {
+    method: "PATCH",
+    body: JSON.stringify({ notes }),
+  });
+  return res.json();
+}
+
 // --- Manual entry rename ---
-export async function renameManualEntry(entryId, name) {
+// Updates the display name of a PDF-imported manual entry.
+// Optionally updates notes too — only pass notes when you want to change it;
+// omitting notes preserves whatever is already stored.
+export async function renameManualEntry(entryId, name, notes) {
+  const body = { name };
+  if (notes !== undefined) body.notes = notes;
   const res = await apiFetch(`/api/manual/${entryId}/rename`, {
     method: "PATCH",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(body),
   });
   return res.json();
 }
@@ -324,6 +340,9 @@ export async function deleteManualEntry(id) {
   return res.json();
 }
 
+// Toggles whether a manual entry is excluded from the net worth total.
+// Useful when a PDF import creates both an "Overall Portfolio" summary entry
+// and individual per-account entries — exclude the summary to avoid double-counting.
 export async function toggleExcludeFromNetWorth(id) {
   const res = await apiFetch(`/api/manual/${id}/exclude`, { method: "PATCH" });
   return res.json(); // { exclude_from_net_worth: 0 | 1 }

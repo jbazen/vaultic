@@ -199,6 +199,8 @@ MIGRATIONS = [
         type TEXT, subtype TEXT, cancel_transaction_id TEXT,
         iso_currency_code TEXT DEFAULT 'USD',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP)""",
+    # User-written description shown inline on Dashboard/Accounts pages (editable via pencil icon)
+    "ALTER TABLE accounts ADD COLUMN notes TEXT",
 ]
 
 

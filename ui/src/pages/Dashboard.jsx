@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries, getRecentTransactions,
-  getPlaidItems, removePlaidItem, renameAccount, renameManualEntry, syncCoinbase,
+  getPlaidItems, removePlaidItem, renameAccount, renameManualEntry,
+  updateAccountNotes, syncCoinbase,
 } from "../api.js";
 import NetWorthChart from "../components/NetWorthChart.jsx";
 import PlaidLink from "../components/PlaidLink.jsx";
@@ -117,7 +118,6 @@ function AllocationBar({ allocation, total }) {
 function CryptoAccountRow({ account, onRenamed }) {
   const [editing, setEditing] = useState(false);
   const ticker = (account.subtype || "").toUpperCase();
-  // Default display: just the ticker ("AVAX"). If user has renamed, show their name.
   const [draft, setDraft] = useState(account.display_name || ticker || account.name);
   const [saving, setSaving] = useState(false);
 
@@ -151,10 +151,46 @@ function CryptoAccountRow({ account, onRenamed }) {
         <div className="account-meta">
           <span className="badge badge-crypto">crypto</span>
           {ticker && <span style={{ marginLeft: 6, color: "var(--text2)" }}>{ticker.toLowerCase()}</span>}
+          <span style={{ marginLeft: 6 }}>
+            <EditableNotes notes={account.notes} onSave={async (v) => { await updateAccountNotes(account.id, v); onRenamed(); }} />
+          </span>
         </div>
       </div>
       <div className="account-balance">{fmt(account.current)}</div>
     </div>
+  );
+}
+
+// Inline editable notes: shows current notes (or placeholder) with a pencil icon.
+// onSave(newNotes) is called when the user commits the edit.
+function EditableNotes({ notes, onSave, placeholder = "Add description…" }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(notes || "");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    try { await onSave(draft.trim()); setEditing(false); }
+    finally { setSaving(false); }
+  }
+
+  if (editing) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+        <input className="form-input" style={{ width: 220, padding: "2px 6px", fontSize: 12 }}
+          value={draft} onChange={e => setDraft(e.target.value)} autoFocus
+          onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+        <button className="btn btn-primary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
+        <button className="btn btn-secondary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setEditing(false)}>✕</button>
+      </div>
+    );
+  }
+  return (
+    <span style={{ color: "var(--text2)", fontSize: 12, marginLeft: notes ? 0 : 0 }}>
+      {notes || ""}
+      <button onClick={() => { setDraft(notes || ""); setEditing(true); }} title="Edit description"
+        style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 11, padding: "0 3px", opacity: 0.6 }}>✎</button>
+    </span>
   );
 }
 
@@ -184,16 +220,18 @@ function ManualAccountRow({ entry, onRenamed, badge = "invested", badgeClass = "
             <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)}>✕</button>
           </div>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <div className="account-name">{entry.name}</div>
             <button onClick={() => setEditing(true)} title="Rename"
               style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+            {entry.entered_at && <span style={{ fontSize: 11, color: "var(--text2)" }}>· Imported {fmtDate(entry.entered_at)}</span>}
           </div>
         )}
         <div className="account-meta">
           <span className={`badge ${badgeClass}`}>{badge}</span>
-          {entry.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{entry.notes}</span>}
-          {entry.entered_at && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>· Imported {fmtDate(entry.entered_at)}</span>}
+          <span style={{ marginLeft: 6 }}>
+            <EditableNotes notes={entry.notes} onSave={async (v) => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }} />
+          </span>
         </div>
       </div>
       <div className={`account-balance ${negative ? "liability" : ""}`}>
@@ -246,6 +284,9 @@ function AccountRow({ account, onRenamed }) {
         <div className="account-meta">
           <span className={`badge badge-${account.type}`}>{account.type}</span>
           {account.subtype && <span style={{ marginLeft: 6, color: "var(--text2)" }}>{account.subtype}</span>}
+          <span style={{ marginLeft: 6 }}>
+            <EditableNotes notes={account.notes} onSave={async (v) => { await updateAccountNotes(account.id, v); onRenamed(); }} />
+          </span>
         </div>
       </div>
       <div className={`account-balance ${isLiab ? "liability" : ""}`}>

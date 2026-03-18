@@ -1,3 +1,9 @@
+"""
+Account endpoints: list, rename, notes, balance history, transactions,
+Plaid investment holdings, and investment transaction history.
+
+All endpoints require a valid JWT (via get_current_user dependency).
+"""
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from api.dependencies import get_current_user
@@ -22,7 +28,7 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 a.id, a.name, a.display_name, a.mask, a.official_name,
                 a.type, a.subtype, a.institution_name, a.is_manual,
                 a.plaid_account_id AS coinbase_uuid,
-                a.source,
+                a.source, a.notes,
                 b.current, b.available, b.limit_amount,
                 b.native_balance, b.unit_price,
                 b.snapped_at
@@ -64,6 +70,28 @@ async def rename_account(
             "UPDATE accounts SET display_name = ? WHERE id = ?", (name, account_id)
         )
     return {"status": "renamed"}
+
+
+@router.patch("/{account_id}/notes")
+async def update_account_notes(
+    account_id: int,
+    body: dict,
+    _user: str = Depends(get_current_user),
+):
+    """
+    Save a custom user-written description/note for any account.
+    Notes are displayed inline on the Dashboard and Accounts pages.
+    Empty string is stored as NULL (clears the note).
+    Max 200 characters to keep display clean.
+    """
+    notes = str(body.get("notes", "")).strip()[:200]
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM accounts WHERE id = ?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        # Store empty string as NULL so the frontend can distinguish "no note" from ""
+        conn.execute("UPDATE accounts SET notes = ? WHERE id = ?", (notes or None, account_id))
+    return {"notes": notes or None}
 
 
 @router.get("/transactions/recent")

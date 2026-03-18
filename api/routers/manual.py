@@ -51,6 +51,10 @@ async def list_entries(_user: str = Depends(get_current_user)):
 
 @router.post("")
 async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_user)):
+    """
+    Create a new manual entry. Triggers a net worth snapshot immediately so the
+    Dashboard reflects the new value without waiting for the nightly cron job.
+    """
     if body.category not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail=f"category must be one of {sorted(VALID_CATEGORIES)}")
     entered_at = body.entered_at or date.today().isoformat()
@@ -89,20 +93,30 @@ async def toggle_exclude(entry_id: int, _user: str = Depends(get_current_user)):
 
 @router.patch("/{entry_id}/rename")
 async def rename_entry(entry_id: int, body: dict, _user: str = Depends(get_current_user)):
-    """Rename a manual entry (e.g. shorten a long PDF-imported account name)."""
+    """Update name and/or notes on a manual entry."""
     name = str(body.get("name", "")).strip()[:100]
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
+    notes = body.get("notes")
+    notes_val = str(notes).strip()[:200] if notes is not None else None
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
+        row = conn.execute("SELECT id, notes FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Entry not found")
-        conn.execute("UPDATE manual_entries SET name = ? WHERE id = ?", (name, entry_id))
-    return {"name": name}
+        # Only update notes if caller passed it; otherwise preserve existing
+        if notes is not None:
+            conn.execute("UPDATE manual_entries SET name = ?, notes = ? WHERE id = ?", (name, notes_val or None, entry_id))
+        else:
+            conn.execute("UPDATE manual_entries SET name = ? WHERE id = ?", (name, entry_id))
+    return {"name": name, "notes": notes_val}
 
 
 @router.delete("/{entry_id}")
 async def delete_entry(entry_id: int, _user: str = Depends(get_current_user)):
+    """
+    Delete a manual entry. Associated holdings are removed automatically via
+    the ON DELETE CASCADE constraint on manual_holdings.manual_entry_id.
+    """
     with get_db() as conn:
         conn.execute("DELETE FROM manual_entries WHERE id = ?", (entry_id,))
     return {"status": "deleted"}
