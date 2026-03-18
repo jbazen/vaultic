@@ -8,6 +8,7 @@ from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
 from plaid.model.products import Products
+from plaid.model.link_token_create_request_optional_products import LinkTokenCreateRequestOptionalProducts
 from plaid.model.country_code import CountryCode
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -46,7 +47,8 @@ async def create_link_token(_user: str = Depends(get_current_user)):
         req = LinkTokenCreateRequest(
             user=LinkTokenCreateRequestUser(client_user_id="vaultic-user"),
             client_name="Vaultic",
-            products=[Products("transactions"), Products("investments"), Products("liabilities")],
+            products=[Products("transactions"), Products("investments")],
+            optional_products=[Products("liabilities")],
             country_codes=[CountryCode("US")],
             language="en",
         )
