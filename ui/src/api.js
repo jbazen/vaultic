@@ -68,8 +68,13 @@ export async function getAccounts() {
   return res.json();
 }
 
-export async function getBalanceHistory(accountId, days = 90) {
+export async function getBalanceHistory(accountId, days = 365) {
   const res = await apiFetch(`/api/accounts/${accountId}/balances?days=${days}`);
+  return res.json();
+}
+
+export async function getPortfolioPerformance(days = 365) {
+  const res = await apiFetch(`/api/accounts/portfolio/performance?days=${days}`);
   return res.json();
 }
 

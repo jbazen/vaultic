@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import {
   getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries,
   getAccountHoldings, getAccountInvestmentTransactions, toggleExcludeFromNetWorth,
-  deleteManualEntry, updateAccountNotes, renameManualEntry,
+  deleteManualEntry, updateAccountNotes, renameManualEntry, getBalanceHistory,
 } from "../api.js";
 import PlaidLink from "../components/PlaidLink.jsx";
+import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,21 @@ function fmtDate(s) {
   if (!s) return "";
   const dateOnly = s.length > 10 ? s.substring(0, 10) : s;
   return new Date(dateOnly + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function fmtCompact(v) {
+  if (v == null) return "—";
+  const abs = Math.abs(v);
+  if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
+  return `$${v.toFixed(0)}`;
+}
+
+function fmtAxisDate(s, days) {
+  if (!s) return "";
+  const d = new Date(s + "T12:00:00");
+  if (days <= 90) return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
 }
 
 function typeBadge(type) {
@@ -622,6 +638,114 @@ function InvestmentTransactionsTable({ transactions }) {
   );
 }
 
+// ── Balance History Chart ──────────────────────────────────────────────────────
+// Fetches and renders account balance over time for investment/retirement accounts.
+// Self-contained: manages its own days state and data fetching.
+function BalanceChart({ accountId }) {
+  const [days, setDays] = useState(365);
+  const [history, setHistory] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    getBalanceHistory(accountId, days)
+      .then(data => setHistory(data))
+      .catch(() => setHistory([]))
+      .finally(() => setLoading(false));
+  }, [accountId, days]);
+
+  const periods = [
+    { label: "30D", days: 30 },
+    { label: "90D", days: 90 },
+    { label: "1Y",  days: 365 },
+    { label: "3Y",  days: 1095 },
+  ];
+
+  const tab = active => ({
+    background: active ? "var(--accent)" : "var(--bg3)",
+    color: active ? "#fff" : "var(--text2)",
+    border: "1px solid var(--border)",
+    borderRadius: 6, padding: "3px 10px",
+    fontSize: 11, fontWeight: active ? 700 : 400,
+    cursor: "pointer",
+  });
+
+  if (loading) return <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>Loading…</div>;
+  if (!history || history.length < 2) {
+    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>Not enough history yet — check back after a few syncs.</div>;
+  }
+
+  const first = history[0]?.current ?? 0;
+  const last  = history[history.length - 1]?.current ?? 0;
+  const returnDollar = last - first;
+  const returnPct    = first > 0 ? ((last - first) / first) * 100 : 0;
+  const isPositive   = returnDollar >= 0;
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div style={{ background: "#171b26", border: "1px solid #2a2f3e", borderRadius: 8, padding: "10px 14px" }}>
+        <div style={{ color: "var(--text2)", fontSize: 11, marginBottom: 4 }}>{fmtAxisDate(label, days)}</div>
+        <div style={{ color: "var(--text)", fontWeight: 700, fontSize: 14 }}>{fmt(payload[0].value)}</div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {/* Period selector + return summary */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 5 }}>
+          {periods.map(p => (
+            <button key={p.days} style={tab(days === p.days)} onClick={() => setDays(p.days)}>{p.label}</button>
+          ))}
+        </div>
+        <div style={{ fontSize: 13 }}>
+          <span style={{ color: isPositive ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
+            {isPositive ? "+" : ""}{fmt(returnDollar)}
+          </span>
+          <span style={{ color: "var(--text2)", marginLeft: 6, fontSize: 12 }}>
+            ({isPositive ? "+" : ""}{returnPct.toFixed(2)}%)
+          </span>
+        </div>
+      </div>
+
+      {/* Chart */}
+      <ResponsiveContainer width="100%" height={160}>
+        <AreaChart data={history} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={`grad-${accountId}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%"  stopColor="var(--accent)" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis
+            dataKey="snapped_at"
+            tickFormatter={s => fmtAxisDate(s, days)}
+            tick={{ fontSize: 10, fill: "var(--text2)" }}
+            axisLine={false} tickLine={false}
+            interval="preserveStartEnd"
+          />
+          <YAxis
+            tickFormatter={fmtCompact}
+            tick={{ fontSize: 10, fill: "var(--text2)" }}
+            axisLine={false} tickLine={false}
+            width={55}
+          />
+          <RechartsTooltip content={<CustomTooltip />} />
+          <Area
+            type="monotone"
+            dataKey="current"
+            stroke="var(--accent)"
+            strokeWidth={2}
+            fill={`url(#grad-${accountId})`}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
 // ── Plaid Investment Card ──────────────────────────────────────────────────────
 // Expandable row for Plaid investment/retirement accounts. Uses the same bordered
 // box style as all other rows. Click header (not buttons) to expand/collapse.
@@ -712,8 +836,11 @@ function PlaidInvestmentCard({ account, onRenamed }) {
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             <button style={tabBtn(activeTab === "holdings")} onClick={() => handleTabChange("holdings")}>Holdings</button>
             <button style={tabBtn(activeTab === "transactions")} onClick={() => handleTabChange("transactions")}>Transactions</button>
+            <button style={tabBtn(activeTab === "performance")} onClick={() => handleTabChange("performance")}>Performance</button>
           </div>
-          {loading ? (
+          {activeTab === "performance" ? (
+            <BalanceChart accountId={account.id} />
+          ) : loading ? (
             <div style={{ color: "var(--text2)", fontSize: 13, padding: "8px 0" }}>Loading…</div>
           ) : activeTab === "holdings" ? (
             <HoldingsTable holdings={holdings?.holdings} totalValue={holdings?.total_value} />

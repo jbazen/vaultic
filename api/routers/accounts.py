@@ -119,19 +119,45 @@ async def recent_transactions(
     return result
 
 
+@router.get("/portfolio/performance")
+async def portfolio_performance(
+    days: int = Query(default=365, le=1825),
+    _user: str = Depends(get_current_user),
+):
+    """
+    Daily total value of all Plaid investment/retirement accounts combined.
+    Used for the Portfolio Performance chart on the Dashboard.
+    Returns ASC (oldest first) with each row: snapped_at, total_value.
+    Only includes active accounts with type='investment'.
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT b.snapped_at, SUM(b.current) AS total_value
+            FROM account_balances b
+            JOIN accounts a ON a.id = b.account_id
+            WHERE a.type = 'investment'
+              AND a.is_active = 1
+              AND b.snapped_at >= date('now', '-' || ? || ' days')
+            GROUP BY b.snapped_at
+            ORDER BY b.snapped_at ASC
+        """, (days,)).fetchall()
+    return [dict(row) for row in rows]
+
+
 @router.get("/{account_id}/balances")
 async def balance_history(
     account_id: int,
-    days: int = Query(default=90, le=365),
+    days: int = Query(default=90, le=1825),
     _user: str = Depends(get_current_user),
 ):
+    """Balance history for one account. Returns ASC (oldest first) for chart rendering."""
     with get_db() as conn:
         rows = conn.execute("""
             SELECT snapped_at, current, available
             FROM account_balances
             WHERE account_id = ?
-            ORDER BY snapped_at DESC
-            LIMIT ?
+              AND snapped_at >= date('now', '-' || ? || ' days')
+            ORDER BY snapped_at ASC
         """, (account_id, days)).fetchall()
     return [dict(row) for row in rows]
 
