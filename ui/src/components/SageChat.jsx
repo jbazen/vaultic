@@ -265,7 +265,7 @@ export default function SageChat() {
     // Browser TTS
     if (!window.speechSynthesis) return;
     const utt = new SpeechSynthesisUtterance(text);
-    utt.rate = 1.0; utt.pitch = 0.85;
+    utt.rate = 1.2; utt.pitch = 0.85;
     const voices = window.speechSynthesis.getVoices();
     const male = voices.find(v => /male|man|david|mark|daniel|alex/i.test(v.name));
     if (male) utt.voice = male;
