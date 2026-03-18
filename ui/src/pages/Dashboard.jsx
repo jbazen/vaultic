@@ -211,7 +211,7 @@ function AllocationPieChart({ accounts, manualEntries }) {
             );
           })}
           <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--border)", fontSize: 12 }}>
-            <span style={{ color: "var(--text2)" }}>Total: </span>
+            <span style={{ color: "var(--text2)" }}>Total Assets: </span>
             <span style={{ fontWeight: 700, color: "var(--text)" }}>{fmt(total)}</span>
           </div>
         </div>
