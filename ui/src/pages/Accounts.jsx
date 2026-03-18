@@ -772,30 +772,67 @@ export default function Accounts() {
         </div>
       )}
 
-      {/* ── Manual Liquid / HSA Accounts (PDF imported) ── */}
+      {/* ── Manual Liquid / HSA Accounts ── */}
       {manualEntries.filter(e => e.category === "liquid").length > 0 && (
         <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>
-            HSA / Cash Accounts (PDF Imported)
-          </div>
-          {manualEntries.filter(e => e.category === "liquid").map(entry => (
-            <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{entry.name}</div>
-                {entry.notes && <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>{entry.notes}</div>}
-                <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>{entry.entered_at}</div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ fontWeight: 700, fontSize: 16 }}>
-                  {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(entry.value)}
-                </div>
-                <button onClick={async () => { await deleteManualEntry(entry.id); await load(); }}
-                  style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }} title="Delete">✕</button>
-              </div>
-            </div>
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>HSA / Cash Accounts</div>
+          {manualEntries.filter(e => e.category === "liquid").map((entry, i, arr) => (
+            <ManualSimpleRow key={entry.id} entry={entry} badge="liquid" badgeClass="badge-depository"
+              onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+              last={i === arr.length - 1} />
           ))}
         </div>
       )}
+
+      {/* ── Property & Vehicles ── */}
+      {manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)).length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Property & Vehicles</div>
+          {manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)).map((entry, i, arr) => (
+            <ManualSimpleRow key={entry.id} entry={entry}
+              badge={{ home_value: "Home", car_value: "Vehicle", real_estate: "Real Estate", vehicles: "Vehicle" }[entry.category]}
+              badgeClass="badge-investment"
+              onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+              last={i === arr.length - 1} />
+          ))}
+        </div>
+      )}
+
+      {/* ── Liabilities (Mortgage, Loans) ── */}
+      {manualEntries.filter(e => e.category === "other_liability").length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Liabilities</div>
+          {manualEntries.filter(e => e.category === "other_liability").map((entry, i, arr) => (
+            <ManualSimpleRow key={entry.id} entry={entry} badge="Liability" badgeClass="badge-credit" negative
+              onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+              last={i === arr.length - 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, last }) {
+  const fmtUSD = v => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(v);
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "12px 0", borderBottom: last ? "none" : "1px solid var(--border)" }}>
+      <div>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>{entry.name}</div>
+        <div style={{ display: "flex", gap: 8, marginTop: 3, alignItems: "center" }}>
+          <span className={`badge ${badgeClass}`} style={{ fontSize: 11 }}>{badge}</span>
+          {entry.notes && <span style={{ fontSize: 12, color: "var(--text2)" }}>{entry.notes}</span>}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>Updated {entry.entered_at}</div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: negative ? "var(--red)" : undefined }}>
+          {negative ? "-" : ""}{fmtUSD(entry.value)}
+        </div>
+        <button onClick={onDelete}
+          style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }} title="Delete">✕</button>
+      </div>
     </div>
   );
 }

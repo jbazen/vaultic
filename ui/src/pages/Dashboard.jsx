@@ -307,6 +307,7 @@ export default function Dashboard() {
   const otherAssets = manualEntries.filter(e => e.category === "other_asset");
   const liabilities = manualEntries.filter(e => e.category === "other_liability");
   const manualInvested = manualEntries.filter(e => e.category === "invested");
+  const manualLiquid = manualEntries.filter(e => e.category === "liquid");
 
   // Consolidated allocation across all manual investment holdings
   const allHoldings = manualInvested.flatMap(e => e.holdings || []);
@@ -479,6 +480,27 @@ export default function Dashboard() {
                   <div className="account-name">{e.name}</div>
                   <div className="account-meta">
                     <span className="badge badge-investment">invested</span>
+                    {e.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{e.notes}</span>}
+                  </div>
+                </div>
+                <div className="account-balance">{fmt(e.value)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── HSA / Liquid (PDF imported) ── */}
+      {manualLiquid.length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>HSA / Cash Accounts (Imported)</div>
+          <div className="account-list">
+            {manualLiquid.map(e => (
+              <div key={e.id} className="account-row">
+                <div className="account-info">
+                  <div className="account-name">{e.name}</div>
+                  <div className="account-meta">
+                    <span className="badge badge-depository">liquid</span>
                     {e.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{e.notes}</span>}
                   </div>
                 </div>
