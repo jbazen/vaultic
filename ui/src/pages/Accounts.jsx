@@ -771,6 +771,31 @@ export default function Accounts() {
           ))}
         </div>
       )}
+
+      {/* ── Manual Liquid / HSA Accounts (PDF imported) ── */}
+      {manualEntries.filter(e => e.category === "liquid").length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>
+            HSA / Cash Accounts (PDF Imported)
+          </div>
+          {manualEntries.filter(e => e.category === "liquid").map(entry => (
+            <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid var(--border)" }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{entry.name}</div>
+                {entry.notes && <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>{entry.notes}</div>}
+                <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>{entry.entered_at}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>
+                  {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(entry.value)}
+                </div>
+                <button onClick={async () => { await deleteManualEntry(entry.id); await load(); }}
+                  style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }} title="Delete">✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

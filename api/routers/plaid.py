@@ -46,7 +46,7 @@ async def create_link_token(_user: str = Depends(get_current_user)):
         req = LinkTokenCreateRequest(
             user=LinkTokenCreateRequestUser(client_user_id="vaultic-user"),
             client_name="Vaultic",
-            products=[Products("transactions"), Products("investments")],
+            products=[Products("transactions"), Products("investments"), Products("liabilities")],
             country_codes=[CountryCode("US")],
             language="en",
         )

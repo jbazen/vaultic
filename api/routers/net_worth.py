@@ -15,8 +15,14 @@ async def latest(_user: str = Depends(get_current_user)):
     if not row:
         return {"message": "No data yet — connect accounts and sync to build your first snapshot."}
     d = dict(row)
-    # Investable = total minus illiquid physical assets
-    d["investable"] = (d.get("total") or 0) - (d.get("real_estate") or 0) - (d.get("vehicles") or 0)
+    # Investable = gross financial assets only (liquid + invested + crypto + other_assets)
+    # Excludes real estate, vehicles, AND liabilities (mortgage shouldn't reduce investable)
+    d["investable"] = (
+        (d.get("liquid") or 0) +
+        (d.get("invested") or 0) +
+        (d.get("crypto") or 0) +
+        (d.get("other_assets") or 0)
+    )
     return d
 
 
@@ -36,7 +42,7 @@ async def history(
         rows = conn.execute("""
             SELECT snapped_at, total, liquid, invested, crypto, real_estate,
                    vehicles, liabilities, other_assets,
-                   (total - COALESCE(real_estate, 0) - COALESCE(vehicles, 0)) AS investable
+                   (COALESCE(liquid,0) + COALESCE(invested,0) + COALESCE(crypto,0) + COALESCE(other_assets,0)) AS investable
             FROM net_worth_snapshots
             WHERE snapped_at >= date('now', '-' || ? || ' days')
             ORDER BY snapped_at ASC
