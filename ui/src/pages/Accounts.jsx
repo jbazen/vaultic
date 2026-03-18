@@ -101,8 +101,10 @@ function MetaLine({ type, subtype, notes, onSaveNotes, date, extra }) {
 }
 
 // ── Crypto Account Row ─────────────────────────────────────────────────────────
-// Full-detail row for Coinbase holdings: native balance, unit price, value, sync date.
+// Expandable row for Coinbase holdings. Click the row to show/hide native balance,
+// unit price, and USD value. Same expand pattern as investment accounts.
 function CryptoAccountRow({ account, onRenamed }) {
+  const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.display_name || account.name);
   const [saving, setSaving] = useState(false);
@@ -114,12 +116,19 @@ function CryptoAccountRow({ account, onRenamed }) {
     finally { setSaving(false); }
   }
 
+  function handleRowClick(e) {
+    if (e.target.closest("button, input, a")) return;
+    setExpanded(ex => !ex);
+  }
+
   const label = account.display_name || account.name;
   const currency = (account.subtype || "").toUpperCase();
 
   return (
-    <div className="account-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="account-row" style={{ flexDirection: "column", alignItems: "stretch" }}>
+      {/* Header — click to expand */}
+      <div onClick={handleRowClick}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
         <div className="account-info">
           {editing ? (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -131,6 +140,8 @@ function CryptoAccountRow({ account, onRenamed }) {
             </div>
           ) : (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: "var(--text2)", fontSize: 11, display: "inline-block",
+                transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
               <div className="account-name">{label}</div>
               <button onClick={() => setEditing(true)} title="Rename"
                 style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
@@ -145,23 +156,25 @@ function CryptoAccountRow({ account, onRenamed }) {
         </div>
         <div className="account-balance">{fmt(account.current)}</div>
       </div>
-      {/* Crypto detail: native balance, unit price, USD value */}
-      <div style={{ display: "flex", gap: 24, fontSize: 13, color: "var(--text2)", paddingLeft: 4, flexWrap: "wrap" }}>
-        <div>
-          <span>Holdings: </span>
-          <span style={{ color: "var(--text)", fontWeight: 600, fontFamily: "monospace" }}>
-            {fmtCrypto(account.native_balance)} {currency}
-          </span>
+      {/* Expandable detail: native balance, unit price, USD value */}
+      {expanded && (
+        <div style={{ display: "flex", gap: 24, fontSize: 13, color: "var(--text2)", marginTop: 10, paddingLeft: 20, flexWrap: "wrap" }}>
+          <div>
+            <span>Holdings: </span>
+            <span style={{ color: "var(--text)", fontWeight: 600, fontFamily: "monospace" }}>
+              {fmtCrypto(account.native_balance)} {currency}
+            </span>
+          </div>
+          <div>
+            <span>Price: </span>
+            <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmtPrice(account.unit_price)}/{currency}</span>
+          </div>
+          <div>
+            <span>Value: </span>
+            <span style={{ color: "var(--accent)", fontWeight: 600 }}>{fmtPrice(account.current)}</span>
+          </div>
         </div>
-        <div>
-          <span>Price: </span>
-          <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmtPrice(account.unit_price)}/{currency}</span>
-        </div>
-        <div>
-          <span>Value: </span>
-          <span style={{ color: "var(--accent)", fontWeight: 600 }}>{fmtPrice(account.current)}</span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -281,6 +294,16 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
   const [expanded, setExpanded] = useState(false);
   const [excluded, setExcluded] = useState(!!entry.exclude_from_net_worth);
   const [toggling, setToggling] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(entry.name);
+  const [nameSaving, setNameSaving] = useState(false);
+
+  async function handleNameSave() {
+    if (!nameDraft.trim()) return;
+    setNameSaving(true);
+    try { await renameManualEntry(entry.id, nameDraft.trim()); onRenamed(); setEditingName(false); }
+    finally { setNameSaving(false); }
+  }
   const holdings = entry.holdings || [];
   const holdingsTotal = holdings.reduce((s, h) => s + (h.value || 0), 0);
   const allocation = holdings.reduce((acc, h) => {
@@ -315,15 +338,27 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
         style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start",
           cursor: hasDetails ? "pointer" : "default" }}>
         <div className="account-info" style={{ flex: 1 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {hasDetails && (
-              <span style={{ color: "var(--text2)", fontSize: 11, display: "inline-block",
-                transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
-            )}
-            <div className="account-name" style={{ color: excluded ? "var(--text2)" : "var(--text)" }}>
-              {entry.name}
+          {editingName ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input className="form-input" style={{ width: 240, padding: "5px 8px", fontSize: 14 }}
+                value={nameDraft} onChange={e => setNameDraft(e.target.value)} autoFocus
+                onKeyDown={e => { if (e.key === "Enter") handleNameSave(); if (e.key === "Escape") { setEditingName(false); setNameDraft(entry.name); }}} />
+              <button className="btn btn-primary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={handleNameSave} disabled={nameSaving}>{nameSaving ? "…" : "Save"}</button>
+              <button className="btn btn-secondary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={() => { setEditingName(false); setNameDraft(entry.name); }}>Cancel</button>
             </div>
-          </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {hasDetails && (
+                <span style={{ color: "var(--text2)", fontSize: 11, display: "inline-block",
+                  transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+              )}
+              <div className="account-name" style={{ color: excluded ? "var(--text2)" : "var(--text)" }}>
+                {entry.name}
+              </div>
+              <button onClick={() => setEditingName(true)} title="Rename"
+                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+            </div>
+          )}
           {/* Badge + notes + imported date all on one meta line */}
           <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px", marginLeft: hasDetails ? 18 : 0 }}>
             <span className="badge badge-investment">invested</span>
@@ -675,13 +710,37 @@ function PlaidInvestmentCard({ account, onRenamed }) {
 }
 
 // ── Manual Simple Row ──────────────────────────────────────────────────────────
-// HSA, property, vehicles, and liabilities. Uses the same bordered box style.
-// Badge + editable notes + date all on one line.
+// HSA, property, vehicles, and liabilities. Editable name (✎) and description.
 function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, onRenamed }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.name);
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    if (!draft.trim()) return;
+    setSaving(true);
+    try { await renameManualEntry(entry.id, draft.trim()); onRenamed(); setEditing(false); }
+    finally { setSaving(false); }
+  }
+
   return (
     <div className="account-row">
       <div className="account-info">
-        <div className="account-name">{entry.name}</div>
+        {editing ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input className="form-input" style={{ width: 220, padding: "5px 8px", fontSize: 14 }}
+              value={draft} onChange={e => setDraft(e.target.value)} autoFocus
+              onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") { setEditing(false); setDraft(entry.name); }}} />
+            <button className="btn btn-primary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={handleSave} disabled={saving}>{saving ? "…" : "Save"}</button>
+            <button className="btn btn-secondary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={() => { setEditing(false); setDraft(entry.name); }}>Cancel</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="account-name">{entry.name}</div>
+            <button onClick={() => setEditing(true)} title="Rename"
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+          </div>
+        )}
         <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px" }}>
           <span className={`badge ${badgeClass}`} style={{ fontSize: 11 }}>{badge}</span>
           <EditableNotes
