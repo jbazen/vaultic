@@ -321,6 +321,7 @@ function AllocationBar({ allocation, total }) {
 // rows. Click the row (not buttons) to expand/collapse holdings and activity summary.
 function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
   const [expanded, setExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState("holdings");
   const [excluded, setExcluded] = useState(!!entry.exclude_from_net_worth);
   const [toggling, setToggling] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -340,7 +341,8 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
     acc[cls] = (acc[cls] || 0) + (h.value || 0);
     return acc;
   }, {});
-  const hasDetails = holdings.length > 0 || !!entry.activity_summary;
+  // Always expandable — every investment account shows Holdings/Transactions/Performance tabs
+  const hasDetails = true;
 
   async function handleToggleExclude() {
     setToggling(true);
@@ -429,100 +431,143 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
         </div>
       </div>
 
-      {/* Activity summary — shown when entry has period data */}
-      {entry.activity_summary && (
-        <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-          gap: 10, marginTop: 12, padding: "12px 14px",
-          background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)",
-        }}>
-          {[
-            { label: "Beginning Balance", value: entry.activity_summary.beginning_balance, date: entry.activity_summary.beginning_date },
-            { label: "Additions / Withdrawals", value: entry.activity_summary.additions_withdrawals },
-            { label: "Net Change", value: entry.activity_summary.net_change, signed: true },
-            { label: "Ending Balance", value: entry.activity_summary.ending_balance, date: entry.activity_summary.ending_date },
-          ].map(({ label, value, date, signed }) => value != null ? (
-            <div key={label}>
-              <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>{label}{date ? ` (${date})` : ""}</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: signed ? (value >= 0 ? "#34d399" : "#f87171") : "var(--text)" }}>
-                {signed && value > 0 ? "+" : ""}{fmt(value)}
-              </div>
-            </div>
-          ) : null)}
-          {entry.activity_summary.twr_pct != null && (
-            <div>
-              <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Time-Weighted Return</div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: entry.activity_summary.twr_pct >= 0 ? "#34d399" : "#f87171" }}>
-                {entry.activity_summary.twr_pct > 0 ? "+" : ""}{entry.activity_summary.twr_pct.toFixed(2)}%
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Expanded holdings */}
-      {expanded && holdings.length > 0 && (
+      {/* Expanded panel — same tab structure as Plaid investment accounts */}
+      {expanded && (
         <div style={{ marginTop: 14 }}>
-          {holdingsTotal > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
-                Asset Allocation
-              </div>
-              <AllocationBar allocation={allocation} total={holdingsTotal} />
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button style={tabBtn(activeTab === "holdings")} onClick={() => setActiveTab("holdings")}>Holdings</button>
+            <button style={tabBtn(activeTab === "transactions")} onClick={() => setActiveTab("transactions")}>Transactions</button>
+            <button style={tabBtn(activeTab === "performance")} onClick={() => setActiveTab("performance")}>Performance</button>
+          </div>
+
+          {/* Holdings tab — asset allocation bar + holdings table */}
+          {activeTab === "holdings" && (
+            <div>
+              {holdingsTotal > 0 && <AllocationBar allocation={allocation} total={holdingsTotal} />}
+              {holdings.length > 0 ? (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                        {["Security", "Class", "Ticker", "Shares", "Price", "Value ($)", "% Assets", "Principal ($)", "Gain/Loss ($)", "Gain/Loss (%)"].map(h => (
+                          <th key={h} style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Class" ? "left" : "right",
+                            color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {holdings.map((h, i) => {
+                        const glPos = h.gain_loss_dollars > 0;
+                        const glNeg = h.gain_loss_dollars < 0;
+                        return (
+                          <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                            <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name}</td>
+                            <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
+                              {h.asset_class ? (
+                                <span style={{ background: (ASSET_CLASS_COLORS[h.asset_class] || "#8b92a8") + "22", color: ASSET_CLASS_COLORS[h.asset_class] || "#8b92a8", borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 600 }}>
+                                  {ASSET_CLASS_LABELS[h.asset_class] || h.asset_class}
+                                </span>
+                              ) : "—"}
+                            </td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{h.ticker || "—"}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(h.shares, 4)}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{h.price != null ? fmt(h.price) : "—"}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{h.value != null ? fmt(h.value) : "—"}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{fmtPct(h.pct_assets)}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{h.principal != null ? fmt(h.principal) : "—"}</td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
+                              {h.gain_loss_dollars != null ? (glPos ? "+" : "") + fmt(h.gain_loss_dollars) : "—"}
+                            </td>
+                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
+                              {h.gain_loss_pct != null ? (h.gain_loss_pct > 0 ? "+" : "") + fmtPct(h.gain_loss_pct) : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop: "2px solid var(--border)" }}>
+                        <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>Total</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>{fmt(holdingsTotal || entry.value)}</td>
+                        <td colSpan={4} />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>
+                  No holdings detail — not included in the imported PDF.
+                </div>
+              )}
             </div>
           )}
-          <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
-            Holdings
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                  {["Security", "Class", "Ticker", "Shares", "Price", "Value ($)", "% Assets", "Principal ($)", "Gain/Loss ($)", "Gain/Loss (%)"].map(h => (
-                    <th key={h} style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Class" ? "left" : "right",
-                      color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {holdings.map((h, i) => {
-                  const glPos = h.gain_loss_dollars > 0;
-                  const glNeg = h.gain_loss_dollars < 0;
-                  return (
-                    <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name}</td>
-                      <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
-                        {h.asset_class ? (
-                          <span style={{ background: (ASSET_CLASS_COLORS[h.asset_class] || "#8b92a8") + "22", color: ASSET_CLASS_COLORS[h.asset_class] || "#8b92a8", borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 600 }}>
-                            {ASSET_CLASS_LABELS[h.asset_class] || h.asset_class}
-                          </span>
-                        ) : "—"}
-                      </td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{h.ticker || "—"}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(h.shares, 4)}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{h.price != null ? fmt(h.price) : "—"}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{h.value != null ? fmt(h.value) : "—"}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{fmtPct(h.pct_assets)}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{h.principal != null ? fmt(h.principal) : "—"}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
-                        {h.gain_loss_dollars != null ? (glPos ? "+" : "") + fmt(h.gain_loss_dollars) : "—"}
-                      </td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
-                        {h.gain_loss_pct != null ? (h.gain_loss_pct > 0 ? "+" : "") + fmtPct(h.gain_loss_pct) : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr style={{ borderTop: "2px solid var(--border)" }}>
-                  <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>Total</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>{fmt(holdingsTotal || entry.value)}</td>
-                  <td colSpan={4} />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+
+          {/* Transactions tab — activity summary from PDF, or empty state */}
+          {activeTab === "transactions" && (
+            entry.activity_summary ? (
+              <div style={{
+                display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                gap: 10, padding: "12px 14px",
+                background: "var(--bg)", borderRadius: 8, border: "1px solid var(--border)",
+              }}>
+                {[
+                  { label: "Beginning Balance", value: entry.activity_summary.beginning_balance, date: entry.activity_summary.beginning_date },
+                  { label: "Additions / Withdrawals", value: entry.activity_summary.additions_withdrawals },
+                  { label: "Net Change", value: entry.activity_summary.net_change, signed: true },
+                  { label: "Ending Balance", value: entry.activity_summary.ending_balance, date: entry.activity_summary.ending_date },
+                ].map(({ label, value, date, signed }) => value != null ? (
+                  <div key={label}>
+                    <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>{label}{date ? ` (${date})` : ""}</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: signed ? (value >= 0 ? "#34d399" : "#f87171") : "var(--text)" }}>
+                      {signed && value > 0 ? "+" : ""}{fmt(value)}
+                    </div>
+                  </div>
+                ) : null)}
+                {entry.activity_summary.twr_pct != null && (
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Time-Weighted Return</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: entry.activity_summary.twr_pct >= 0 ? "#34d399" : "#f87171" }}>
+                      {entry.activity_summary.twr_pct > 0 ? "+" : ""}{entry.activity_summary.twr_pct.toFixed(2)}%
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>
+                No transaction history — this account is imported via PDF snapshot, not live-synced.
+                Reimport an updated PDF to see period activity.
+              </div>
+            )
+          )}
+
+          {/* Performance tab — balance chart not available for PDF imports */}
+          {activeTab === "performance" && (
+            <div style={{ padding: "16px 0" }}>
+              <div style={{ color: "var(--text2)", fontSize: 13, marginBottom: 12 }}>
+                Live performance charts require a connected account. This account was imported via PDF.
+              </div>
+              <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 4 }}>Current Value</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--text)" }}>{fmt(entry.value)}</div>
+                </div>
+                {entry.entered_at && (
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 4 }}>As Of</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: "var(--text2)" }}>{fmtDate(entry.entered_at)}</div>
+                  </div>
+                )}
+                {entry.activity_summary?.twr_pct != null && (
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 4 }}>Period Return (PDF)</div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: entry.activity_summary.twr_pct >= 0 ? "#34d399" : "#f87171" }}>
+                      {entry.activity_summary.twr_pct > 0 ? "+" : ""}{entry.activity_summary.twr_pct.toFixed(2)}%
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -605,7 +650,12 @@ function HoldingsTable({ holdings, totalValue }) {
 // ── Investment Transactions Table ──────────────────────────────────────────────
 function InvestmentTransactionsTable({ transactions }) {
   if (!transactions || transactions.length === 0) {
-    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No investment transactions found.</div>;
+    return (
+      <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>
+        No investment transactions found. Many 401k and IRA providers don't support
+        transaction history via Plaid — holdings and balance history still sync normally.
+      </div>
+    );
   }
   return (
     <div style={{ overflowX: "auto" }}>
