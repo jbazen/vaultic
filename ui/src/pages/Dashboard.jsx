@@ -78,14 +78,14 @@ const PIE_CATS = {
   other_assets:      { label: "Other Assets",      color: "#f87171" },
 };
 
-const RETIREMENT_SUBTYPES = new Set(["401k", "ira", "roth", "pension"]);
-const SAVINGS_SUBTYPES    = new Set(["savings", "money market", "cd", "prepaid", "hsa"]);
-
-// Match account names containing retirement keywords — used to classify PDF-imported
-// manual entries (which all land in category "invested") into the correct pie bucket.
-// Catches "Insperity 401k Plan", "Roth IRA", "IRA Rollover", "Traditional IRA", etc.
-function isRetirementName(name) {
-  return /401[\s(]?k|roth|\bira\b|rollover ira|pension/i.test(name || "");
+// Detect retirement accounts from Plaid subtype or account/entry name.
+// Uses regex instead of an exact-match Set because Plaid returns many variants:
+// "401k", "roth 401k", "403b", "ira", "roth", "traditional ira", "simple ira", "sep ira", etc.
+// Name fallback handles PDF-imported manual entries (always category "invested"):
+// "Insperity 401k Plan", "Roth IRA", "IRA Rollover", "Traditional IRA", etc.
+function isRetirementAccount(subtype, name) {
+  return /401|403b|roth|\bira\b|sep\s*ira|simple\s*ira|pension/i.test(subtype || "") ||
+         /401[\s(]?k|403b|roth|\bira\b|rollover\s*ira|pension/i.test(name || "");
 }
 
 // Compute dollar totals per category from live account + manual entry data.
@@ -101,8 +101,8 @@ function computeAllocation(accounts, manualEntries) {
     } else if (a.type === "depository") {
       if (a.subtype === "checking") out.checking += val;
       else out.savings += val; // savings, money market, cd, hsa (Plaid-connected)
-    } else if (a.type === "investment" || RETIREMENT_SUBTYPES.has(a.subtype)) {
-      if (RETIREMENT_SUBTYPES.has(a.subtype)) out.retirement += val;
+    } else if (a.type === "investment") {
+      if (isRetirementAccount(a.subtype, a.name)) out.retirement += val;
       else out.other_investments += val;
     }
   }
@@ -113,7 +113,7 @@ function computeAllocation(accounts, manualEntries) {
     if (val <= 0) continue;
     if (e.category === "invested") {
       // Route retirement accounts (401k, IRA, Roth, etc.) separately from other investments
-      if (isRetirementName(e.name)) out.retirement += val;
+      if (isRetirementAccount(null, e.name)) out.retirement += val;
       else out.other_investments += val;
     } else if (e.category === "liquid")                                  out.liquid_cash += val;
     else if (e.category === "crypto")                                    out.crypto += val;
@@ -351,8 +351,13 @@ function EditableNotes({ notes, onSave, placeholder = "Add description…" }) {
 }
 
 // Editable row for PDF-imported manual entries — same layout as Plaid account rows.
-// badge/badgeClass control the colored type pill; negative=true renders value in red.
-function ManualAccountRow({ entry, onRenamed, badge = "invested", badgeClass = "badge-investment", negative = false }) {
+// badge/badgeClass default to "invested" but auto-upgrade to "retirement" for entries
+// whose names contain 401k/IRA/Roth/pension keywords. negative=true renders value in red.
+function ManualAccountRow({ entry, onRenamed, badge, badgeClass, negative = false }) {
+  // Auto-detect retirement accounts unless caller explicitly provided a badge
+  const isRetirement = badge === undefined && entry.category === "invested" && isRetirementAccount(null, entry.name);
+  badge     = badge     ?? (isRetirement ? "retirement" : "invested");
+  badgeClass = badgeClass ?? (isRetirement ? "badge-retirement" : "badge-investment");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.name);
   const [saving, setSaving] = useState(false);
@@ -438,7 +443,10 @@ function AccountRow({ account, onRenamed }) {
           </div>
         )}
         <div className="account-meta">
-          <span className={`badge badge-${account.type}`}>{account.type}</span>
+          {(() => {
+            const retire = account.type === "investment" && isRetirementAccount(account.subtype, account.name);
+            return <span className={`badge ${retire ? "badge-retirement" : `badge-${account.type}`}`}>{retire ? "retirement" : account.type}</span>;
+          })()}
           {account.subtype && <span style={{ marginLeft: 6, color: "var(--text2)" }}>{account.subtype}</span>}
           <span style={{ marginLeft: 6 }}>
             <EditableNotes notes={account.notes} onSave={async (v) => { await updateAccountNotes(account.id, v); onRenamed(); }} />

@@ -51,10 +51,13 @@ function isLiability(type) {
   return type === "credit" || type === "loan";
 }
 
-// Detect retirement accounts by name — used for PDF-imported entries whose category
-// is always "invested". Matches "401k", "Roth IRA", "IRA Rollover", "Insperity 401k Plan", etc.
-function isRetirementName(name) {
-  return /401[\s(]?k|roth|\bira\b|rollover ira|pension/i.test(name || "");
+// Detect retirement accounts from Plaid subtype or account/entry name.
+// Uses regex to catch all Plaid subtype variants: "401k", "roth 401k", "403b",
+// "ira", "roth", "traditional ira", "simple ira", "sep ira", "pension".
+// Name fallback handles PDF-imported manual entries and Plaid display names.
+function isRetirementAccount(subtype, name) {
+  return /401|403b|roth|\bira\b|sep\s*ira|simple\s*ira|pension/i.test(subtype || "") ||
+         /401[\s(]?k|403b|roth|\bira\b|rollover\s*ira|pension/i.test(name || "");
 }
 
 // ── Shared: EditableNotes ──────────────────────────────────────────────────────
@@ -93,11 +96,13 @@ function EditableNotes({ notes, onSave }) {
 
 // ── Shared: Meta line ──────────────────────────────────────────────────────────
 // Badge + subtype/extra labels + editable notes + date — all on one line.
-// Used by all account row types to keep the layout consistent.
-function MetaLine({ type, subtype, notes, onSaveNotes, date, extra }) {
+// badgeType/badgeLabel override the type-derived badge (e.g. "retirement" for 401k/IRA).
+function MetaLine({ type, subtype, notes, onSaveNotes, date, extra, badgeType, badgeLabel }) {
+  const bType  = badgeType  || type;
+  const bLabel = badgeLabel || type;
   return (
     <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px" }}>
-      {typeBadge(type)}
+      <span className={`badge badge-${bType}`}>{bLabel}</span>
       {subtype && <span style={{ color: "var(--text2)" }}>{subtype}</span>}
       {extra}
       <EditableNotes notes={notes} onSave={onSaveNotes} />
@@ -249,6 +254,8 @@ function AccountRow({ account, onRenamed }) {
           onSaveNotes={async v => { await updateAccountNotes(account.id, v); onRenamed(); }}
           date={account.snapped_at ? fmtDate(account.snapped_at) : null}
           extra={extra}
+          badgeType={account.type === "investment" && isRetirementAccount(account.subtype, account.name) ? "retirement" : undefined}
+          badgeLabel={account.type === "investment" && isRetirementAccount(account.subtype, account.name) ? "retirement" : undefined}
         />
       </div>
       <div className={`account-balance ${isLiab ? "liability" : ""}`}>
@@ -692,6 +699,8 @@ function PlaidInvestmentCard({ account, onRenamed }) {
             notes={account.notes}
             onSaveNotes={async v => { await updateAccountNotes(account.id, v); onRenamed(); }}
             date={account.snapped_at ? fmtDate(account.snapped_at) : null}
+            badgeType={account.type === "investment" && isRetirementAccount(account.subtype, account.name) ? "retirement" : undefined}
+            badgeLabel={account.type === "investment" && isRetirementAccount(account.subtype, account.name) ? "retirement" : undefined}
           />
         </div>
         <div className="account-balance">{fmt(account.current)}</div>
