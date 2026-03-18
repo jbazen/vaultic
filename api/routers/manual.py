@@ -87,6 +87,20 @@ async def toggle_exclude(entry_id: int, _user: str = Depends(get_current_user)):
     return {"exclude_from_net_worth": new_val}
 
 
+@router.patch("/{entry_id}/rename")
+async def rename_entry(entry_id: int, body: dict, _user: str = Depends(get_current_user)):
+    """Rename a manual entry (e.g. shorten a long PDF-imported account name)."""
+    name = str(body.get("name", "")).strip()[:100]
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Entry not found")
+        conn.execute("UPDATE manual_entries SET name = ? WHERE id = ?", (name, entry_id))
+    return {"name": name}
+
+
 @router.delete("/{entry_id}")
 async def delete_entry(entry_id: int, _user: str = Depends(get_current_user)):
     with get_db() as conn:

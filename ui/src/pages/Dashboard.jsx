@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries, getRecentTransactions,
-  getPlaidItems, removePlaidItem, renameAccount, syncCoinbase,
+  getPlaidItems, removePlaidItem, renameAccount, renameManualEntry, syncCoinbase,
 } from "../api.js";
 import NetWorthChart from "../components/NetWorthChart.jsx";
 import PlaidLink from "../components/PlaidLink.jsx";
@@ -24,7 +24,9 @@ function fmtSigned(v) {
 
 function fmtDate(s) {
   if (!s) return "";
-  return new Date(s + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  // Handles both "YYYY-MM-DD" and full datetime strings like "2026-03-18 07:46:43"
+  const dateOnly = s.length > 10 ? s.substring(0, 10) : s;
+  return new Date(dateOnly + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 // ── Category config ───────────────────────────────────────────────────────────
@@ -114,7 +116,9 @@ function AllocationBar({ allocation, total }) {
 
 function CryptoAccountRow({ account, onRenamed }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(account.display_name || account.name);
+  const ticker = (account.subtype || "").toUpperCase();
+  // Default display: just the ticker ("AVAX"). If user has renamed, show their name.
+  const [draft, setDraft] = useState(account.display_name || ticker || account.name);
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -124,57 +128,73 @@ function CryptoAccountRow({ account, onRenamed }) {
     finally { setSaving(false); }
   }
 
-  const label = account.display_name || account.name;
-  const currency = (account.subtype || "").toUpperCase();
+  const label = account.display_name || ticker || account.name;
 
   return (
-    <div className="account-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div className="account-info">
-          {editing ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input className="form-input" style={{ width: 180, padding: "4px 8px", fontSize: 13 }}
-                value={draft} onChange={e => setDraft(e.target.value)} autoFocus
-                onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
-              <button className="btn btn-primary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
-              <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)}>✕</button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div className="account-name">{label}</div>
-              <button onClick={() => setEditing(true)} title="Rename"
-                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
-            </div>
-          )}
-          <div className="account-meta"><span className="badge badge-crypto">crypto</span></div>
-        </div>
-        <div className="account-balance">{fmt(account.current)}</div>
-      </div>
-      <div style={{ display: "flex", gap: 24, fontSize: 13, color: "var(--text2)", paddingLeft: 4, flexWrap: "wrap" }}>
-        <div>
-          <span>Holdings: </span>
-          <span style={{ color: "var(--text)", fontWeight: 600, fontFamily: "monospace" }}>
-            {fmtCrypto(account.native_balance)} {currency}
-          </span>
-        </div>
-        <div>
-          <span>Price: </span>
-          <span style={{ color: "var(--text)", fontWeight: 600 }}>{fmtPrice(account.unit_price)}/{currency}</span>
-        </div>
-        <div>
-          <span>Value: </span>
-          <span style={{ color: "var(--accent)", fontWeight: 600 }}>{fmtPrice(account.current)}</span>
-        </div>
-        {account.coinbase_uuid && (
-          <div>
-            <span>UUID: </span>
-            <span style={{ fontFamily: "monospace", fontSize: 11 }}>{account.coinbase_uuid}</span>
+    <div className="account-row">
+      <div className="account-info">
+        {editing ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input className="form-input" style={{ width: 180, padding: "4px 8px", fontSize: 13 }}
+              value={draft} onChange={e => setDraft(e.target.value)} autoFocus
+              onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+            <button className="btn btn-primary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
+            <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)}>✕</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div className="account-name">{label}</div>
+            <button onClick={() => setEditing(true)} title="Rename"
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
           </div>
         )}
-        {account.snapped_at && (
-          <div><span>Updated: </span><span>{fmtDate(account.snapped_at)}</span></div>
-        )}
+        <div className="account-meta">
+          <span className="badge badge-crypto">crypto</span>
+          {ticker && <span style={{ marginLeft: 6, color: "var(--text2)" }}>{ticker.toLowerCase()}</span>}
+        </div>
       </div>
+      <div className="account-balance">{fmt(account.current)}</div>
+    </div>
+  );
+}
+
+// Editable row for PDF-imported manual entries — same layout as Plaid account rows
+function ManualAccountRow({ entry, onRenamed }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.name);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    if (!draft.trim()) return;
+    setSaving(true);
+    try { await renameManualEntry(entry.id, draft.trim()); onRenamed(); setEditing(false); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="account-row">
+      <div className="account-info">
+        {editing ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input className="form-input" style={{ width: 240, padding: "4px 8px", fontSize: 13 }}
+              value={draft} onChange={e => setDraft(e.target.value)} autoFocus
+              onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+            <button className="btn btn-primary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
+            <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)}>✕</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div className="account-name">{entry.name}</div>
+            <button onClick={() => setEditing(true)} title="Rename"
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+          </div>
+        )}
+        <div className="account-meta">
+          <span className="badge badge-investment">invested</span>
+          {entry.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{entry.notes}</span>}
+        </div>
+      </div>
+      <div className="account-balance">{fmt(entry.value)}</div>
     </div>
   );
 }
@@ -475,16 +495,7 @@ export default function Dashboard() {
           )}
           <div className="account-list">
             {manualInvested.map(e => (
-              <div key={e.id} className="account-row">
-                <div className="account-info">
-                  <div className="account-name">{e.name}</div>
-                  <div className="account-meta">
-                    <span className="badge badge-investment">invested</span>
-                    {e.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{e.notes}</span>}
-                  </div>
-                </div>
-                <div className="account-balance">{fmt(e.value)}</div>
-              </div>
+              <ManualAccountRow key={e.id} entry={e} onRenamed={load} />
             ))}
           </div>
         </div>

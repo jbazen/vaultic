@@ -184,6 +184,15 @@ export async function renameAccount(accountId, displayName) {
   return res.json();
 }
 
+// --- Manual entry rename ---
+export async function renameManualEntry(entryId, name) {
+  const res = await apiFetch(`/api/manual/${entryId}/rename`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+  return res.json();
+}
+
 // --- User management ---
 export async function getUsers() {
   const res = await apiFetch("/api/auth/users");
