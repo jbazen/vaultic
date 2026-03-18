@@ -77,7 +77,8 @@ class TestPDFIngest:
         ]
 
         with patch("pdfplumber.open") as mock_pdf, \
-             patch("api.routers.pdf.anthropic.Anthropic") as mock_cls:
+             patch("api.routers.pdf.anthropic.Anthropic") as mock_cls, \
+             patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test"}):
 
             # Mock pdfplumber
             mock_page = MagicMock()

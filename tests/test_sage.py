@@ -120,20 +120,19 @@ class TestSageSpeak:
                 os.environ["OPENAI_API_KEY"] = original
 
     def test_speak_returns_audio_with_valid_key(self, client, auth_headers):
+        from unittest.mock import AsyncMock
         import os
         os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 
         mock_audio_bytes = b"\xff\xfb\x90\x00" * 100  # fake MP3 header bytes
 
         mock_response = MagicMock()
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-        mock_response.iter_bytes.return_value = iter([mock_audio_bytes])
+        mock_response.content = mock_audio_bytes
 
-        with patch("openai.OpenAI") as mock_cls:
+        with patch("openai.AsyncOpenAI") as mock_cls:
             mock_client = MagicMock()
             mock_cls.return_value = mock_client
-            mock_client.audio.speech.with_streaming_response.create.return_value = mock_response
+            mock_client.audio.speech.create = AsyncMock(return_value=mock_response)
 
             res = client.post("/api/sage/speak", headers=auth_headers,
                               json={"text": "Hello"})
