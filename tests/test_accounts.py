@@ -82,13 +82,15 @@ class TestNetWorth:
             assert "investable" in data
 
     def test_investable_formula_excludes_real_estate_and_vehicles(self, client, auth_headers):
-        """investable should be liquid+invested+crypto+other_assets — not total minus real_estate/vehicles."""
-        from api import sync
+        """Investable = liquid+invested+crypto+other_assets minus credit card debt (not mortgage)."""
         from datetime import date
+        from api.database import get_db
 
         today = date.today().isoformat()
-        # Write a snapshot directly so we control all values
-        from api.database import get_db
+        # Snapshot: liquid=50k, invested=300k, crypto=10k, other_assets=5k,
+        # real_estate=400k, vehicles=20k, liabilities=180k (150k mortgage + 30k credit cards)
+        # No manual other_liability entry → mortgage treated as 0 → all 180k subtracted
+        # Expected: 50k + 300k + 10k + 5k - 180k = 185k
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO net_worth_snapshots
@@ -99,28 +101,27 @@ class TestNetWorth:
                     crypto=excluded.crypto, real_estate=excluded.real_estate,
                     vehicles=excluded.vehicles, liabilities=excluded.liabilities,
                     other_assets=excluded.other_assets
-            """, (today, 600000, 50000, 300000, 10000, 400000, 20000, 180000, 5000))
+            """, (today, 200000, 50000, 300000, 10000, 400000, 20000, 180000, 5000))
 
         res = client.get("/api/net-worth/latest", headers=auth_headers)
         assert res.status_code == 200
         data = res.json()
         assert "investable" in data
-        # Formula: total(600k) - real_estate(400k) - vehicles(20k) = 180k
-        # Liabilities are already reflected in total, so credit card debt is properly subtracted.
-        expected = 600000 - 400000 - 20000  # 180000
+        # No other_liability manual entry → mortgage offset = 0 → credit_liabilities = 180k
+        expected = 50000 + 300000 + 10000 + 5000 - 180000  # 185000
         assert data["investable"] == expected, (
             f"investable={data['investable']}, expected={expected}. "
-            "Investable Net Worth = total - real_estate - vehicles."
+            "Investable = liquid+invested+crypto+other_assets - credit_liabilities"
         )
 
-    def test_investable_reflects_liabilities(self, client, auth_headers):
-        """Liabilities should reduce Investable Net Worth (they are in total).
-        Scenario: $100k liquid, $200k mortgage → total = -$100k, no real_estate/vehicles.
-        Investable = total - 0 - 0 = -$100k (the debt exceeds liquid assets)."""
+    def test_investable_excludes_mortgage_from_liabilities(self, client, auth_headers):
+        """Mortgage (other_liability manual entry) should NOT reduce investable.
+        Only Plaid credit/loan balances (credit card debt) should reduce it."""
         from datetime import date
         from api.database import get_db
 
         today = date.today().isoformat()
+        # Snapshot: liquid=100k, liabilities=250k (200k mortgage + 50k credit cards)
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO net_worth_snapshots
@@ -131,14 +132,21 @@ class TestNetWorth:
                     crypto=excluded.crypto, real_estate=excluded.real_estate,
                     vehicles=excluded.vehicles, liabilities=excluded.liabilities,
                     other_assets=excluded.other_assets
-            """, (today, -100000, 100000, 0, 0, 0, 0, 200000, 0))
+            """, (today, -150000, 100000, 0, 0, 0, 0, 250000, 0))
+            # Add mortgage as other_liability manual entry (200k)
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at) VALUES (?, ?, ?, ?)",
+                ("Mortgage", "other_liability", 200000, today)
+            )
 
         res = client.get("/api/net-worth/latest", headers=auth_headers)
         assert res.status_code == 200
         data = res.json()
-        # total(-100k) - real_estate(0) - vehicles(0) = -100k
-        assert data.get("investable") == -100000, (
-            "Investable Net Worth = total - real_estate - vehicles; liabilities in total reduce it"
+        # credit_liabilities = 250k - 200k mortgage = 50k
+        # investable = 100k liquid - 50k credit cards = 50k
+        assert data.get("investable") == 50000, (
+            f"investable={data['investable']}, expected=50000. "
+            "Mortgage should not reduce investable; only credit card debt should."
         )
 
     def test_history_authenticated_returns_list(self, client, auth_headers):
