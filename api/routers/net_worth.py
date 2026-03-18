@@ -15,15 +15,13 @@ async def latest(_user: str = Depends(get_current_user)):
     if not row:
         return {"message": "No data yet — connect accounts and sync to build your first snapshot."}
     d = dict(row)
-    # Investable = gross financial assets only (liquid + invested + crypto + other_assets).
-    # Intentionally excludes real estate and vehicles (illiquid, can't be redeployed easily).
-    # Also excludes liabilities: a mortgage balance is offset by the home value already
-    # captured in real_estate — subtracting it here would incorrectly reduce investable assets.
+    # Investable Net Worth = total net worth minus illiquid assets (home + car).
+    # Because total already has liabilities subtracted, credit card debt and mortgage
+    # are properly reflected here — giving a true "deployable wealth" number.
     d["investable"] = (
-        (d.get("liquid") or 0) +
-        (d.get("invested") or 0) +
-        (d.get("crypto") or 0) +
-        (d.get("other_assets") or 0)
+        (d.get("total") or 0) -
+        (d.get("real_estate") or 0) -
+        (d.get("vehicles") or 0)
     )
     return d
 
@@ -37,15 +35,15 @@ async def history(
     Net worth history for chart.
     - Returns daily points for <= 90 days of data
     - Collapses to one point per month (last snapshot of each month) for longer ranges
-    - Each row includes `investable` = liquid + invested + crypto + other_assets
-      (same formula as /latest — excludes real estate, vehicles, and liabilities)
+    - Each row includes `investable` = total - real_estate - vehicles
+      (same formula as /latest — net worth minus illiquid assets; liabilities already in total)
     - Max range: 3650 days (10 years)
     """
     with get_db() as conn:
         rows = conn.execute("""
             SELECT snapped_at, total, liquid, invested, crypto, real_estate,
                    vehicles, liabilities, other_assets,
-                   (COALESCE(liquid,0) + COALESCE(invested,0) + COALESCE(crypto,0) + COALESCE(other_assets,0)) AS investable
+                   (COALESCE(total,0) - COALESCE(real_estate,0) - COALESCE(vehicles,0)) AS investable
             FROM net_worth_snapshots
             WHERE snapped_at >= date('now', '-' || ? || ' days')
             ORDER BY snapped_at ASC

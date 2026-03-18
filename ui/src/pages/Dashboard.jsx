@@ -582,13 +582,13 @@ export default function Dashboard() {
           {nw?.investable != null && (
             <div style={{ paddingBottom: 4 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 4 }}>
-                Investable Assets
+                Investable Net Worth
               </div>
               <div style={{ fontSize: 28, fontWeight: 700, color: "var(--accent)" }}>
                 {fmt(nw.investable)}
               </div>
               <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>
-                excl. real estate &amp; vehicles
+                net worth excl. home &amp; car
               </div>
             </div>
           )}
