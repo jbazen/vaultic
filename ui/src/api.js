@@ -274,6 +274,28 @@ export async function syncCoinbase() {
   return res.json();
 }
 
+// --- Plaid investment data ---
+// Fetches current holdings snapshot for one investment account, joined with security
+// metadata (name, ticker, type) and computed gain/loss fields.
+export async function getAccountHoldings(accountId) {
+  const res = await apiFetch(`/api/accounts/${accountId}/holdings`);
+  return res.json(); // { holdings: [...], total_value: N }
+}
+
+// Fetches buy/sell/dividend/transfer history for one investment account.
+// Paginated: default 100 rows, use offset for next pages.
+export async function getAccountInvestmentTransactions(accountId, limit = 100, offset = 0) {
+  const res = await apiFetch(`/api/accounts/${accountId}/investment-transactions?limit=${limit}&offset=${offset}`);
+  return res.json();
+}
+
+// Fetches daily price/value history for a single security within an account.
+// Used for plotting an individual holding's performance over time.
+export async function getHoldingsHistory(accountId, securityId, days = 90) {
+  const res = await apiFetch(`/api/accounts/${accountId}/holdings/history?security_id=${encodeURIComponent(securityId)}&days=${days}`);
+  return res.json();
+}
+
 // --- Manual entries ---
 export async function getManualEntries() {
   const res = await apiFetch("/api/manual");

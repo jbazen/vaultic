@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
-import { getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries } from "../api.js";
+import {
+  getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries,
+  getAccountHoldings, getAccountInvestmentTransactions,
+} from "../api.js";
 import PlaidLink from "../components/PlaidLink.jsx";
 
 function fmt(v) {
@@ -100,6 +103,8 @@ function CryptoAccountRow({ account, onRenamed }) {
 
 function AccountRow({ account, onRenamed }) {
   if (account.type === "crypto") return <CryptoAccountRow account={account} onRenamed={onRenamed} />;
+  // Investment/retirement/brokerage accounts get an expandable card with holdings + transaction history
+  if (isPlaidInvestment(account)) return <PlaidInvestmentCard account={account} onRenamed={onRenamed} />;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(account.display_name || account.name);
@@ -365,6 +370,232 @@ function ManualInvestmentCard({ entry, onDelete }) {
               </tfoot>
             </table>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Returns true for Plaid-connected investment/retirement/brokerage accounts.
+// These get the expanded holdings + transactions view instead of the simple balance row.
+function isPlaidInvestment(account) {
+  if (account.is_manual) return false;
+  return account.type === "investment" ||
+    ["401k", "ira", "roth", "pension", "brokerage"].includes(account.subtype);
+}
+
+// Tab button style helpers
+function tabBtn(active) {
+  return {
+    background: active ? "var(--accent)" : "var(--bg)",
+    color: active ? "#fff" : "var(--text2)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    padding: "4px 14px",
+    fontSize: 12,
+    fontWeight: active ? 700 : 400,
+    cursor: "pointer",
+  };
+}
+
+function HoldingsTable({ holdings, totalValue }) {
+  if (!holdings || holdings.length === 0) {
+    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No holdings data available.</div>;
+  }
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border)" }}>
+            {["Security", "Ticker", "Type", "Qty", "Price", "Value", "Cost Basis", "Gain/Loss $", "Gain/Loss %", "% Assets"].map(h => (
+              <th key={h} style={{
+                padding: "6px 10px 8px",
+                textAlign: h === "Security" || h === "Type" ? "left" : "right",
+                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12,
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {holdings.map((h, i) => {
+            const glPos = h.gain_loss_dollars > 0;
+            const glNeg = h.gain_loss_dollars < 0;
+            const glColor = glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)";
+            return (
+              <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name || "—"}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{h.ticker_symbol || "—"}</td>
+                <td style={{ padding: "8px 10px", color: "var(--text2)", fontSize: 12 }}>{h.security_type || "—"}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(h.quantity, 4)}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{h.institution_price != null ? fmt(h.institution_price) : "—"}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{h.institution_value != null ? fmt(h.institution_value) : "—"}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{h.cost_basis != null ? fmt(h.cost_basis) : "—"}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glColor }}>
+                  {h.gain_loss_dollars != null ? (glPos ? "+" : "") + fmt(h.gain_loss_dollars) : "—"}
+                </td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glColor }}>
+                  {h.gain_loss_pct != null ? (h.gain_loss_pct > 0 ? "+" : "") + fmtPct(h.gain_loss_pct) : "—"}
+                </td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{fmtPct(h.pct_assets)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+        {totalValue > 0 && (
+          <tfoot>
+            <tr style={{ borderTop: "2px solid var(--border)" }}>
+              <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>Total</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>{fmt(totalValue)}</td>
+              <td colSpan={4} />
+            </tr>
+          </tfoot>
+        )}
+      </table>
+    </div>
+  );
+}
+
+function InvestmentTransactionsTable({ transactions }) {
+  if (!transactions || transactions.length === 0) {
+    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No investment transactions found.</div>;
+  }
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border)" }}>
+            {["Date", "Type", "Subtype", "Security", "Ticker", "Qty", "Amount", "Fees"].map(h => (
+              <th key={h} style={{
+                padding: "6px 10px 8px",
+                textAlign: h === "Date" || h === "Security" || h === "Type" || h === "Subtype" ? "left" : "right",
+                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12,
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {transactions.map((t, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+              <td style={{ padding: "8px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{t.date}</td>
+              <td style={{ padding: "8px 10px", color: "var(--text)" }}>{t.type || "—"}</td>
+              <td style={{ padding: "8px 10px", color: "var(--text2)", fontSize: 12 }}>{t.subtype || "—"}</td>
+              <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t.security_name}>{t.security_name || t.name || "—"}</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{t.ticker || "—"}</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(t.quantity, 4)}</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{t.amount != null ? fmt(t.amount) : "—"}</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{t.fees != null ? fmt(t.fees) : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Expandable card for Plaid-connected investment/retirement/brokerage accounts.
+// Lazily fetches holdings on first expand; transactions load when that tab is clicked.
+function PlaidInvestmentCard({ account, onRenamed }) {
+  const [expanded, setExpanded] = useState(false);
+  const [activeTab, setActiveTab] = useState("holdings");
+  const [holdings, setHoldings] = useState(null);    // null = not yet loaded
+  const [transactions, setTransactions] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(account.display_name || account.name);
+  const [saving, setSaving] = useState(false);
+
+  const label = account.display_name || account.name;
+  const mask = account.mask ? ` (...${account.mask})` : "";
+
+  async function handleToggle() {
+    const next = !expanded;
+    setExpanded(next);
+    // Lazy-load holdings on first open
+    if (next && holdings === null) {
+      setLoading(true);
+      try {
+        const data = await getAccountHoldings(account.id);
+        setHoldings(data);
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function handleTabChange(tab) {
+    setActiveTab(tab);
+    if (tab === "transactions" && transactions === null) {
+      setLoading(true);
+      try {
+        const data = await getAccountInvestmentTransactions(account.id, 100, 0);
+        setTransactions(data);
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function handleSave() {
+    if (!draft.trim()) return;
+    setSaving(true);
+    try { await renameAccount(account.id, draft.trim()); onRenamed(); setEditing(false); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 14, marginBottom: 14 }}>
+      {/* Header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div className="account-info">
+          {editing ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input className="form-input" style={{ width: 200, padding: "5px 8px", fontSize: 14 }}
+                value={draft} onChange={e => setDraft(e.target.value)} autoFocus
+                onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") { setEditing(false); setDraft(label); }}} />
+              <span style={{ color: "var(--text2)", fontSize: 13 }}>{mask}</span>
+              <button className="btn btn-primary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={handleSave} disabled={saving}>{saving ? "…" : "Save"}</button>
+              <button className="btn btn-secondary" style={{ padding: "4px 12px", fontSize: 12 }} onClick={() => { setEditing(false); setDraft(label); }}>Cancel</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div className="account-name">{label}{mask}</div>
+              <button onClick={() => setEditing(true)} title="Rename"
+                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+            </div>
+          )}
+          <div className="account-meta">
+            {typeBadge(account.type)}
+            {account.subtype && <span style={{ marginLeft: 6, color: "var(--text2)" }}>{account.subtype}</span>}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="account-balance">{fmt(account.current)}</div>
+          <button onClick={handleToggle} style={{
+            background: "none", border: "1px solid var(--border)",
+            color: "var(--text2)", borderRadius: 6, padding: "3px 10px",
+            cursor: "pointer", fontSize: 12,
+          }}>
+            {expanded ? "▲ Hide" : "▼ Details"}
+          </button>
+        </div>
+      </div>
+
+      {/* Expanded panel */}
+      {expanded && (
+        <div style={{ marginTop: 14 }}>
+          {/* Tab bar */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <button style={tabBtn(activeTab === "holdings")} onClick={() => handleTabChange("holdings")}>Holdings</button>
+            <button style={tabBtn(activeTab === "transactions")} onClick={() => handleTabChange("transactions")}>Transactions</button>
+          </div>
+
+          {loading ? (
+            <div style={{ color: "var(--text2)", fontSize: 13, padding: "8px 0" }}>Loading…</div>
+          ) : activeTab === "holdings" ? (
+            <HoldingsTable holdings={holdings?.holdings} totalValue={holdings?.total_value} />
+          ) : (
+            <InvestmentTransactionsTable transactions={transactions} />
+          )}
         </div>
       )}
     </div>

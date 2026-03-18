@@ -50,7 +50,16 @@ app = FastAPI(title="Vaultic API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173"],
+    allow_origins=[
+        # Local development servers (Vite dev + preview)
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        # Production — same domain served via nginx, so browser sees same-origin.
+        # Listed explicitly as a safety net for any direct-port access during setup.
+        "https://vaulticsage.com",
+        "https://www.vaulticsage.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

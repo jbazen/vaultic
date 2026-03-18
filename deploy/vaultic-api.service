@@ -1,0 +1,24 @@
+# systemd service for the Vaultic FastAPI backend
+#
+# One-time setup on server:
+#   sudo cp deploy/vaultic-api.service /etc/systemd/system/vaultic-api.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable vaultic-api
+#   sudo systemctl start vaultic-api
+
+[Unit]
+Description=Vaultic FastAPI Backend
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vaultic
+ExecStart=/home/ubuntu/vaultic/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+# .env is loaded by load_dotenv() in api/main.py, but EnvironmentFile makes
+# the vars available to the process environment as a safety net
+EnvironmentFile=/home/ubuntu/vaultic/.env
+
+[Install]
+WantedBy=multi-user.target

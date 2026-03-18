@@ -142,6 +142,9 @@ def _sync_item(item_db_id: int, item_id: str, access_token: str, today: str):
     # --- Transactions ---
     _sync_transactions(item_db_id, access_token, today)
 
+    # --- Investment holdings + transactions (401k, IRA, brokerage) ---
+    _sync_investments(item_db_id, access_token, today)
+
     # --- Net worth snapshot ---
     _take_net_worth_snapshot(today)
 
@@ -208,6 +211,159 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
             conn.execute(
                 "DELETE FROM transactions WHERE transaction_id = ?", (txn.transaction_id,)
             )
+
+
+def _sync_investments(item_db_id: int, access_token: str, today: str):
+    """
+    Fetch investment holdings and transactions from Plaid for one item.
+    Snapshots holdings daily (like account_balances) so portfolio value can be
+    tracked over time. Investment transactions (buy/sell/dividend) are upserted
+    so the full history accumulates without duplicates.
+    Silently skips items that don't have the investments product enabled.
+    """
+    from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
+    from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
+    from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
+    from datetime import date, timedelta
+
+    client = _get_plaid_client()
+
+    # ── Holdings ──────────────────────────────────────────────────────────────
+    try:
+        resp = client.investments_holdings_get(
+            InvestmentsHoldingsGetRequest(access_token=access_token)
+        )
+    except Exception as e:
+        # PRODUCT_NOT_READY or not enabled for this institution — not an error
+        logger.info(f"investments_holdings_get skipped for item {item_db_id}: {e}")
+        return
+
+    with get_db() as conn:
+        # Upsert security metadata (name, ticker, type, etc.)
+        for sec in resp.securities:
+            conn.execute("""
+                INSERT INTO plaid_securities
+                    (security_id, name, ticker_symbol, type, close_price,
+                     close_price_as_of, iso_currency_code, cusip, isin, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(security_id) DO UPDATE SET
+                    name               = excluded.name,
+                    ticker_symbol      = excluded.ticker_symbol,
+                    type               = excluded.type,
+                    close_price        = excluded.close_price,
+                    close_price_as_of  = excluded.close_price_as_of,
+                    iso_currency_code  = excluded.iso_currency_code,
+                    updated_at         = CURRENT_TIMESTAMP
+            """, (
+                sec.security_id,
+                sec.name,
+                sec.ticker_symbol,
+                sec.type,
+                sec.close_price,
+                str(sec.close_price_as_of) if sec.close_price_as_of else None,
+                sec.iso_currency_code or "USD",
+                sec.cusip,
+                sec.isin,
+            ))
+
+        # Snapshot each holding for today
+        for h in resp.holdings:
+            acct = conn.execute(
+                "SELECT id FROM accounts WHERE plaid_account_id = ?", (h.account_id,)
+            ).fetchone()
+            if not acct:
+                continue
+            conn.execute("""
+                INSERT INTO plaid_holdings
+                    (account_id, security_id, institution_value, institution_price,
+                     institution_price_as_of, quantity, cost_basis, iso_currency_code, snapped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id, security_id, snapped_at) DO UPDATE SET
+                    institution_value       = excluded.institution_value,
+                    institution_price       = excluded.institution_price,
+                    institution_price_as_of = excluded.institution_price_as_of,
+                    quantity                = excluded.quantity,
+                    cost_basis              = excluded.cost_basis
+            """, (
+                acct["id"],
+                h.security_id,
+                h.institution_value,
+                h.institution_price,
+                str(h.institution_price_as_of) if h.institution_price_as_of else None,
+                h.quantity,
+                h.cost_basis,
+                h.iso_currency_code or "USD",
+                today,
+            ))
+
+    logger.info(f"Holdings snapshot: item {item_db_id}  {len(resp.holdings)} holdings  {len(resp.securities)} securities")
+
+    # ── Investment transactions ────────────────────────────────────────────────
+    try:
+        end_dt   = date.today()
+        start_dt = end_dt - timedelta(days=730)  # 2 years of history
+        options  = InvestmentsTransactionsGetRequestOptions(count=500, offset=0)
+        resp2 = client.investments_transactions_get(
+            InvestmentsTransactionsGetRequest(
+                access_token=access_token,
+                start_date=start_dt,
+                end_date=end_dt,
+                options=options,
+            )
+        )
+        all_txns = list(resp2.investment_transactions)
+
+        # Paginate through remaining pages
+        while len(all_txns) < resp2.total_investment_transactions:
+            options = InvestmentsTransactionsGetRequestOptions(
+                count=500, offset=len(all_txns)
+            )
+            page = client.investments_transactions_get(
+                InvestmentsTransactionsGetRequest(
+                    access_token=access_token,
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    options=options,
+                )
+            )
+            all_txns.extend(page.investment_transactions)
+
+        with get_db() as conn:
+            for txn in all_txns:
+                acct = conn.execute(
+                    "SELECT id FROM accounts WHERE plaid_account_id = ?", (txn.account_id,)
+                ).fetchone()
+                if not acct:
+                    continue
+                date_str = txn.date.isoformat() if hasattr(txn.date, "isoformat") else str(txn.date)
+                conn.execute("""
+                    INSERT INTO plaid_investment_transactions
+                        (investment_transaction_id, account_id, security_id, date, name,
+                         quantity, amount, fees, type, subtype, cancel_transaction_id, iso_currency_code)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(investment_transaction_id) DO UPDATE SET
+                        amount                = excluded.amount,
+                        fees                  = excluded.fees,
+                        cancel_transaction_id = excluded.cancel_transaction_id
+                """, (
+                    txn.investment_transaction_id,
+                    acct["id"],
+                    txn.security_id,
+                    date_str,
+                    txn.name,
+                    txn.quantity,
+                    txn.amount,
+                    txn.fees,
+                    txn.type,
+                    txn.subtype,
+                    txn.cancel_transaction_id,
+                    txn.iso_currency_code or "USD",
+                ))
+
+        logger.info(f"Investment transactions: item {item_db_id}  {len(all_txns)} txns")
+
+    except Exception as e:
+        logger.warning(f"investment_transactions_get failed for item {item_db_id}: {e}")
 
 
 def _take_net_worth_snapshot(today: str):

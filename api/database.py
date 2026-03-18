@@ -116,6 +116,52 @@ CREATE TABLE IF NOT EXISTS manual_holdings (
     notes             TEXT,
     created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS plaid_securities (
+    id                INTEGER PRIMARY KEY,
+    security_id       TEXT UNIQUE NOT NULL,
+    name              TEXT,
+    ticker_symbol     TEXT,
+    type              TEXT,
+    close_price       REAL,
+    close_price_as_of TEXT,
+    iso_currency_code TEXT DEFAULT 'USD',
+    cusip             TEXT,
+    isin              TEXT,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS plaid_holdings (
+    id                       INTEGER PRIMARY KEY,
+    account_id               INTEGER NOT NULL REFERENCES accounts(id),
+    security_id              TEXT NOT NULL,
+    institution_value        REAL,
+    institution_price        REAL,
+    institution_price_as_of  TEXT,
+    quantity                 REAL,
+    cost_basis               REAL,
+    iso_currency_code        TEXT DEFAULT 'USD',
+    snapped_at               DATE NOT NULL,
+    created_at               DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(account_id, security_id, snapped_at)
+);
+
+CREATE TABLE IF NOT EXISTS plaid_investment_transactions (
+    id                        INTEGER PRIMARY KEY,
+    investment_transaction_id TEXT UNIQUE NOT NULL,
+    account_id                INTEGER NOT NULL REFERENCES accounts(id),
+    security_id               TEXT,
+    date                      TEXT NOT NULL,
+    name                      TEXT,
+    quantity                  REAL,
+    amount                    REAL,
+    fees                      REAL,
+    type                      TEXT,
+    subtype                   TEXT,
+    cancel_transaction_id     TEXT,
+    iso_currency_code         TEXT DEFAULT 'USD',
+    created_at                DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 # Run these migrations on existing databases to add new columns
@@ -132,6 +178,25 @@ MIGRATIONS = [
     "ALTER TABLE account_balances ADD COLUMN unit_price REAL",
     "CREATE TABLE IF NOT EXISTS manual_holdings (id INTEGER PRIMARY KEY AUTOINCREMENT, manual_entry_id INTEGER NOT NULL REFERENCES manual_entries(id) ON DELETE CASCADE, name TEXT NOT NULL, ticker TEXT, asset_class TEXT, shares REAL, price REAL, value REAL, pct_assets REAL, principal REAL, gain_loss_dollars REAL, gain_loss_pct REAL, notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)",
     "ALTER TABLE manual_entries ADD COLUMN summary_json TEXT",
+    """CREATE TABLE IF NOT EXISTS plaid_securities (
+        id INTEGER PRIMARY KEY, security_id TEXT UNIQUE NOT NULL,
+        name TEXT, ticker_symbol TEXT, type TEXT, close_price REAL,
+        close_price_as_of TEXT, iso_currency_code TEXT DEFAULT 'USD',
+        cusip TEXT, isin TEXT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)""",
+    """CREATE TABLE IF NOT EXISTS plaid_holdings (
+        id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id),
+        security_id TEXT NOT NULL, institution_value REAL, institution_price REAL,
+        institution_price_as_of TEXT, quantity REAL, cost_basis REAL,
+        iso_currency_code TEXT DEFAULT 'USD', snapped_at DATE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(account_id, security_id, snapped_at))""",
+    """CREATE TABLE IF NOT EXISTS plaid_investment_transactions (
+        id INTEGER PRIMARY KEY, investment_transaction_id TEXT UNIQUE NOT NULL,
+        account_id INTEGER NOT NULL REFERENCES accounts(id), security_id TEXT,
+        date TEXT NOT NULL, name TEXT, quantity REAL, amount REAL, fees REAL,
+        type TEXT, subtype TEXT, cancel_transaction_id TEXT,
+        iso_currency_code TEXT DEFAULT 'USD',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP)""",
 ]
 
 

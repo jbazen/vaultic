@@ -124,3 +124,132 @@ async def transactions(
             LIMIT ? OFFSET ?
         """, (account_id, limit, offset)).fetchall()
     return [dict(row) for row in rows]
+
+
+@router.get("/{account_id}/holdings")
+async def account_holdings(
+    account_id: int,
+    _user: str = Depends(get_current_user),
+):
+    """
+    Current Plaid investment holdings for one account, joined with security
+    metadata. Includes computed gain/loss and pct_assets relative to account total.
+    Returns the most recent snapshot date's holdings.
+    """
+    with get_db() as conn:
+        acct = conn.execute(
+            "SELECT id FROM accounts WHERE id = ? AND is_active = 1", (account_id,)
+        ).fetchone()
+        if not acct:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        rows = conn.execute("""
+            SELECT
+                h.security_id,
+                s.name,
+                s.ticker_symbol,
+                s.type          AS security_type,
+                s.cusip,
+                s.isin,
+                h.institution_value,
+                h.institution_price,
+                h.institution_price_as_of,
+                h.quantity,
+                h.cost_basis,
+                h.iso_currency_code,
+                h.snapped_at,
+                CASE
+                    WHEN h.cost_basis IS NOT NULL AND h.cost_basis > 0
+                    THEN h.institution_value - h.cost_basis
+                    ELSE NULL
+                END AS gain_loss_dollars,
+                CASE
+                    WHEN h.cost_basis IS NOT NULL AND h.cost_basis > 0
+                    THEN ((h.institution_value - h.cost_basis) / h.cost_basis) * 100
+                    ELSE NULL
+                END AS gain_loss_pct
+            FROM plaid_holdings h
+            LEFT JOIN plaid_securities s ON s.security_id = h.security_id
+            WHERE h.account_id = ?
+              AND h.snapped_at = (
+                  SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_id = ?
+              )
+            ORDER BY h.institution_value DESC NULLS LAST
+        """, (account_id, account_id)).fetchall()
+
+        total_row = conn.execute("""
+            SELECT COALESCE(SUM(institution_value), 0) AS total
+            FROM plaid_holdings
+            WHERE account_id = ?
+              AND snapped_at = (SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_id = ?)
+        """, (account_id, account_id)).fetchone()
+        total_value = total_row["total"] if total_row else 0.0
+
+    holdings = []
+    for row in rows:
+        h = dict(row)
+        # Compute percentage of account total
+        if total_value and h.get("institution_value"):
+            h["pct_assets"] = (h["institution_value"] / total_value) * 100
+        else:
+            h["pct_assets"] = None
+        holdings.append(h)
+
+    return {"holdings": holdings, "total_value": total_value}
+
+
+@router.get("/{account_id}/holdings/history")
+async def holdings_history(
+    account_id: int,
+    security_id: str = Query(...),
+    days: int = Query(default=90, le=730),
+    _user: str = Depends(get_current_user),
+):
+    """
+    Daily price/value history for a single holding within an account.
+    Useful for plotting the performance of an individual position over time.
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT snapped_at, institution_price, institution_value, quantity, cost_basis
+            FROM plaid_holdings
+            WHERE account_id = ? AND security_id = ?
+              AND snapped_at >= date('now', '-' || ? || ' days')
+            ORDER BY snapped_at ASC
+        """, (account_id, security_id, days)).fetchall()
+    return [dict(row) for row in rows]
+
+
+@router.get("/{account_id}/investment-transactions")
+async def investment_transactions(
+    account_id: int,
+    limit: int = Query(default=100, le=500),
+    offset: int = Query(default=0),
+    _user: str = Depends(get_current_user),
+):
+    """
+    Investment transaction history (buy/sell/dividend/contribution/transfer)
+    for one account, joined with security name and ticker for display.
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT
+                it.investment_transaction_id,
+                it.date,
+                it.name,
+                it.type,
+                it.subtype,
+                it.quantity,
+                it.amount,
+                it.fees,
+                it.iso_currency_code,
+                it.cancel_transaction_id,
+                s.name          AS security_name,
+                s.ticker_symbol AS ticker
+            FROM plaid_investment_transactions it
+            LEFT JOIN plaid_securities s ON s.security_id = it.security_id
+            WHERE it.account_id = ?
+            ORDER BY it.date DESC
+            LIMIT ? OFFSET ?
+        """, (account_id, limit, offset)).fetchall()
+    return [dict(row) for row in rows]
