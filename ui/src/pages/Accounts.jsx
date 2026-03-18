@@ -51,6 +51,12 @@ function isLiability(type) {
   return type === "credit" || type === "loan";
 }
 
+// Detect retirement accounts by name — used for PDF-imported entries whose category
+// is always "invested". Matches "401k", "Roth IRA", "IRA Rollover", "Insperity 401k Plan", etc.
+function isRetirementName(name) {
+  return /401[\s(]?k|roth|\bira\b|rollover ira|pension/i.test(name || "");
+}
+
 // ── Shared: EditableNotes ──────────────────────────────────────────────────────
 // Inline pencil-click editor for account descriptions/notes.
 // Renders inline so it can sit on the same line as the type badge.
@@ -361,7 +367,9 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
           )}
           {/* Badge + notes + imported date all on one meta line */}
           <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px", marginLeft: hasDetails ? 18 : 0 }}>
-            <span className="badge badge-investment">invested</span>
+            <span className={`badge ${isRetirementName(entry.name) ? "badge-retirement" : "badge-investment"}`}>
+              {isRetirementName(entry.name) ? "retirement" : "invested"}
+            </span>
             {excluded && (
               <span style={{ fontSize: 11, color: "#f59e0b", background: "#f59e0b22", borderRadius: 4, padding: "2px 6px", fontWeight: 600 }}>
                 excluded

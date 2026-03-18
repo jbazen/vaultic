@@ -283,11 +283,12 @@
   letter-spacing: 0.4px;
 }
 
-.badge-investment { background: rgba(79,142,247,0.15);  color: var(--accent); }
-.badge-depository { background: rgba(52,211,153,0.15);  color: var(--green); }
-.badge-credit     { background: rgba(248,113,113,0.15); color: var(--red); }
-.badge-loan       { background: rgba(251,191,36,0.15);  color: var(--yellow); }
-.badge-crypto     { background: rgba(251,146,60,0.15);  color: #fb923c; }
+.badge-investment  { background: rgba(79,142,247,0.15);  color: var(--accent); }
+.badge-retirement  { background: rgba(167,139,250,0.15); color: #a78bfa; }
+.badge-depository  { background: rgba(52,211,153,0.15);  color: var(--green); }
+.badge-credit      { background: rgba(248,113,113,0.15); color: var(--red); }
+.badge-loan        { background: rgba(251,191,36,0.15);  color: var(--yellow); }
+.badge-crypto      { background: rgba(251,146,60,0.15);  color: #fb923c; }
 
 /* ── Mobile ─────────────────────────────────── */
 

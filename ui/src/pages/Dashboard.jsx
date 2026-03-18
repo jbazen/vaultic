@@ -81,6 +81,13 @@ const PIE_CATS = {
 const RETIREMENT_SUBTYPES = new Set(["401k", "ira", "roth", "pension"]);
 const SAVINGS_SUBTYPES    = new Set(["savings", "money market", "cd", "prepaid", "hsa"]);
 
+// Match account names containing retirement keywords — used to classify PDF-imported
+// manual entries (which all land in category "invested") into the correct pie bucket.
+// Catches "Insperity 401k Plan", "Roth IRA", "IRA Rollover", "Traditional IRA", etc.
+function isRetirementName(name) {
+  return /401[\s(]?k|roth|\bira\b|rollover ira|pension/i.test(name || "");
+}
+
 // Compute dollar totals per category from live account + manual entry data.
 // Liabilities (credit/loan) are excluded — this chart shows where assets are, not net worth.
 function computeAllocation(accounts, manualEntries) {
@@ -104,8 +111,11 @@ function computeAllocation(accounts, manualEntries) {
     if (e.exclude_from_net_worth) continue;
     const val = e.value || 0;
     if (val <= 0) continue;
-    if (e.category === "invested")                                       out.other_investments += val;
-    else if (e.category === "liquid")                                    out.liquid_cash += val;
+    if (e.category === "invested") {
+      // Route retirement accounts (401k, IRA, Roth, etc.) separately from other investments
+      if (isRetirementName(e.name)) out.retirement += val;
+      else out.other_investments += val;
+    } else if (e.category === "liquid")                                  out.liquid_cash += val;
     else if (e.category === "crypto")                                    out.crypto += val;
     else if (e.category === "home_value" || e.category === "real_estate") out.real_estate += val;
     else if (["car_value", "vehicles", "other_asset"].includes(e.category)) out.other_assets += val;
