@@ -374,8 +374,8 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
           )}
           {/* Badge + notes + imported date all on one meta line */}
           <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px", marginLeft: hasDetails ? 18 : 0 }}>
-            <span className={`badge ${isRetirementName(entry.name) ? "badge-retirement" : "badge-investment"}`}>
-              {isRetirementName(entry.name) ? "retirement" : "invested"}
+            <span className={`badge ${isRetirementAccount(null, entry.name) ? "badge-retirement" : "badge-investment"}`}>
+              {isRetirementAccount(null, entry.name) ? "retirement" : "invested"}
             </span>
             {excluded && (
               <span style={{ fontSize: 11, color: "#f59e0b", background: "#f59e0b22", borderRadius: 4, padding: "2px 6px", fontWeight: 600 }}>
