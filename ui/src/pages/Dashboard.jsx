@@ -193,12 +193,8 @@ function ManualAccountRow({ entry, onRenamed, badge = "invested", badgeClass = "
         <div className="account-meta">
           <span className={`badge ${badgeClass}`}>{badge}</span>
           {entry.notes && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>{entry.notes}</span>}
+          {entry.entered_at && <span style={{ marginLeft: 6, color: "var(--text2)", fontSize: 12 }}>· Imported {fmtDate(entry.entered_at)}</span>}
         </div>
-        {entry.entered_at && (
-          <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 2 }}>
-            Imported {fmtDate(entry.entered_at)}
-          </div>
-        )}
       </div>
       <div className={`account-balance ${negative ? "liability" : ""}`}>
         {negative ? `-${fmt(entry.value)}` : fmt(entry.value)}
@@ -407,6 +403,35 @@ export default function Dashboard() {
             );
           })}
         </div>
+
+        {/* Credit score, home value, car value — compact inline row in hero */}
+        {(creditScore || homeValue || carValue) && (
+          <div style={{ display: "flex", gap: 28, flexWrap: "wrap", paddingTop: 14, marginTop: 10, borderTop: "1px solid var(--border)" }}>
+            {creditScore && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>Credit Score</div>
+                <span style={{ fontSize: 22, fontWeight: 800, color: creditScore.value >= 750 ? "var(--green)" : creditScore.value >= 670 ? "var(--yellow)" : "var(--red)" }}>
+                  {creditScore.value}
+                </span>
+                <span style={{ fontSize: 12, color: "var(--text2)", marginLeft: 6 }}>
+                  {creditScore.value >= 800 ? "Exceptional" : creditScore.value >= 750 ? "Very Good" : creditScore.value >= 700 ? "Good" : creditScore.value >= 670 ? "Fair" : "Needs Work"}
+                </span>
+              </div>
+            )}
+            {homeValue && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>🏠 Home</div>
+                <span style={{ fontSize: 22, fontWeight: 700, color: "#a78bfa" }}>{fmt(homeValue.value)}</span>
+              </div>
+            )}
+            {carValue && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>🚗 Car</div>
+                <span style={{ fontSize: 22, fontWeight: 700, color: "#fbbf24" }}>{fmt(carValue.value)}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Net Worth Chart ── */}
@@ -417,54 +442,21 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* ── Credit Score + Key Assets ── */}
-      {(creditScore || homeValue || carValue) && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12, marginBottom: 20 }}>
-          {creditScore && (
-            <div className="card" style={{ margin: 0, textAlign: "center" }}>
-              <div className="card-title">Credit Score</div>
-              <div style={{ fontSize: 48, fontWeight: 800, color: creditScore.value >= 750 ? "var(--green)" : creditScore.value >= 670 ? "var(--yellow)" : "var(--red)" }}>
-                {creditScore.value}
-              </div>
-              <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 4 }}>
-                {creditScore.value >= 800 ? "Exceptional" : creditScore.value >= 750 ? "Very Good" : creditScore.value >= 700 ? "Good" : creditScore.value >= 670 ? "Fair" : "Needs Work"}
-              </div>
-            </div>
-          )}
-          {homeValue && (
-            <div className="card" style={{ margin: 0 }}>
-              <div className="card-title">🏠 Home Value</div>
-              <div style={{ fontSize: 28, fontWeight: 700, color: "#a78bfa" }}>{fmt(homeValue.value)}</div>
-              {homeValue.notes && <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4 }}>{homeValue.notes}</div>}
-            </div>
-          )}
-          {carValue && (
-            <div className="card" style={{ margin: 0 }}>
-              <div className="card-title">🚗 Car Value</div>
-              <div style={{ fontSize: 28, fontWeight: 700, color: "#fbbf24" }}>{fmt(carValue.value)}</div>
-              {carValue.notes && <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 4 }}>{carValue.notes}</div>}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Connected Accounts ── */}
-      <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>Connected Accounts</div>
-        </div>
+      {/* ── Accounts: 2-column grid, each institution/section its own card ── */}
+      <div className="account-grid">
+        {/* One card per Plaid/Coinbase institution */}
         {accounts.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text2)" }}>
+          <div className="card" style={{ margin: 0, gridColumn: "1 / -1", textAlign: "center", padding: "24px 0", color: "var(--text2)" }}>
             No accounts connected. Click <strong>+ Connect Account</strong> above.
           </div>
         ) : (
           Object.entries(grouped).map(([institution, accts]) => {
             const item = plaidItems.find(i => i.institution_name === institution);
             return (
-              <div key={institution} style={{ marginBottom: 20 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <div className="card" key={institution} style={{ margin: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                   <div>
-                    <span style={{ fontWeight: 600, fontSize: 15 }}>{institution}</span>
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>{institution}</span>
                     {item?.last_synced_at && (
                       <span style={{ fontSize: 11, color: "var(--text2)", marginLeft: 10 }}>
                         synced {fmtDate(item.last_synced_at)}
@@ -485,59 +477,64 @@ export default function Dashboard() {
             );
           })
         )}
-      </div>
 
-      {/* ── Manual Investment Accounts (PDF imported) ── */}
-      {manualInvested.length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>
-            Investment Accounts (Imported)
-          </div>
-          {allHoldingsTotal > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
-                Portfolio Allocation
+        {/* Investment Accounts (PDF imported) */}
+        {manualInvested.length > 0 && (
+          <div className="card" style={{ margin: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Investment Accounts (Imported)</div>
+            {allHoldingsTotal > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
+                  Portfolio Allocation
+                </div>
+                <AllocationBar allocation={allocationByClass} total={allHoldingsTotal} />
               </div>
-              <AllocationBar allocation={allocationByClass} total={allHoldingsTotal} />
+            )}
+            <div className="account-list">
+              {manualInvested.map(e => <ManualAccountRow key={e.id} entry={e} onRenamed={load} />)}
             </div>
-          )}
-          <div className="account-list">
-            {manualInvested.map(e => (
-              <ManualAccountRow key={e.id} entry={e} onRenamed={load} />
-            ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ── HSA / Liquid (PDF imported) ── */}
-      {manualLiquid.length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>HSA / Cash Accounts (Imported)</div>
-          <div className="account-list">
-            {manualLiquid.map(e => (
-              <ManualAccountRow key={e.id} entry={e} onRenamed={load}
-                badge="liquid" badgeClass="badge-depository" />
-            ))}
+        {/* HSA / Cash Accounts */}
+        {manualLiquid.length > 0 && (
+          <div className="card" style={{ margin: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>HSA / Cash Accounts (Imported)</div>
+            <div className="account-list">
+              {manualLiquid.map(e => (
+                <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                  badge="liquid" badgeClass="badge-depository" />
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* ── Other Assets & Liabilities ── */}
-      {(otherAssets.length > 0 || liabilities.length > 0) && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 14 }}>Other Assets & Liabilities</div>
-          <div className="account-list">
-            {otherAssets.map(e => (
-              <ManualAccountRow key={e.id} entry={e} onRenamed={load}
-                badge="asset" badgeClass="badge-depository" />
-            ))}
-            {liabilities.map(e => (
-              <ManualAccountRow key={e.id} entry={e} onRenamed={load}
-                badge="liability" badgeClass="badge-credit" negative />
-            ))}
+        {/* Liabilities (Mortgage, Loans) */}
+        {liabilities.length > 0 && (
+          <div className="card" style={{ margin: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Liabilities</div>
+            <div className="account-list">
+              {liabilities.map(e => (
+                <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                  badge="liability" badgeClass="badge-credit" negative />
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Other Assets */}
+        {otherAssets.length > 0 && (
+          <div className="card" style={{ margin: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Other Assets</div>
+            <div className="account-list">
+              {otherAssets.map(e => (
+                <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                  badge="asset" badgeClass="badge-depository" />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── Recent Transactions ── */}
       {transactions.length > 0 && (
