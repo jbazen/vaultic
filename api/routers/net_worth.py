@@ -15,8 +15,10 @@ async def latest(_user: str = Depends(get_current_user)):
     if not row:
         return {"message": "No data yet — connect accounts and sync to build your first snapshot."}
     d = dict(row)
-    # Investable = gross financial assets only (liquid + invested + crypto + other_assets)
-    # Excludes real estate, vehicles, AND liabilities (mortgage shouldn't reduce investable)
+    # Investable = gross financial assets only (liquid + invested + crypto + other_assets).
+    # Intentionally excludes real estate and vehicles (illiquid, can't be redeployed easily).
+    # Also excludes liabilities: a mortgage balance is offset by the home value already
+    # captured in real_estate — subtracting it here would incorrectly reduce investable assets.
     d["investable"] = (
         (d.get("liquid") or 0) +
         (d.get("invested") or 0) +
@@ -35,7 +37,8 @@ async def history(
     Net worth history for chart.
     - Returns daily points for <= 90 days of data
     - Collapses to one point per month (last snapshot of each month) for longer ranges
-    - Each row includes `investable` = total - real_estate - vehicles
+    - Each row includes `investable` = liquid + invested + crypto + other_assets
+      (same formula as /latest — excludes real estate, vehicles, and liabilities)
     - Max range: 3650 days (10 years)
     """
     with get_db() as conn:

@@ -233,7 +233,7 @@ async def sage_speak(body: SpeakRequest, _user: str = Depends(get_current_user))
             voice="fable",
             input=body.text[:4096],
             response_format="mp3",
-            speed=1.2,
+            speed=1.2,  # 1.2x feels natural for a financial advisor; 1.0 is too slow
         )
         return Response(response.content, media_type="audio/mpeg")
     except Exception as e:

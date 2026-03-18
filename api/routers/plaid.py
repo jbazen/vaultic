@@ -46,7 +46,12 @@ async def create_link_token(_user: str = Depends(get_current_user)):
         req = LinkTokenCreateRequest(
             user=LinkTokenCreateRequestUser(client_user_id="vaultic-user"),
             client_name="Vaultic",
+            # Core products: always requested. Plaid requires these at link creation time.
             products=[Products("transactions"), Products("investments")],
+            # optional_products: requested opportunistically. Plaid will enable liabilities
+            # if the institution supports it, but won't block the link flow if it doesn't.
+            # Using optional_products (not products) avoids a link failure for institutions
+            # like Vanguard that don't support the liabilities product.
             optional_products=[Products("liabilities")],
             country_codes=[CountryCode("US")],
             language="en",

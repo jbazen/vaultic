@@ -19,13 +19,72 @@ class TestNetWorth:
         assert res.status_code == 200
 
     def test_latest_includes_investable_field(self, client, auth_headers):
-        """investable = total - real_estate - vehicles (liquid + invested assets only)."""
+        """investable = liquid + invested + crypto + other_assets (not total - real_estate - vehicles)."""
         res = client.get("/api/net-worth/latest", headers=auth_headers)
         assert res.status_code == 200
         data = res.json()
         # Either no data yet (message string) or a snapshot dict with investable
         if isinstance(data, dict) and "total" in data:
             assert "investable" in data
+
+    def test_investable_formula_excludes_real_estate_and_vehicles(self, client, auth_headers):
+        """investable should be liquid+invested+crypto+other_assets — not total minus real_estate/vehicles."""
+        from api import sync
+        from datetime import date
+
+        today = date.today().isoformat()
+        # Write a snapshot directly so we control all values
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO net_worth_snapshots
+                    (snapped_at, total, liquid, invested, crypto, real_estate, vehicles, liabilities, other_assets)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(snapped_at) DO UPDATE SET
+                    total=excluded.total, liquid=excluded.liquid, invested=excluded.invested,
+                    crypto=excluded.crypto, real_estate=excluded.real_estate,
+                    vehicles=excluded.vehicles, liabilities=excluded.liabilities,
+                    other_assets=excluded.other_assets
+            """, (today, 600000, 50000, 300000, 10000, 400000, 20000, 180000, 5000))
+
+        res = client.get("/api/net-worth/latest", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "investable" in data
+        # Expected: liquid(50k) + invested(300k) + crypto(10k) + other_assets(5k) = 365k
+        # NOT: total(600k) - real_estate(400k) - vehicles(20k) = 180k (which is wrong)
+        # NOT: 365k - liabilities(180k) = 185k (liabilities must NOT reduce investable)
+        expected = 50000 + 300000 + 10000 + 5000  # 365000
+        assert data["investable"] == expected, (
+            f"investable={data['investable']}, expected={expected}. "
+            "Liabilities or real_estate/vehicles should not reduce investable assets."
+        )
+
+    def test_investable_excludes_liabilities(self, client, auth_headers):
+        """Mortgage/loan liabilities must NOT reduce investable — investable is a gross asset figure."""
+        from datetime import date
+        from api.database import get_db
+
+        today = date.today().isoformat()
+        # Scenario: $100k liquid, $200k mortgage. investable should be $100k, not -$100k.
+        with get_db() as conn:
+            conn.execute("""
+                INSERT INTO net_worth_snapshots
+                    (snapped_at, total, liquid, invested, crypto, real_estate, vehicles, liabilities, other_assets)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(snapped_at) DO UPDATE SET
+                    total=excluded.total, liquid=excluded.liquid, invested=excluded.invested,
+                    crypto=excluded.crypto, real_estate=excluded.real_estate,
+                    vehicles=excluded.vehicles, liabilities=excluded.liabilities,
+                    other_assets=excluded.other_assets
+            """, (today, -100000, 100000, 0, 0, 0, 0, 200000, 0))
+
+        res = client.get("/api/net-worth/latest", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data.get("investable") == 100000, (
+            "Liabilities should not be subtracted from investable assets"
+        )
 
     def test_history_authenticated_returns_list(self, client, auth_headers):
         res = client.get("/api/net-worth/history", headers=auth_headers)
@@ -93,6 +152,42 @@ class TestManualEntries:
         for entry in res.json():
             assert "holdings" in entry
             assert isinstance(entry["holdings"], list)
+
+    def test_exclude_toggle_endpoint(self, client, auth_headers):
+        """PATCH /api/manual/{id}/exclude toggles exclude_from_net_worth on and off."""
+        # Create a manual entry to toggle
+        res = client.post("/api/manual", headers=auth_headers, json={
+            "name": "Exclude Toggle Test",
+            "category": "invested",
+            "value": 50000.0,
+        })
+        assert res.status_code == 200
+
+        entries = client.get("/api/manual", headers=auth_headers).json()
+        entry = next((e for e in entries if e["name"] == "Exclude Toggle Test"), None)
+        assert entry is not None
+        entry_id = entry["id"]
+        assert entry["exclude_from_net_worth"] == 0  # starts included
+
+        # Toggle on (exclude)
+        res = client.patch(f"/api/manual/{entry_id}/exclude", headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["exclude_from_net_worth"] == 1
+
+        # Toggle off (re-include)
+        res = client.patch(f"/api/manual/{entry_id}/exclude", headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["exclude_from_net_worth"] == 0
+
+    def test_exclude_toggle_requires_auth(self, client):
+        """Exclude endpoint should reject unauthenticated requests."""
+        res = client.patch("/api/manual/1/exclude")
+        assert res.status_code == 401
+
+    def test_exclude_toggle_nonexistent_entry_returns_404(self, client, auth_headers):
+        """Toggling a non-existent entry ID should return 404."""
+        res = client.patch("/api/manual/999999/exclude", headers=auth_headers)
+        assert res.status_code == 404
 
     def test_delete_entry(self, client, auth_headers):
         # Add an entry

@@ -193,7 +193,6 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
     Replaces any existing manual entry with the same name to prevent duplicates
     when re-importing an updated statement."""
     from datetime import date
-    import json as _json
     today = date.today().isoformat()
     saved = 0
     with get_db() as conn:
@@ -203,7 +202,7 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             value = float(e.get("value", 0))
             notes = str(e.get("notes", ""))[:200]
             summary = e.get("activity_summary")
-            summary_json = _json.dumps(summary) if summary else None
+            summary_json = json.dumps(summary) if summary else None
             if not name:
                 continue
             # Delete existing entry with same name so re-imports don't stack up.

@@ -1,4 +1,5 @@
 """Manual entries: home value, car value, credit score, custom assets/liabilities, PDF-imported investments."""
+import json
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -30,7 +31,6 @@ async def list_entries(_user: str = Depends(get_current_user)):
         rows = conn.execute(
             "SELECT * FROM manual_entries ORDER BY category, entered_at DESC"
         ).fetchall()
-        import json as _json
         entries = [dict(row) for row in rows]
         for entry in entries:
             holding_rows = conn.execute(
@@ -41,7 +41,7 @@ async def list_entries(_user: str = Depends(get_current_user)):
             # Parse summary_json string back to object for the frontend
             if entry.get("summary_json"):
                 try:
-                    entry["activity_summary"] = _json.loads(entry["summary_json"])
+                    entry["activity_summary"] = json.loads(entry["summary_json"])
                 except Exception:
                     entry["activity_summary"] = None
             else:
@@ -68,8 +68,12 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
 
 @router.patch("/{entry_id}/exclude")
 async def toggle_exclude(entry_id: int, _user: str = Depends(get_current_user)):
-    """Toggle exclude_from_net_worth for an entry (e.g. consolidated portfolio summaries
-    that should display but not double-count individual accounts)."""
+    """Toggle exclude_from_net_worth for an entry.
+    Use case: a PDF import may produce both an "Overall Portfolio" summary entry AND
+    separate per-account entries (e.g. IRA, college fund). The summary should display
+    for reference but must be excluded from the net worth total to avoid double-counting
+    the individual accounts that are already included.
+    """
     with get_db() as conn:
         row = conn.execute("SELECT exclude_from_net_worth FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
         if not row:

@@ -395,7 +395,9 @@ def _take_net_worth_snapshot(today: str):
             else:
                 liquid += bal  # catch-all depository
 
-        # Manual entries — latest value per category (excluding display-only entries)
+        # Manual entries — latest value per category (excluding display-only entries).
+        # home_value / car_value / other_liability use _latest (one value per category,
+        # most-recent entry wins) because users typically update a single running estimate.
         def _latest(category: str) -> float:
             r = conn.execute(
                 "SELECT value FROM manual_entries WHERE category = ? AND (exclude_from_net_worth IS NULL OR exclude_from_net_worth = 0) ORDER BY entered_at DESC LIMIT 1",
@@ -407,9 +409,11 @@ def _take_net_worth_snapshot(today: str):
         vehicles     = _latest("car_value")
         liabilities += _latest("other_liability")
 
-        # Sum all manually-entered values per category, skipping entries marked
-        # exclude_from_net_worth=1 (e.g. consolidated "Overall Portfolio" summaries
-        # that would double-count individual accounts already imported separately).
+        # invested / liquid / crypto / real_estate / vehicles use _sum_manual because a
+        # user can have multiple PDF-imported accounts in the same category (e.g. IRA + 529).
+        # All non-excluded entries are summed. Entries with exclude_from_net_worth=1 are
+        # skipped — typically consolidated "Overall Portfolio" summaries that would
+        # double-count individual accounts already imported as separate entries.
         def _sum_manual(category: str) -> float:
             r = conn.execute(
                 "SELECT COALESCE(SUM(value), 0) FROM manual_entries WHERE category = ? AND (exclude_from_net_worth IS NULL OR exclude_from_net_worth = 0)",

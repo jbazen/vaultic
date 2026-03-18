@@ -118,6 +118,39 @@ class TestPDFIngest:
                           files={"file": ("big.pdf", io.BytesIO(big_content), "application/pdf")})
         assert res.status_code in (400, 413)
 
+    def test_ingest_accepts_file_over_1mb(self, client, auth_headers):
+        """FastAPI limit is 20MB. Files between 1MB and 20MB must be accepted by the API.
+        (nginx is configured separately with client_max_body_size 25m — that's nginx, not FastAPI.)
+        """
+        # 2MB PDF — well within the 20MB FastAPI limit
+        content = b"%PDF-1.4 " + b"A" * (2 * 1024 * 1024)
+
+        fake_entries = [{"name": "Large PDF Account", "category": "invested", "value": 50000}]
+
+        with patch("pdfplumber.open") as mock_pdf, \
+             patch("api.routers.pdf.anthropic.Anthropic") as mock_cls, \
+             patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-test"}):
+
+            mock_page = MagicMock()
+            mock_page.extract_text.return_value = "Account: $50,000"
+            mock_pdf.return_value.__enter__.return_value.pages = [mock_page]
+
+            mock_block = MagicMock()
+            mock_block.text = json.dumps(fake_entries)
+            mock_resp = MagicMock()
+            mock_resp.content = [mock_block]
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.messages.create.return_value = mock_resp
+
+            res = client.post("/api/pdf/ingest",
+                              headers=auth_headers,
+                              files={"file": ("large.pdf", io.BytesIO(content), "application/pdf")})
+
+        # Should not be rejected for size (413) — only rejected if > 20MB
+        assert res.status_code != 413, "API should accept PDFs up to 20MB (nginx handles 25MB limit)"
+        assert res.status_code == 200
+
 
 class TestPDFSave:
     def test_save_requires_auth(self, client):
