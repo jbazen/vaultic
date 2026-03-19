@@ -7,20 +7,24 @@ Vaultic's /api/budget/import/json endpoint.
 SETUP
 -----
 1. Log into everydollar.com in your browser.
-2. Open DevTools (F12) → Network tab → navigate to any budget month.
-3. Find the getBudgetByDate request, right-click → Copy → Copy as cURL.
-4. From that cURL command, grab the full Cookie header value and paste it
-   into EVERYDOLLAR_COOKIE below.
-5. Get your Vaultic JWT token from the browser:
-   - Open vaulticsage.com, open DevTools → Console, run:
-     localStorage.getItem("vaultic_token")
-   - Paste the result into VAULTIC_TOKEN below.
-6. Set START_DATE to the earliest month you want to import.
-7. Run:  python scripts/import_everydollar_history.py
+2. Open DevTools (F12) → Network tab → filter by Fetch/XHR → navigate to
+   any budget month to trigger the request.
+3. Find the getBudgetByDate request → right-click → Copy → Copy as cURL (bash).
+4. From that cURL command:
+   a) Grab the value after -b '...' (the long cookie string) → paste into EVERYDOLLAR_COOKIES
+   b) Grab the value after -H 'x-csrf-token: ...' → paste into EVERYDOLLAR_CSRF_TOKEN
+5. Get your Vaultic JWT:
+   - Open vaulticsage.com → DevTools → Console → run:
+       localStorage.getItem("vaultic_token")
+   - Paste result into VAULTIC_TOKEN
+6. Set START_DATE to the earliest month you want (e.g. "2022-01-01")
+7. Run:
+       pip install requests python-dateutil
+       python scripts/import_everydollar_history.py
 
-The script prints a summary line for each month and a final total.
-It sleeps 1.5 seconds between EveryDollar requests to avoid hammering
-their servers.
+NOTE: The session cookie typically stays valid for ~30 minutes of inactivity.
+If the script hits a 401 mid-run, copy fresh cookies from the browser and
+re-run — re-importing months is safe (INSERT OR IGNORE prevents duplicates).
 """
 
 import time
@@ -31,20 +35,22 @@ from dateutil.relativedelta import relativedelta
 
 # ── CONFIG — fill these in ───────────────────────────────────────────────────
 
-# Paste the full Cookie header value from DevTools "Copy as cURL"
-# Example: "_everydollar_session=abc123; other_cookie=xyz"
-EVERYDOLLAR_COOKIE = "PASTE_YOUR_COOKIE_HERE"
+# Value after -b '...' in the cURL bash output (the long semicolon-separated string)
+EVERYDOLLAR_COOKIES = "PASTE_COOKIE_STRING_HERE"
 
-# Your Vaultic JWT token from localStorage.getItem("vaultic_token")
+# Value after -H 'x-csrf-token: ...' in the cURL bash output
+EVERYDOLLAR_CSRF_TOKEN = "PASTE_CSRF_TOKEN_HERE"
+
+# Your Vaultic JWT token from localStorage.getItem("vaultic_token") in browser console
 VAULTIC_TOKEN = "PASTE_YOUR_VAULTIC_TOKEN_HERE"
 
-# Earliest month to import (YYYY-MM-DD, will be rounded to 1st of month)
+# Earliest month to import — script loops from here to today
 START_DATE = "2023-01-01"
 
 # Your Vaultic base URL
 VAULTIC_BASE_URL = "https://vaulticsage.com"
 
-# Seconds to wait between EveryDollar fetches (be polite)
+# Seconds to wait between EveryDollar requests (be polite to their servers)
 SLEEP_SECONDS = 1.5
 
 # ── END CONFIG ────────────────────────────────────────────────────────────────
@@ -52,10 +58,15 @@ SLEEP_SECONDS = 1.5
 EVERYDOLLAR_URL = "https://www.everydollar.com/app/api/budgets/search/getBudgetByDate"
 
 EVERYDOLLAR_HEADERS = {
-    "Cookie": EVERYDOLLAR_COOKIE,
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.everydollar.com/app/budget",
+    "Cookie": EVERYDOLLAR_COOKIES,
+    "x-csrf-token": EVERYDOLLAR_CSRF_TOKEN,
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en-US,en;q=0.9",
+    "referer": "https://www.everydollar.com/app/budget",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
 }
 
 VAULTIC_HEADERS = {
@@ -123,7 +134,7 @@ def post_to_vaultic(budget_json: dict) -> dict | None:
 
 def main():
     # ── Validate config ───────────────────────────────────────────────────────
-    if "PASTE" in EVERYDOLLAR_COOKIE or "PASTE" in VAULTIC_TOKEN:
+    if "PASTE" in EVERYDOLLAR_COOKIES or "PASTE" in EVERYDOLLAR_CSRF_TOKEN or "PASTE" in VAULTIC_TOKEN:
         print("ERROR: Fill in EVERYDOLLAR_COOKIE and VAULTIC_TOKEN in the script before running.")
         return
 
