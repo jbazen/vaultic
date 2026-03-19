@@ -306,6 +306,12 @@ MIGRATIONS = [
     # existing data only if duplicates have been removed first (see cleanup script).
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_groups_name ON budget_groups(name)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_items_group_name ON budget_items(group_id, name)",
+    # Soft-delete flags: instead of hard-deleting groups/items (which would destroy
+    # budget_amounts and auto_rules history), we set is_deleted=1. The GET /{month}
+    # endpoint filters these out so deleted entries never appear in the UI, but
+    # budget_history and auto-rule data remain intact for Sage queries.
+    "ALTER TABLE budget_groups ADD COLUMN is_deleted INTEGER DEFAULT 0",
+    "ALTER TABLE budget_items ADD COLUMN is_deleted INTEGER DEFAULT 0",
 ]
 
 

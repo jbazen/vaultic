@@ -108,8 +108,11 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
                     WHERE month = ?
                 """, (month, prior_month["month"]))
 
+        # Exclude soft-deleted groups — is_deleted=1 means the user "deleted" the
+        # group from the UI; the row stays in DB to preserve budget_history references.
         groups = conn.execute(
-            "SELECT id, name, type, display_order FROM budget_groups ORDER BY display_order, name"
+            "SELECT id, name, type, display_order FROM budget_groups"
+            " WHERE is_deleted = 0 ORDER BY display_order, name"
         ).fetchall()
 
         result_groups = []
@@ -120,8 +123,10 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
         for group in groups:
             gid = group["id"]
 
+            # Exclude soft-deleted items — same logic as groups above.
             items_rows = conn.execute(
-                "SELECT id, name FROM budget_items WHERE group_id = ? ORDER BY display_order, name",
+                "SELECT id, name FROM budget_items"
+                " WHERE group_id = ? AND is_deleted = 0 ORDER BY display_order, name",
                 (gid,)
             ).fetchall()
 
@@ -265,9 +270,21 @@ async def update_group(group_id: int, body: dict, _user: str = Depends(get_curre
 
 @router.delete("/groups/{group_id}")
 async def delete_group(group_id: int, _user: str = Depends(get_current_user)):
-    """Delete a group. ON DELETE CASCADE removes all child items and their amounts."""
+    """Soft-delete a group and all its items.
+
+    Sets is_deleted=1 on the group and cascades the same flag to all child items.
+    Hard deletion is intentionally avoided: budget_amounts, budget_history, and
+    budget_auto_rules rows all reference item IDs — destroying them would corrupt
+    historical month views and Sage's spending knowledge.
+    """
     with get_db() as conn:
-        conn.execute("DELETE FROM budget_groups WHERE id = ?", (group_id,))
+        # Soft-delete all child items first so they stop appearing in any month's GET.
+        conn.execute(
+            "UPDATE budget_items SET is_deleted = 1 WHERE group_id = ?", (group_id,)
+        )
+        conn.execute(
+            "UPDATE budget_groups SET is_deleted = 1 WHERE id = ?", (group_id,)
+        )
     return {"status": "deleted"}
 
 
@@ -328,11 +345,18 @@ async def update_item(item_id: int, body: dict, _user: str = Depends(get_current
 
 @router.delete("/items/{item_id}")
 async def delete_item(item_id: int, _user: str = Depends(get_current_user)):
-    """Delete a line item. ON DELETE CASCADE removes its budget_amounts rows.
-    transaction_assignments rows survive but their item_id becomes NULL
-    (SET NULL FK) so transactions are not lost, just unassigned."""
+    """Soft-delete a line item.
+
+    Sets is_deleted=1 so the item no longer appears in any month's GET response.
+    The row and all associated budget_amounts / budget_auto_rules data are kept
+    intact so historical month views and Sage's spending knowledge remain correct.
+    transaction_assignments are not touched — those transactions will resurface in
+    the Unassigned panel since their item_id still points to the (now-hidden) item.
+    """
     with get_db() as conn:
-        conn.execute("DELETE FROM budget_items WHERE id = ?", (item_id,))
+        conn.execute(
+            "UPDATE budget_items SET is_deleted = 1 WHERE id = ?", (item_id,)
+        )
     return {"status": "deleted"}
 
 

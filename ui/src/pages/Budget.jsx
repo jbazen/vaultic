@@ -808,11 +808,15 @@ function GroupSection({ group, month, colorIndex, onUpdate }) {
             <div />
           </div>
 
-          {/* Item rows */}
-          {group.items.map(item => (
-            <ItemRow key={item.id} item={item} month={month}
-              groupType={group.type} showSpent={showSpent} onUpdate={onUpdate} />
-          ))}
+          {/* Item rows — auto-hide items with $0 planned AND $0 spent for this month.
+               Items from prior months that have no activity this month simply don't
+               appear; they'll show again in any month where they have data. */}
+          {group.items
+            .filter(i => i.planned > 0 || i.spent > 0)
+            .map(item => (
+              <ItemRow key={item.id} item={item} month={month}
+                groupType={group.type} showSpent={showSpent} onUpdate={onUpdate} />
+            ))}
 
           {/* Group totals row */}
           {group.items.length > 0 && (
@@ -882,16 +886,24 @@ export default function Budget() {
 
   const summary = budget?.summary;
   const groups = budget?.groups ?? [];
-  const hasGroups = groups.length > 0;
+  const hasGroups = groups.length > 0;  // true if any groups exist at all (for empty state)
 
   // Zero-based status
   const remainingToBudget = summary?.remaining_to_budget ?? 0;
   const fullyBudgeted = Math.abs(remainingToBudget) < 0.01;
 
+  // Auto-hide groups that have no items with planned > 0 or spent > 0 this month.
+  // Groups whose every item is $0/$0 for the viewed month are not shown — they'll
+  // reappear in any month where they have data. Deleted groups never come from the
+  // API (is_deleted=1 filtered server-side), so no extra check needed here.
+  const visibleGroups = groups.filter(
+    g => g.total_planned > 0 || g.total_spent > 0
+  );
+
   // Assign a stable color index to each expense group (income stays green)
   let expIdx = 0;
   const groupColorIdx = {};
-  groups.forEach(g => { if (g.type !== "income") groupColorIdx[g.id] = expIdx++; });
+  visibleGroups.forEach(g => { if (g.type !== "income") groupColorIdx[g.id] = expIdx++; });
 
   return (
     <div>
@@ -979,9 +991,9 @@ export default function Budget() {
       {!loading && hasGroups && (
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
 
-          {/* LEFT — budget groups list */}
+          {/* LEFT — budget groups list (only groups with activity this month) */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            {groups.map(g => (
+            {visibleGroups.map(g => (
               <GroupSection key={g.id} group={g} month={month}
                 colorIndex={groupColorIdx[g.id] ?? 0}
                 onUpdate={load} />
