@@ -33,3 +33,6 @@ Thumbs.db
 
 # A1.Flex hunter config (contains OCI credentials)
 .env.hunt
+
+# EveryDollar JSON imports (raw API responses — not for version control)
+imports/
