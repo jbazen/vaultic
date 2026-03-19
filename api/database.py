@@ -267,6 +267,40 @@ MIGRATIONS = [
         description TEXT,
         created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+    # ── Budget CSV import ──────────────────────────────────────────────────────
+    # budget_history: transactions imported from external budget CSV exports.
+    # These are NOT linked to Plaid transaction IDs — they come from a separate
+    # budgeting system and live in their own table for historical spending
+    # analysis and Sage queries.
+    """CREATE TABLE IF NOT EXISTS budget_history (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_name  TEXT NOT NULL,
+        item_id     INTEGER REFERENCES budget_items(id) ON DELETE SET NULL,
+        item_name   TEXT NOT NULL,
+        month       TEXT NOT NULL,
+        date        TEXT NOT NULL,
+        merchant    TEXT,
+        amount      REAL NOT NULL,
+        note        TEXT,
+        type        TEXT,
+        source_file TEXT,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # budget_auto_rules: merchant-to-budget-item mapping learned from imported
+    # CSVs and user corrections. Used by Sage to auto-categorize incoming
+    # Plaid transactions without manual assignment.
+    """CREATE TABLE IF NOT EXISTS budget_auto_rules (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        merchant    TEXT NOT NULL,
+        item_id     INTEGER REFERENCES budget_items(id) ON DELETE CASCADE,
+        match_count INTEGER DEFAULT 1,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(merchant, item_id)
+    )""",
+    # Add status column to transaction_assignments so rows can be distinguished
+    # between manually assigned ('manual') and auto-categorized ('auto') entries.
+    "ALTER TABLE transaction_assignments ADD COLUMN status TEXT DEFAULT 'manual'",
 ]
 
 

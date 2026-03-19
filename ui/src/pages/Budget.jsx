@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  getBudget, seedBudgetTemplate,
+  getBudget, seedBudgetTemplate, importBudgetCSV,
   createBudgetGroup, updateBudgetGroup, deleteBudgetGroup,
   createBudgetItem, updateBudgetItem, deleteBudgetItem,
   setBudgetAmount, getUnassignedTransactions, assignTransaction, unassignTransaction,
@@ -350,6 +350,165 @@ function UnassignedPanel({ month, allGroups, onAssign }) {
   );
 }
 
+// ── CSV Import Panel ──────────────────────────────────────────────────────────
+// Accepts multiple EveryDollar CSV files (one per month) and bulk-imports them.
+// Shows a result summary after upload: rows imported, months covered, rules seeded.
+function CSVImportPanel({ onImported, collapsed: initialCollapsed = true }) {
+  const [open, setOpen] = useState(!initialCollapsed);
+  const [files, setFiles] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef(null);
+
+  function addFiles(newFiles) {
+    const csvs = [...newFiles].filter(f => f.name.endsWith(".csv"));
+    if (!csvs.length) return;
+    setFiles(prev => {
+      // Deduplicate by name
+      const names = new Set(prev.map(f => f.name));
+      return [...prev, ...csvs.filter(f => !names.has(f.name))];
+    });
+    setResult(null);
+    setError(null);
+  }
+
+  function removeFile(name) {
+    setFiles(prev => prev.filter(f => f.name !== name));
+    setResult(null);
+  }
+
+  async function handleImport() {
+    if (!files.length) return;
+    setImporting(true);
+    setError(null);
+    try {
+      const res = await importBudgetCSV(files);
+      setResult(res);
+      setFiles([]);
+      onImported?.();
+    } catch (e) {
+      setError(e.message ?? "Import failed");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+      {/* Collapsible header */}
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 16px",
+          background: "var(--bg2)", cursor: "pointer", userSelect: "none" }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span style={{ color: "var(--text2)", fontSize: 11 }}>{open ? "▼" : "▶"}</span>
+        <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>Import EveryDollar CSV History</span>
+        <span style={{ fontSize: 12, color: "var(--text2)" }}>
+          Upload one or more monthly CSV exports to populate budget history and seed categories
+        </span>
+      </div>
+
+      {open && (
+        <div style={{ padding: "16px" }}>
+          {/* Drop zone */}
+          <div
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+            onClick={() => inputRef.current?.click()}
+            style={{
+              border: `2px dashed ${dragging ? "var(--accent)" : "var(--border)"}`,
+              borderRadius: 8, padding: "24px", textAlign: "center",
+              cursor: "pointer", background: dragging ? "var(--bg3)" : "transparent",
+              transition: "all 0.15s",
+            }}
+          >
+            <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
+            <div style={{ fontSize: 13, color: "var(--text2)" }}>
+              Drag &amp; drop CSV files here, or <span style={{ color: "var(--accent)", fontWeight: 600 }}>click to browse</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 4 }}>
+              EveryDollar export format — select multiple months at once
+            </div>
+            <input ref={inputRef} type="file" accept=".csv" multiple
+              style={{ display: "none" }}
+              onChange={e => addFiles(e.target.files)} />
+          </div>
+
+          {/* File queue */}
+          {files.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>
+                {files.length} file{files.length !== 1 ? "s" : ""} queued:
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {files.map(f => (
+                  <div key={f.name} style={{
+                    background: "var(--bg3)", border: "1px solid var(--border)",
+                    borderRadius: 20, padding: "3px 10px 3px 12px",
+                    fontSize: 12, display: "flex", alignItems: "center", gap: 6,
+                  }}>
+                    <span>{f.name}</span>
+                    <button onClick={e => { e.stopPropagation(); removeFile(f.name); }}
+                      style={{ background: "none", border: "none", color: "var(--text2)",
+                        cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+              <button className="btn btn-primary" style={{ marginTop: 12 }}
+                onClick={handleImport} disabled={importing}>
+                {importing ? "Importing…" : `Import ${files.length} file${files.length !== 1 ? "s" : ""}`}
+              </button>
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(239,68,68,0.1)",
+              borderRadius: 6, color: "var(--red)", fontSize: 13 }}>
+              {error}
+            </div>
+          )}
+
+          {/* Results summary */}
+          {result && (
+            <div style={{ marginTop: 12, padding: "14px 16px", background: "var(--bg3)",
+              borderRadius: 8, fontSize: 13 }}>
+              <div style={{ fontWeight: 700, color: "var(--green)", marginBottom: 8 }}>
+                ✓ Import complete
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", color: "var(--text2)" }}>
+                <div>Files processed: <strong style={{ color: "var(--text)" }}>{result.files_processed}</strong></div>
+                <div>Rows imported: <strong style={{ color: "var(--text)" }}>{result.rows_imported}</strong></div>
+                <div>Months covered: <strong style={{ color: "var(--text)" }}>{result.months_covered?.length ?? 0}</strong></div>
+                <div>Auto-rules seeded: <strong style={{ color: "var(--text)" }}>{result.rules_seeded}</strong></div>
+                {result.groups_created > 0 && (
+                  <div>Groups created: <strong style={{ color: "var(--text)" }}>{result.groups_created}</strong></div>
+                )}
+                {result.items_created > 0 && (
+                  <div>Items created: <strong style={{ color: "var(--text)" }}>{result.items_created}</strong></div>
+                )}
+              </div>
+              {result.months_covered?.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, color: "var(--text2)" }}>
+                  Months: {result.months_covered.sort().join(", ")}
+                </div>
+              )}
+              {result.errors?.length > 0 && (
+                <div style={{ marginTop: 8, color: "var(--red)", fontSize: 11 }}>
+                  {result.errors.length} row{result.errors.length !== 1 ? "s" : ""} skipped due to errors
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Budget Page ───────────────────────────────────────────────────────────────
 export default function Budget() {
   const [month, setMonth] = useState(currentMonth);
@@ -410,16 +569,20 @@ export default function Budget() {
       {loading && <div style={{ color: "var(--text2)", padding: "40px 0", textAlign: "center" }}>Loading…</div>}
 
       {!loading && !hasGroups && (
-        <div className="card" style={{ textAlign: "center", padding: "48px 24px" }}>
-          <div style={{ fontSize: 40, marginBottom: 16 }}>📋</div>
-          <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No budget categories yet</div>
-          <div style={{ color: "var(--text2)", fontSize: 14, marginBottom: 24 }}>
-            Start with a standard set of budget categories, or build your own from scratch.
+        <>
+          <div className="card" style={{ textAlign: "center", padding: "48px 24px", marginBottom: 16 }}>
+            <div style={{ fontSize: 40, marginBottom: 16 }}>📋</div>
+            <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No budget categories yet</div>
+            <div style={{ color: "var(--text2)", fontSize: 14, marginBottom: 24 }}>
+              Start with a standard set of budget categories, or import your EveryDollar history to auto-build them.
+            </div>
+            <button className="btn btn-primary" onClick={handleSeedTemplate} disabled={seeding}>
+              {seeding ? "Setting up…" : "Use standard categories"}
+            </button>
           </div>
-          <button className="btn btn-primary" onClick={handleSeedTemplate} disabled={seeding}>
-            {seeding ? "Setting up…" : "Use standard categories"}
-          </button>
-        </div>
+          {/* Show CSV importer expanded on empty state — importing history auto-creates categories */}
+          <CSVImportPanel onImported={load} collapsed={false} />
+        </>
       )}
 
       {!loading && hasGroups && (
@@ -481,6 +644,11 @@ export default function Budget() {
           {/* Unassigned transactions */}
           <div style={{ marginTop: 32 }}>
             <UnassignedPanel month={month} allGroups={groups} onAssign={load} />
+          </div>
+
+          {/* CSV history importer — collapsed by default when budget is already set up */}
+          <div style={{ marginTop: 16 }}>
+            <CSVImportPanel onImported={load} collapsed={true} />
           </div>
         </>
       )}

@@ -360,6 +360,22 @@ export async function getBudget(month) {
   const res = await apiFetch(`/api/budget/${month}`);
   return res.json();
 }
+// Bulk-import historical budget transaction CSVs. Accepts multiple files in one
+// request — creates groups/items, loads history, and seeds auto-categorization rules.
+export async function importBudgetCSV(files) {
+  const token = getToken();
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  const res = await fetch("/api/budget/import/csv", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (res.status === 401) { clearToken(); window.dispatchEvent(new Event("auth:logout")); throw new Error("Session expired"); }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Import failed"); }
+  return res.json();
+}
+
 export async function seedBudgetTemplate() {
   const res = await apiFetch("/api/budget/template", { method: "POST" });
   return res.json();

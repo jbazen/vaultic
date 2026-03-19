@@ -11,10 +11,14 @@ Tables used (created by migration — not here):
   transaction_assignments — links a Plaid transaction_id to a budget item
   transactions          — Plaid transactions; amount > 0 = outflow, amount < 0 = inflow
 """
+import csv
+import io
 import re
-from datetime import date
-from fastapi import APIRouter, Depends, HTTPException
+from collections import defaultdict
+from datetime import date, datetime
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from typing import List
 from api.dependencies import get_current_user
 from api.database import get_db
 
@@ -78,6 +82,32 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
     _validate_month(month)
 
     with get_db() as conn:
+        # ── Carryforward: if this month has no planned amounts at all, copy them
+        # from the most recent prior month that does. This means navigating to a
+        # new month always starts with last month's budget as a baseline rather
+        # than a blank slate — the zero-based approach requires every month to
+        # be planned, so seeding from the prior month saves significant re-entry.
+        has_any_planned = conn.execute(
+            "SELECT 1 FROM budget_amounts WHERE month = ? LIMIT 1", (month,)
+        ).fetchone()
+
+        if not has_any_planned:
+            # Find the most recent month before this one that has planned amounts
+            prior_month = conn.execute(
+                "SELECT month FROM budget_amounts WHERE month < ? ORDER BY month DESC LIMIT 1",
+                (month,)
+            ).fetchone()
+            if prior_month:
+                # Copy every planned amount from the prior month into this month.
+                # INSERT OR IGNORE so if the user has already set some amounts
+                # for this month (partial carryforward) we don't overwrite them.
+                conn.execute("""
+                    INSERT OR IGNORE INTO budget_amounts (item_id, month, planned)
+                    SELECT item_id, ?, planned
+                    FROM budget_amounts
+                    WHERE month = ?
+                """, (month, prior_month["month"]))
+
         groups = conn.execute(
             "SELECT id, name, type, display_order FROM budget_groups ORDER BY display_order, name"
         ).fetchall()
@@ -425,3 +455,202 @@ async def seed_template(_user: str = Depends(get_current_user)):
                 )
 
     return {"status": "seeded", "groups_created": groups_created}
+
+
+# ---------------------------------------------------------------------------
+# POST /import/csv — bulk import historical budget transactions from CSV files
+# ---------------------------------------------------------------------------
+
+@router.post("/import/csv")
+async def import_csv(
+    files: List[UploadFile] = File(...),
+    _user: str = Depends(get_current_user),
+):
+    """Import historical budget transactions from one or more CSV files.
+
+    Expected CSV columns (in any order, header row required):
+        Group, Item, Type, Date, Merchant, Amount, Note
+
+    Column semantics:
+      - Group   : top-level spending category (e.g. Housing, Food)
+      - Item    : line item within the group (e.g. Groceries, Mortgage / Rent)
+      - Type    : 'income', 'expense', or 'debt' ('debt' is mapped to 'expense')
+      - Date    : MM/DD/YYYY
+      - Merchant: payee name (used to build auto-categorization rules)
+      - Amount  : numeric; sign is ignored — all amounts are stored as positive
+      - Note    : optional free-text note
+
+    Side effects:
+      1. Creates budget_groups / budget_items that don't already exist.
+      2. Appends every parsed row to budget_history (no dedup — caller controls
+         which files to upload).
+      3. Seeds / increments budget_auto_rules for each unique (merchant, item_id)
+         pair so Sage can auto-categorize future Plaid transactions.
+      4. Inserts budget_amounts rows (planned = average monthly spend per item)
+         via INSERT OR IGNORE — existing planned amounts set by the user are
+         never overwritten.
+    """
+    rows_imported = 0
+    groups_created = 0
+    items_created = 0
+    rules_seeded = 0
+    months_seen: set[str] = set()
+
+    # merchant → item_id → count of occurrences seen across all uploaded files.
+    # Accumulated here so we can issue a single upsert per (merchant, item_id)
+    # pair after all files are processed.
+    merchant_item_counts: dict[tuple[str, int], int] = defaultdict(int)
+
+    # (item_id, month) → list of amounts — used later to compute average
+    # monthly spend for seeding planned amounts.
+    item_month_amounts: dict[tuple[int, str], list[float]] = defaultdict(list)
+
+    with get_db() as conn:
+        for upload in files:
+            raw_bytes = await upload.read()
+            text = raw_bytes.decode("utf-8", errors="ignore")
+            reader = csv.DictReader(io.StringIO(text))
+
+            for row in reader:
+                # Skip repeated header rows and blank group rows that some
+                # export formats insert as section separators.
+                raw_group = row.get("Group", "").strip()
+                if not raw_group or raw_group == "Group":
+                    continue
+
+                # Normalise group name — treat blank/untitled as "Other".
+                group_name = raw_group if raw_group.lower() != "untitled" else "Other"
+
+                item_name = row.get("Item", "").strip()
+                if not item_name:
+                    continue  # Line items without a name carry no useful data.
+
+                # Map 'debt' to 'expense' so the budget type taxonomy stays
+                # binary (income / expense) throughout the rest of the app.
+                raw_type = row.get("Type", "").strip().lower()
+                type_val = "expense" if raw_type == "debt" else raw_type or "expense"
+
+                # Parse MM/DD/YYYY → YYYY-MM-DD.
+                raw_date = row.get("Date", "").strip()
+                try:
+                    dt = datetime.strptime(raw_date, "%m/%d/%Y")
+                except ValueError:
+                    continue  # Skip rows with unparseable dates.
+                date_str = dt.strftime("%Y-%m-%d")
+                month = dt.strftime("%Y-%m")
+                months_seen.add(month)
+
+                # Store amounts as positive regardless of the export sign convention.
+                raw_amount = row.get("Amount", "0").strip().replace(",", "")
+                try:
+                    amount = abs(float(raw_amount))
+                except ValueError:
+                    amount = 0.0
+
+                merchant = row.get("Merchant", "").strip() or None
+                note = row.get("Note", "").strip() or None
+
+                # ── Ensure the group exists ──────────────────────────────────
+                # Group type: 'income' for the Income group, 'expense' for all others.
+                group_type = "income" if group_name.lower() == "income" else "expense"
+                conn.execute(
+                    "INSERT OR IGNORE INTO budget_groups (name, type, display_order) "
+                    "SELECT ?, ?, COALESCE(MAX(display_order), 0) + 1 FROM budget_groups",
+                    (group_name, group_type),
+                )
+                group_row = conn.execute(
+                    "SELECT id FROM budget_groups WHERE name = ?", (group_name,)
+                ).fetchone()
+                gid = group_row["id"]
+
+                # Track whether the INSERT above actually created a new row.
+                # SQLite's changes() returns 1 if the INSERT fired, 0 if IGNORE fired.
+                if conn.execute("SELECT changes() AS c").fetchone()["c"] > 0:
+                    groups_created += 1
+
+                # ── Ensure the line item exists within that group ─────────────
+                conn.execute(
+                    "INSERT OR IGNORE INTO budget_items (group_id, name, display_order) "
+                    "SELECT ?, ?, COALESCE(MAX(display_order), 0) + 1 "
+                    "FROM budget_items WHERE group_id = ?",
+                    (gid, item_name, gid),
+                )
+                item_row = conn.execute(
+                    "SELECT id FROM budget_items WHERE group_id = ? AND name = ?",
+                    (gid, item_name),
+                ).fetchone()
+                iid = item_row["id"]
+
+                if conn.execute("SELECT changes() AS c").fetchone()["c"] > 0:
+                    items_created += 1
+
+                # ── Append to history ─────────────────────────────────────────
+                conn.execute(
+                    """INSERT INTO budget_history
+                       (group_name, item_id, item_name, month, date,
+                        merchant, amount, note, type, source_file)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (group_name, iid, item_name, month, date_str,
+                     merchant, amount, note, type_val, upload.filename),
+                )
+                rows_imported += 1
+
+                # ── Accumulate merchant → item mapping counts ─────────────────
+                if merchant:
+                    merchant_item_counts[(merchant, iid)] += 1
+
+                # ── Accumulate per-item monthly amounts for planned seeding ───
+                item_month_amounts[(iid, month)].append(amount)
+
+        # ── Upsert auto-categorization rules ─────────────────────────────────
+        # One SQL round-trip per unique (merchant, item_id) pair seen across
+        # all uploaded files.
+        for (merchant, iid), count in merchant_item_counts.items():
+            existing = conn.execute(
+                "SELECT id FROM budget_auto_rules WHERE merchant = ? AND item_id = ?",
+                (merchant, iid),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE budget_auto_rules "
+                    "SET match_count = match_count + ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE merchant = ? AND item_id = ?",
+                    (count, merchant, iid),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO budget_auto_rules (merchant, item_id, match_count) "
+                    "VALUES (?, ?, ?)",
+                    (merchant, iid, count),
+                )
+                rules_seeded += 1
+
+        # ── Seed planned amounts (average monthly spend per item) ─────────────
+        # Collapse item_month_amounts into (item_id → list of monthly totals),
+        # compute the average, then INSERT OR IGNORE so we never overwrite
+        # planned amounts the user has already set manually.
+        item_monthly_totals: dict[int, list[float]] = defaultdict(list)
+        for (iid, _month), amounts in item_month_amounts.items():
+            item_monthly_totals[iid].append(sum(amounts))
+
+        for iid, monthly_totals in item_monthly_totals.items():
+            avg_planned = sum(monthly_totals) / len(monthly_totals)
+            # Seed one planned amount row per (item, month) that was present in
+            # the import using INSERT OR IGNORE — existing rows are left intact.
+            for (item_id, month), amounts in item_month_amounts.items():
+                if item_id != iid:
+                    continue
+                conn.execute(
+                    "INSERT OR IGNORE INTO budget_amounts (item_id, month, planned) "
+                    "VALUES (?, ?, ?)",
+                    (iid, month, round(avg_planned, 2)),
+                )
+
+    return {
+        "files_processed": len(files),
+        "rows_imported": rows_imported,
+        "groups_created": groups_created,
+        "items_created": items_created,
+        "months_covered": sorted(months_seen),
+        "rules_seeded": rules_seeded,
+    }
