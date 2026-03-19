@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  getBudget, seedBudgetTemplate, importBudgetCSV,
+  getBudget, seedBudgetTemplate, importBudgetCSV, importBudgetJSON,
   createBudgetGroup, updateBudgetGroup, deleteBudgetGroup,
   createBudgetItem, updateBudgetItem, deleteBudgetItem,
   setBudgetAmount, getUnassignedTransactions, assignTransaction, unassignTransaction,
@@ -350,11 +350,109 @@ function UnassignedPanel({ month, allGroups, onAssign }) {
   );
 }
 
-// ── CSV Import Panel ──────────────────────────────────────────────────────────
-// Accepts multiple EveryDollar CSV files (one per month) and bulk-imports them.
-// Shows a result summary after upload: rows imported, months covered, rules seeded.
-function CSVImportPanel({ onImported, collapsed: initialCollapsed = true }) {
-  const [open, setOpen] = useState(!initialCollapsed);
+// ── Shared import result summary ──────────────────────────────────────────────
+function ImportResult({ result }) {
+  if (!result) return null;
+  return (
+    <div style={{ marginTop: 12, padding: "14px 16px", background: "var(--bg3)",
+      borderRadius: 8, fontSize: 13 }}>
+      <div style={{ fontWeight: 700, color: "var(--green)", marginBottom: 8 }}>✓ Import complete</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", color: "var(--text2)" }}>
+        {result.month && <div>Month: <strong style={{ color: "var(--text)" }}>{result.month}</strong></div>}
+        {result.files_processed != null && <div>Files: <strong style={{ color: "var(--text)" }}>{result.files_processed}</strong></div>}
+        <div>Transactions imported: <strong style={{ color: "var(--text)" }}>{result.rows_imported}</strong></div>
+        {result.months_covered?.length > 0 && <div>Months covered: <strong style={{ color: "var(--text)" }}>{result.months_covered.length}</strong></div>}
+        <div>Auto-rules seeded: <strong style={{ color: "var(--text)" }}>{result.rules_seeded}</strong></div>
+        {result.groups_created > 0 && <div>Groups created: <strong style={{ color: "var(--text)" }}>{result.groups_created}</strong></div>}
+        {result.items_created > 0 && <div>Items created: <strong style={{ color: "var(--text)" }}>{result.items_created}</strong></div>}
+      </div>
+      {result.months_covered?.length > 0 && (
+        <div style={{ marginTop: 8, fontSize: 11, color: "var(--text2)" }}>
+          Months: {result.months_covered.sort().join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── EveryDollar JSON paste tab ────────────────────────────────────────────────
+// User copies the raw API JSON from DevTools Network tab and pastes it here.
+// Works for one month at a time — repeat for each historical month needed.
+function JSONPasteTab({ onImported }) {
+  const [text, setText] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function handleImport() {
+    setError(null);
+    setResult(null);
+    let parsed;
+    try {
+      parsed = JSON.parse(text.trim());
+    } catch {
+      setError("Invalid JSON — make sure you copied the full response body from DevTools.");
+      return;
+    }
+    setImporting(true);
+    try {
+      const res = await importBudgetJSON(parsed);
+      setResult(res);
+      setText("");
+      onImported?.();
+    } catch (e) {
+      setError(e.message ?? "Import failed");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <div>
+      {/* How-to instructions */}
+      <div style={{ background: "var(--bg3)", borderRadius: 6, padding: "10px 14px",
+        fontSize: 12, color: "var(--text2)", marginBottom: 12, lineHeight: 1.6 }}>
+        <strong style={{ color: "var(--text)" }}>How to get the JSON from EveryDollar:</strong>
+        <ol style={{ margin: "6px 0 0 16px", padding: 0 }}>
+          <li>Open <strong>everydollar.com</strong> and navigate to any budget month</li>
+          <li>Open <strong>DevTools</strong> (F12) → <strong>Network</strong> tab → filter by <strong>Fetch/XHR</strong></li>
+          <li>Refresh the page — look for a request whose Response contains <code>"groups"</code> and <code>"budgetItems"</code></li>
+          <li>Click it → <strong>Response</strong> tab → select all → copy</li>
+          <li>Paste below and click Import — repeat for each historical month</li>
+        </ol>
+      </div>
+
+      <textarea
+        value={text}
+        onChange={e => { setText(e.target.value); setResult(null); setError(null); }}
+        placeholder='Paste EveryDollar JSON here…  {"id":"…","date":"2026-03-01","groups":[…]}'
+        rows={8}
+        style={{
+          width: "100%", boxSizing: "border-box",
+          background: "var(--bg3)", border: "1px solid var(--border)",
+          borderRadius: 6, color: "var(--text)", fontSize: 12,
+          padding: "10px 12px", fontFamily: "monospace", resize: "vertical",
+        }}
+      />
+
+      <button className="btn btn-primary" style={{ marginTop: 8 }}
+        onClick={handleImport} disabled={importing || !text.trim()}>
+        {importing ? "Importing…" : "Import month"}
+      </button>
+
+      {error && (
+        <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(239,68,68,0.1)",
+          borderRadius: 6, color: "var(--red)", fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+      <ImportResult result={result} />
+    </div>
+  );
+}
+
+// ── CSV upload tab ────────────────────────────────────────────────────────────
+function CSVUploadTab({ onImported }) {
   const [files, setFiles] = useState([]);
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState(null);
@@ -366,17 +464,11 @@ function CSVImportPanel({ onImported, collapsed: initialCollapsed = true }) {
     const csvs = [...newFiles].filter(f => f.name.endsWith(".csv"));
     if (!csvs.length) return;
     setFiles(prev => {
-      // Deduplicate by name
       const names = new Set(prev.map(f => f.name));
       return [...prev, ...csvs.filter(f => !names.has(f.name))];
     });
     setResult(null);
     setError(null);
-  }
-
-  function removeFile(name) {
-    setFiles(prev => prev.filter(f => f.name !== name));
-    setResult(null);
   }
 
   async function handleImport() {
@@ -396,6 +488,82 @@ function CSVImportPanel({ onImported, collapsed: initialCollapsed = true }) {
   }
 
   return (
+    <div>
+      <div
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragging ? "var(--accent)" : "var(--border)"}`,
+          borderRadius: 8, padding: "24px", textAlign: "center",
+          cursor: "pointer", background: dragging ? "var(--bg3)" : "transparent",
+          transition: "all 0.15s",
+        }}
+      >
+        <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
+        <div style={{ fontSize: 13, color: "var(--text2)" }}>
+          Drag &amp; drop CSV files here, or <span style={{ color: "var(--accent)", fontWeight: 600 }}>click to browse</span>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 4 }}>
+          EveryDollar monthly CSV export format — select multiple months at once
+        </div>
+        <input ref={inputRef} type="file" accept=".csv" multiple
+          style={{ display: "none" }}
+          onChange={e => addFiles(e.target.files)} />
+      </div>
+
+      {files.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>
+            {files.length} file{files.length !== 1 ? "s" : ""} queued:
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {files.map(f => (
+              <div key={f.name} style={{
+                background: "var(--bg3)", border: "1px solid var(--border)",
+                borderRadius: 20, padding: "3px 10px 3px 12px",
+                fontSize: 12, display: "flex", alignItems: "center", gap: 6,
+              }}>
+                <span>{f.name}</span>
+                <button onClick={e => { e.stopPropagation(); setFiles(p => p.filter(x => x.name !== f.name)); }}
+                  style={{ background: "none", border: "none", color: "var(--text2)",
+                    cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
+              </div>
+            ))}
+          </div>
+          <button className="btn btn-primary" style={{ marginTop: 12 }}
+            onClick={handleImport} disabled={importing}>
+            {importing ? "Importing…" : `Import ${files.length} file${files.length !== 1 ? "s" : ""}`}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(239,68,68,0.1)",
+          borderRadius: 6, color: "var(--red)", fontSize: 13 }}>
+          {error}
+        </div>
+      )}
+      <ImportResult result={result} />
+    </div>
+  );
+}
+
+// ── Import Panel (tabbed: JSON paste + CSV upload) ────────────────────────────
+function CSVImportPanel({ onImported, collapsed: initialCollapsed = true }) {
+  const [open, setOpen] = useState(!initialCollapsed);
+  // Default to JSON tab — it's the better path (has planned amounts, no file downloads)
+  const [tab, setTab] = useState("json");
+
+  const tabStyle = (active) => ({
+    padding: "6px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+    background: "none", border: "none",
+    borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
+    color: active ? "var(--accent)" : "var(--text2)",
+  });
+
+  return (
     <div className="card" style={{ padding: 0, overflow: "hidden" }}>
       {/* Collapsible header */}
       <div
@@ -404,105 +572,26 @@ function CSVImportPanel({ onImported, collapsed: initialCollapsed = true }) {
         onClick={() => setOpen(o => !o)}
       >
         <span style={{ color: "var(--text2)", fontSize: 11 }}>{open ? "▼" : "▶"}</span>
-        <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>Import EveryDollar CSV History</span>
+        <span style={{ fontWeight: 700, fontSize: 14, flex: 1 }}>Import EveryDollar History</span>
         <span style={{ fontSize: 12, color: "var(--text2)" }}>
-          Upload one or more monthly CSV exports to populate budget history and seed categories
+          Paste API JSON (recommended) or upload CSV exports
         </span>
       </div>
 
       {open && (
-        <div style={{ padding: "16px" }}>
-          {/* Drop zone */}
-          <div
-            onDragOver={e => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
-            onClick={() => inputRef.current?.click()}
-            style={{
-              border: `2px dashed ${dragging ? "var(--accent)" : "var(--border)"}`,
-              borderRadius: 8, padding: "24px", textAlign: "center",
-              cursor: "pointer", background: dragging ? "var(--bg3)" : "transparent",
-              transition: "all 0.15s",
-            }}
-          >
-            <div style={{ fontSize: 28, marginBottom: 8 }}>📂</div>
-            <div style={{ fontSize: 13, color: "var(--text2)" }}>
-              Drag &amp; drop CSV files here, or <span style={{ color: "var(--accent)", fontWeight: 600 }}>click to browse</span>
-            </div>
-            <div style={{ fontSize: 11, color: "var(--text2)", marginTop: 4 }}>
-              EveryDollar export format — select multiple months at once
-            </div>
-            <input ref={inputRef} type="file" accept=".csv" multiple
-              style={{ display: "none" }}
-              onChange={e => addFiles(e.target.files)} />
+        <div>
+          {/* Tab bar */}
+          <div style={{ display: "flex", borderBottom: "1px solid var(--border)", paddingLeft: 16 }}>
+            <button style={tabStyle(tab === "json")} onClick={() => setTab("json")}>
+              Paste JSON (DevTools)
+            </button>
+            <button style={tabStyle(tab === "csv")} onClick={() => setTab("csv")}>
+              Upload CSV
+            </button>
           </div>
-
-          {/* File queue */}
-          {files.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>
-                {files.length} file{files.length !== 1 ? "s" : ""} queued:
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {files.map(f => (
-                  <div key={f.name} style={{
-                    background: "var(--bg3)", border: "1px solid var(--border)",
-                    borderRadius: 20, padding: "3px 10px 3px 12px",
-                    fontSize: 12, display: "flex", alignItems: "center", gap: 6,
-                  }}>
-                    <span>{f.name}</span>
-                    <button onClick={e => { e.stopPropagation(); removeFile(f.name); }}
-                      style={{ background: "none", border: "none", color: "var(--text2)",
-                        cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
-                  </div>
-                ))}
-              </div>
-              <button className="btn btn-primary" style={{ marginTop: 12 }}
-                onClick={handleImport} disabled={importing}>
-                {importing ? "Importing…" : `Import ${files.length} file${files.length !== 1 ? "s" : ""}`}
-              </button>
-            </div>
-          )}
-
-          {/* Error */}
-          {error && (
-            <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(239,68,68,0.1)",
-              borderRadius: 6, color: "var(--red)", fontSize: 13 }}>
-              {error}
-            </div>
-          )}
-
-          {/* Results summary */}
-          {result && (
-            <div style={{ marginTop: 12, padding: "14px 16px", background: "var(--bg3)",
-              borderRadius: 8, fontSize: 13 }}>
-              <div style={{ fontWeight: 700, color: "var(--green)", marginBottom: 8 }}>
-                ✓ Import complete
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", color: "var(--text2)" }}>
-                <div>Files processed: <strong style={{ color: "var(--text)" }}>{result.files_processed}</strong></div>
-                <div>Rows imported: <strong style={{ color: "var(--text)" }}>{result.rows_imported}</strong></div>
-                <div>Months covered: <strong style={{ color: "var(--text)" }}>{result.months_covered?.length ?? 0}</strong></div>
-                <div>Auto-rules seeded: <strong style={{ color: "var(--text)" }}>{result.rules_seeded}</strong></div>
-                {result.groups_created > 0 && (
-                  <div>Groups created: <strong style={{ color: "var(--text)" }}>{result.groups_created}</strong></div>
-                )}
-                {result.items_created > 0 && (
-                  <div>Items created: <strong style={{ color: "var(--text)" }}>{result.items_created}</strong></div>
-                )}
-              </div>
-              {result.months_covered?.length > 0 && (
-                <div style={{ marginTop: 8, fontSize: 11, color: "var(--text2)" }}>
-                  Months: {result.months_covered.sort().join(", ")}
-                </div>
-              )}
-              {result.errors?.length > 0 && (
-                <div style={{ marginTop: 8, color: "var(--red)", fontSize: 11 }}>
-                  {result.errors.length} row{result.errors.length !== 1 ? "s" : ""} skipped due to errors
-                </div>
-              )}
-            </div>
-          )}
+          <div style={{ padding: 16 }}>
+            {tab === "json" ? <JSONPasteTab onImported={onImported} /> : <CSVUploadTab onImported={onImported} />}
+          </div>
         </div>
       )}
     </div>

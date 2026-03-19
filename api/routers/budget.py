@@ -654,3 +654,194 @@ async def import_csv(
         "months_covered": sorted(months_seen),
         "rules_seeded": rules_seeded,
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /import/json — import one month from EveryDollar Network-tab JSON
+# ---------------------------------------------------------------------------
+
+@router.post("/import/json")
+async def import_everydollar_json(
+    payload: dict,
+    _user: str = Depends(get_current_user),
+):
+    """Import a single month's budget from the EveryDollar API JSON response.
+
+    To get this JSON:
+      1. Open everydollar.com, navigate to any budget month.
+      2. Open DevTools (F12) → Network → Fetch/XHR → refresh the page.
+      3. Find the request that returns your budget data (look for a response
+         containing "groups" and "budgetItems").
+      4. Click it → Response tab → copy the entire JSON body.
+      5. Paste it into the Vaultic import UI.
+
+    JSON structure expected (EveryDollar API format):
+      {
+        "id": "...",
+        "date": "YYYY-MM-DD",        ← month derived from this
+        "groups": [
+          {
+            "label": "Food",
+            "type": "income" | "expense" | "debt",
+            "budgetItems": [
+              {
+                "label": "Groceries",
+                "amountBudgeted": 120000,   ← cents; planned amount
+                "type": "expense" | "income" | "debt" | "sinking_fund",
+                "allocations": [
+                  {
+                    "date": "YYYY-MM-DD",
+                    "merchant": "Walmart",
+                    "amount": -10460        ← cents; negative = outflow
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+
+    Side effects — same as CSV import:
+      1. Creates budget_groups / budget_items if they don't exist.
+      2. Appends every allocation to budget_history.
+      3. Seeds budget_amounts with the exact planned amounts from EveryDollar
+         (amountBudgeted / 100) via INSERT OR IGNORE.
+      4. Seeds / increments budget_auto_rules for each (merchant, item_id) pair.
+    """
+    # ── Validate top-level shape ──────────────────────────────────────────────
+    if "groups" not in payload or "date" not in payload:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid JSON: expected EveryDollar budget format with 'date' and 'groups' keys.",
+        )
+
+    # Derive YYYY-MM month string from the budget's date field.
+    try:
+        month = payload["date"][:7]   # "2026-03-01" → "2026-03"
+        datetime.strptime(month, "%Y-%m")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Cannot parse 'date' field as a valid month.")
+
+    rows_imported = 0
+    groups_created = 0
+    items_created = 0
+    rules_seeded = 0
+    merchant_item_counts: dict[tuple[str, int], int] = defaultdict(int)
+
+    with get_db() as conn:
+        for group in payload.get("groups", []):
+            raw_group_label = (group.get("label") or "").strip()
+            if not raw_group_label:
+                continue
+
+            # Map "Untitled" → "Other"; treat "debt" group type as "expense".
+            group_name = raw_group_label if raw_group_label.lower() != "untitled" else "Other"
+            raw_group_type = (group.get("type") or "expense").lower()
+            group_type = "income" if raw_group_type == "income" else "expense"
+
+            # ── Ensure group exists ───────────────────────────────────────────
+            conn.execute(
+                "INSERT OR IGNORE INTO budget_groups (name, type, display_order) "
+                "SELECT ?, ?, COALESCE(MAX(display_order), 0) + 1 FROM budget_groups",
+                (group_name, group_type),
+            )
+            if conn.execute("SELECT changes() AS c").fetchone()["c"] > 0:
+                groups_created += 1
+            gid = conn.execute(
+                "SELECT id FROM budget_groups WHERE name = ?", (group_name,)
+            ).fetchone()["id"]
+
+            for item in group.get("budgetItems", []):
+                item_name = (item.get("label") or "").strip()
+                if not item_name:
+                    continue
+
+                # Normalise item type: sinking_fund and debt → expense.
+                raw_item_type = (item.get("type") or "expense").lower()
+                item_type = "income" if raw_item_type == "income" else "expense"
+
+                # Planned amount is stored in cents — convert to dollars.
+                # amountBudgeted is always positive; sign meaning comes from type.
+                planned_cents = item.get("amountBudgeted") or 0
+                planned_dollars = round(abs(planned_cents) / 100, 2)
+
+                # ── Ensure item exists ────────────────────────────────────────
+                conn.execute(
+                    "INSERT OR IGNORE INTO budget_items (group_id, name, display_order) "
+                    "SELECT ?, ?, COALESCE(MAX(display_order), 0) + 1 "
+                    "FROM budget_items WHERE group_id = ?",
+                    (gid, item_name, gid),
+                )
+                if conn.execute("SELECT changes() AS c").fetchone()["c"] > 0:
+                    items_created += 1
+                iid = conn.execute(
+                    "SELECT id FROM budget_items WHERE group_id = ? AND name = ?",
+                    (gid, item_name),
+                ).fetchone()["id"]
+
+                # ── Seed planned amount for this month ────────────────────────
+                # INSERT OR IGNORE — never overwrite amounts the user set manually.
+                if planned_dollars > 0:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO budget_amounts (item_id, month, planned) "
+                        "VALUES (?, ?, ?)",
+                        (iid, month, planned_dollars),
+                    )
+
+                # ── Import each allocation as a budget_history row ────────────
+                for alloc in item.get("allocations", []):
+                    alloc_date = (alloc.get("date") or "").strip()
+                    if not alloc_date:
+                        continue
+                    # Validate date format — skip malformed rows.
+                    try:
+                        datetime.strptime(alloc_date, "%Y-%m-%d")
+                    except ValueError:
+                        continue
+
+                    merchant = (alloc.get("merchant") or "").strip() or None
+                    # Amounts in cents, negative = outflow; store as positive dollars.
+                    amount_cents = alloc.get("amount") or 0
+                    amount_dollars = round(abs(amount_cents) / 100, 2)
+
+                    conn.execute(
+                        """INSERT INTO budget_history
+                           (group_name, item_id, item_name, month, date,
+                            merchant, amount, note, type, source_file)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'everydollar_json')""",
+                        (group_name, iid, item_name, month, alloc_date,
+                         merchant, amount_dollars, item_type),
+                    )
+                    rows_imported += 1
+
+                    if merchant:
+                        merchant_item_counts[(merchant, iid)] += 1
+
+        # ── Upsert auto-categorization rules ─────────────────────────────────
+        for (merchant, iid), count in merchant_item_counts.items():
+            existing = conn.execute(
+                "SELECT id FROM budget_auto_rules WHERE merchant = ? AND item_id = ?",
+                (merchant, iid),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE budget_auto_rules "
+                    "SET match_count = match_count + ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE merchant = ? AND item_id = ?",
+                    (count, merchant, iid),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO budget_auto_rules (merchant, item_id, match_count) "
+                    "VALUES (?, ?, ?)",
+                    (merchant, iid, count),
+                )
+                rules_seeded += 1
+
+    return {
+        "month": month,
+        "rows_imported": rows_imported,
+        "groups_created": groups_created,
+        "items_created": items_created,
+        "rules_seeded": rules_seeded,
+    }

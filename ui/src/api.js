@@ -376,6 +376,16 @@ export async function importBudgetCSV(files) {
   return res.json();
 }
 
+// Import a single month from EveryDollar API JSON (copy from DevTools Network tab).
+export async function importBudgetJSON(jsonData) {
+  const res = await apiFetch("/api/budget/import/json", {
+    method: "POST",
+    body: JSON.stringify(jsonData),
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Import failed"); }
+  return res.json();
+}
+
 export async function seedBudgetTemplate() {
   const res = await apiFetch("/api/budget/template", { method: "POST" });
   return res.json();
