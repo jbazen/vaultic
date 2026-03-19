@@ -212,6 +212,61 @@ MIGRATIONS = [
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(name, snapped_at)
     )""",
+    # ── Budget module ──────────────────────────────────────────────────────────
+    # budget_groups: named category groups (Income, Housing, Food, etc.)
+    """CREATE TABLE IF NOT EXISTS budget_groups (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        type          TEXT NOT NULL DEFAULT 'expense',
+        display_order INTEGER DEFAULT 0,
+        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # budget_items: individual line items within a group (Mortgage, Groceries, etc.)
+    """CREATE TABLE IF NOT EXISTS budget_items (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        group_id      INTEGER NOT NULL REFERENCES budget_groups(id) ON DELETE CASCADE,
+        name          TEXT NOT NULL,
+        display_order INTEGER DEFAULT 0,
+        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # budget_amounts: planned dollar amount per (item, month). YYYY-MM month key.
+    """CREATE TABLE IF NOT EXISTS budget_amounts (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id INTEGER NOT NULL REFERENCES budget_items(id) ON DELETE CASCADE,
+        month   TEXT NOT NULL,
+        planned REAL DEFAULT 0,
+        UNIQUE(item_id, month)
+    )""",
+    # transaction_assignments: maps a Plaid transaction to a budget line item.
+    # item_id SET NULL so deleting an item un-assigns its transactions without
+    # losing the assignment row — they surface again as unassigned transactions.
+    """CREATE TABLE IF NOT EXISTS transaction_assignments (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        transaction_id TEXT NOT NULL UNIQUE,
+        item_id        INTEGER REFERENCES budget_items(id) ON DELETE SET NULL,
+        created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # ── Fund Financials (sinking funds tracker) ────────────────────────────────
+    # funds: named savings buckets (Vacation, Clothes, Gifts, etc.)
+    """CREATE TABLE IF NOT EXISTS funds (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        description   TEXT,
+        target_amount REAL,
+        display_order INTEGER DEFAULT 0,
+        is_active     INTEGER DEFAULT 1,
+        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # fund_transactions: deposits (+) and withdrawals (-) for each fund.
+    # Balance = SUM(amount) computed live — no stored balance to go stale.
+    """CREATE TABLE IF NOT EXISTS fund_transactions (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        fund_id     INTEGER NOT NULL REFERENCES funds(id) ON DELETE CASCADE,
+        date        TEXT NOT NULL,
+        amount      REAL NOT NULL,
+        description TEXT,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 

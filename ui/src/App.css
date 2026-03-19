@@ -83,6 +83,51 @@
 
 .nav-icon { font-size: 16px; width: 18px; text-align: center; }
 
+/* ── Collapsible nav groups ─────────────────────────────────────────────────── */
+
+/* Group header button — same visual weight as a top-level nav link */
+.nav-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 20px;
+  color: var(--text2);
+  font-size: 14px;
+  font-weight: 500;
+  border: none;
+  border-left: 3px solid transparent;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+.nav-group-header:hover { color: var(--text); background: var(--bg3); }
+
+.nav-chevron { font-size: 10px; color: var(--text2); margin-left: auto; }
+
+/* Child links — slightly indented to show hierarchy */
+.nav-group-children { padding-bottom: 2px; }
+
+.nav-child-link {
+  display: flex;
+  align-items: center;
+  padding: 7px 20px 7px 44px; /* 44px = icon width + gap + group indent */
+  color: var(--text2);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 400;
+  border-left: 3px solid transparent;
+  transition: all 0.15s;
+}
+.nav-child-link:hover { color: var(--text); background: var(--bg3); }
+.nav-child-link.active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  background: rgba(79, 142, 247, 0.08);
+  font-weight: 600;
+}
+
 .sidebar-footer {
   padding: 16px 20px;
   border-top: 1px solid var(--border);

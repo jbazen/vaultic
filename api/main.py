@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.dependencies import get_current_user, get_client_ip
-from api.routers import auth, plaid, accounts, net_worth, manual, sage, pdf, crypto
+from api.routers import auth, plaid, accounts, net_worth, manual, sage, pdf, crypto, budget, funds
 from api import security_log
 
 logging.basicConfig(level=logging.INFO)
@@ -118,6 +118,8 @@ app.include_router(manual.router, dependencies=[Depends(get_current_user)])
 app.include_router(sage.router, dependencies=[Depends(get_current_user)])
 app.include_router(pdf.router, dependencies=[Depends(get_current_user)])
 app.include_router(crypto.router, dependencies=[Depends(get_current_user)])
+app.include_router(budget.router, dependencies=[Depends(get_current_user)])
+app.include_router(funds.router, dependencies=[Depends(get_current_user)])
 
 
 @app.get("/api/health")

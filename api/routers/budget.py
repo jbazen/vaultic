@@ -1,0 +1,427 @@
+"""Zero-based monthly budgeting router.
+
+Endpoints are organized around the zero-based philosophy: every dollar of income
+is assigned to a named spending or saving category. The month string 'YYYY-MM'
+is the primary key for all planned amounts.
+
+Tables used (created by migration — not here):
+  budget_groups         — named groups of line items (Income, Housing, Food, …)
+  budget_items          — individual line items within a group
+  budget_amounts        — planned dollar amount per (item, month)
+  transaction_assignments — links a Plaid transaction_id to a budget item
+  transactions          — Plaid transactions; amount > 0 = outflow, amount < 0 = inflow
+"""
+import re
+from datetime import date
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from api.dependencies import get_current_user
+from api.database import get_db
+
+router = APIRouter(prefix="/api/budget", tags=["budget"])
+
+# ---------------------------------------------------------------------------
+# Default template — groups and items seeded on first use
+# ---------------------------------------------------------------------------
+TEMPLATE = [
+    {"name": "Income",         "type": "income",   "items": ["Paycheck 1", "Paycheck 2", "Side Income"]},
+    {"name": "Giving",         "type": "expense",  "items": ["Charitable Giving"]},
+    {"name": "Savings",        "type": "expense",  "items": ["Emergency Fund", "Retirement", "Other Savings"]},
+    {"name": "Housing",        "type": "expense",  "items": ["Mortgage / Rent", "Electricity", "Water", "Gas", "Internet", "Home Insurance"]},
+    {"name": "Food",           "type": "expense",  "items": ["Groceries", "Dining Out"]},
+    {"name": "Transportation", "type": "expense",  "items": ["Car Payment", "Gas", "Car Insurance", "Car Maintenance"]},
+    {"name": "Personal",       "type": "expense",  "items": ["Clothing", "Haircuts", "Personal Care"]},
+    {"name": "Lifestyle",      "type": "expense",  "items": ["Entertainment", "Subscriptions"]},
+    {"name": "Health",         "type": "expense",  "items": ["Health Insurance", "Doctor / Dental", "Gym", "Prescriptions"]},
+    {"name": "Debt",           "type": "expense",  "items": ["Credit Card Payments", "Student Loans"]},
+]
+
+_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _validate_month(month: str):
+    """Raise 422 if month does not match YYYY-MM."""
+    if not _MONTH_RE.match(month):
+        raise HTTPException(status_code=422, detail="month must be in YYYY-MM format")
+
+
+# ---------------------------------------------------------------------------
+# Pydantic request bodies
+# ---------------------------------------------------------------------------
+
+class GroupCreate(BaseModel):
+    name: str
+    type: str  # 'income' or 'expense'
+
+
+class ItemCreate(BaseModel):
+    name: str
+
+
+class AmountSet(BaseModel):
+    month: str
+    planned: float
+
+
+class AssignBody(BaseModel):
+    transaction_id: str
+    item_id: int
+
+
+# ---------------------------------------------------------------------------
+# GET /{month} — full budget for a given month
+# ---------------------------------------------------------------------------
+
+@router.get("/{month}")
+async def get_budget(month: str, _user: str = Depends(get_current_user)):
+    """Return the complete budget for a month: all groups, all items, planned vs spent."""
+    _validate_month(month)
+
+    with get_db() as conn:
+        groups = conn.execute(
+            "SELECT id, name, type, display_order FROM budget_groups ORDER BY display_order, name"
+        ).fetchall()
+
+        result_groups = []
+        total_income_planned = 0.0
+        total_expense_planned = 0.0
+        total_expense_spent = 0.0
+
+        for group in groups:
+            gid = group["id"]
+
+            items_rows = conn.execute(
+                "SELECT id, name FROM budget_items WHERE group_id = ? ORDER BY display_order, name",
+                (gid,)
+            ).fetchall()
+
+            items_out = []
+            group_planned = 0.0
+            group_spent = 0.0
+
+            for item in items_rows:
+                iid = item["id"]
+
+                # Planned amount for this month (0 if no row exists yet)
+                amt_row = conn.execute(
+                    "SELECT planned FROM budget_amounts WHERE item_id = ? AND month = ?",
+                    (iid, month)
+                ).fetchone()
+                planned = float(amt_row["planned"]) if amt_row else 0.0
+
+                # Spent = sum of absolute transaction amounts assigned to this item
+                # within the target month, excluding pending transactions.
+                # ABS() handles the Plaid sign convention (positive = outflow).
+                spent_row = conn.execute("""
+                    SELECT COALESCE(SUM(ABS(t.amount)), 0) AS spent
+                    FROM transaction_assignments ta
+                    JOIN transactions t ON t.transaction_id = ta.transaction_id
+                    WHERE ta.item_id = ?
+                      AND strftime('%Y-%m', t.date) = ?
+                      AND t.pending = 0
+                """, (iid, month)).fetchone()
+                spent = float(spent_row["spent"])
+
+                items_out.append({
+                    "id": iid,
+                    "name": item["name"],
+                    "planned": planned,
+                    "spent": spent,
+                    "remaining": planned - spent,
+                })
+
+                group_planned += planned
+                group_spent += spent
+
+            result_groups.append({
+                "id": gid,
+                "name": group["name"],
+                "type": group["type"],
+                "display_order": group["display_order"],
+                "total_planned": group_planned,
+                "total_spent": group_spent,
+                "items": items_out,
+            })
+
+            # Accumulate summary totals by group type
+            if group["type"] == "income":
+                total_income_planned += group_planned
+            else:
+                total_expense_planned += group_planned
+                total_expense_spent += group_spent
+
+    return {
+        "month": month,
+        "groups": result_groups,
+        "summary": {
+            "total_income_planned": total_income_planned,
+            "total_expense_planned": total_expense_planned,
+            "total_expense_spent": total_expense_spent,
+            # How much income is left after all planned expenses are accounted for.
+            # A positive value means income exceeds planned spending (good).
+            # A negative value means expenses are over-budgeted relative to income.
+            "remaining_to_budget": total_income_planned - total_expense_planned,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /groups — create a budget group
+# ---------------------------------------------------------------------------
+
+@router.post("/groups")
+async def create_group(body: GroupCreate, _user: str = Depends(get_current_user)):
+    """Create a new top-level budget group (e.g. Housing, Food)."""
+    if body.type not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="type must be 'income' or 'expense'")
+
+    name = body.name.strip()[:100]
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    with get_db() as conn:
+        # Place new group at the end of the current display order
+        max_row = conn.execute("SELECT COALESCE(MAX(display_order), 0) AS m FROM budget_groups").fetchone()
+        order = max_row["m"] + 1
+
+        cur = conn.execute(
+            "INSERT INTO budget_groups (name, type, display_order) VALUES (?, ?, ?)",
+            (name, body.type, order)
+        )
+        gid = cur.lastrowid
+
+    return {
+        "id": gid,
+        "name": name,
+        "type": body.type,
+        "display_order": order,
+        "total_planned": 0.0,
+        "total_spent": 0.0,
+        "items": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# PATCH /groups/{group_id} — rename or change type of a group
+# ---------------------------------------------------------------------------
+
+@router.patch("/groups/{group_id}")
+async def update_group(group_id: int, body: dict, _user: str = Depends(get_current_user)):
+    """Update a group's name and/or type. Only provided fields are changed."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM budget_groups WHERE id = ?", (group_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Group not found")
+
+        name = str(body["name"]).strip()[:100] if "name" in body else row["name"]
+        gtype = body["type"] if "type" in body else row["type"]
+
+        if not name:
+            raise HTTPException(status_code=400, detail="name cannot be empty")
+        if gtype not in ("income", "expense"):
+            raise HTTPException(status_code=400, detail="type must be 'income' or 'expense'")
+
+        conn.execute(
+            "UPDATE budget_groups SET name = ?, type = ? WHERE id = ?",
+            (name, gtype, group_id)
+        )
+
+    return {"id": group_id, "name": name, "type": gtype}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /groups/{group_id} — remove a group and all its items
+# ---------------------------------------------------------------------------
+
+@router.delete("/groups/{group_id}")
+async def delete_group(group_id: int, _user: str = Depends(get_current_user)):
+    """Delete a group. ON DELETE CASCADE removes all child items and their amounts."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM budget_groups WHERE id = ?", (group_id,))
+    return {"status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# POST /groups/{group_id}/items — add a line item to a group
+# ---------------------------------------------------------------------------
+
+@router.post("/groups/{group_id}/items")
+async def create_item(group_id: int, body: ItemCreate, _user: str = Depends(get_current_user)):
+    """Add a budget line item under an existing group."""
+    name = body.name.strip()[:100]
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    with get_db() as conn:
+        group = conn.execute("SELECT id FROM budget_groups WHERE id = ?", (group_id,)).fetchone()
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+
+        max_row = conn.execute(
+            "SELECT COALESCE(MAX(display_order), 0) AS m FROM budget_items WHERE group_id = ?",
+            (group_id,)
+        ).fetchone()
+        order = max_row["m"] + 1
+
+        cur = conn.execute(
+            "INSERT INTO budget_items (group_id, name, display_order) VALUES (?, ?, ?)",
+            (group_id, name, order)
+        )
+        iid = cur.lastrowid
+
+    return {"id": iid, "name": name, "planned": 0.0, "spent": 0.0, "remaining": 0.0}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /items/{item_id} — rename a line item
+# ---------------------------------------------------------------------------
+
+@router.patch("/items/{item_id}")
+async def update_item(item_id: int, body: dict, _user: str = Depends(get_current_user)):
+    """Rename a budget line item."""
+    name = str(body.get("name", "")).strip()[:100]
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM budget_items WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+        conn.execute("UPDATE budget_items SET name = ? WHERE id = ?", (name, item_id))
+
+    return {"id": item_id, "name": name}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /items/{item_id} — remove a line item
+# ---------------------------------------------------------------------------
+
+@router.delete("/items/{item_id}")
+async def delete_item(item_id: int, _user: str = Depends(get_current_user)):
+    """Delete a line item. ON DELETE CASCADE removes its budget_amounts rows.
+    transaction_assignments rows survive but their item_id becomes NULL
+    (SET NULL FK) so transactions are not lost, just unassigned."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM budget_items WHERE id = ?", (item_id,))
+    return {"status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# PUT /items/{item_id}/amount — set planned amount for a month
+# ---------------------------------------------------------------------------
+
+@router.put("/items/{item_id}/amount")
+async def set_amount(item_id: int, body: AmountSet, _user: str = Depends(get_current_user)):
+    """Upsert the planned dollar amount for a line item in a given month."""
+    _validate_month(body.month)
+
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM budget_items WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        # INSERT OR REPLACE handles both the first-time set and any subsequent edits
+        conn.execute("""
+            INSERT INTO budget_amounts (item_id, month, planned)
+            VALUES (?, ?, ?)
+            ON CONFLICT(item_id, month) DO UPDATE SET planned = excluded.planned
+        """, (item_id, body.month, body.planned))
+
+    return {"item_id": item_id, "month": body.month, "planned": body.planned}
+
+
+# ---------------------------------------------------------------------------
+# GET /unassigned/{month} — transactions not yet assigned to any item
+# ---------------------------------------------------------------------------
+
+@router.get("/unassigned/{month}")
+async def get_unassigned(month: str, _user: str = Depends(get_current_user)):
+    """Return non-pending transactions for this month that have no budget assignment.
+
+    A transaction is considered unassigned when it has no row in
+    transaction_assignments OR when its assignment row has item_id = NULL
+    (which happens after the referenced item is deleted).
+    """
+    _validate_month(month)
+
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category
+            FROM transactions t
+            LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+              AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+            ORDER BY t.date DESC
+        """, (month,)).fetchall()
+
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# POST /assign — assign a transaction to a budget item
+# ---------------------------------------------------------------------------
+
+@router.post("/assign")
+async def assign_transaction(body: AssignBody, _user: str = Depends(get_current_user)):
+    """Link a transaction to a budget line item.
+
+    Uses INSERT OR REPLACE so re-assigning a transaction to a different item
+    is a single idempotent call — no need to unassign first.
+    """
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR REPLACE INTO transaction_assignments (transaction_id, item_id)
+            VALUES (?, ?)
+        """, (body.transaction_id, body.item_id))
+
+    return {"status": "assigned"}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /assign/{transaction_id} — remove a transaction assignment
+# ---------------------------------------------------------------------------
+
+@router.delete("/assign/{transaction_id}")
+async def unassign_transaction(transaction_id: str, _user: str = Depends(get_current_user)):
+    """Remove the budget assignment for a transaction (moves it back to unassigned)."""
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM transaction_assignments WHERE transaction_id = ?",
+            (transaction_id,)
+        )
+    return {"status": "unassigned"}
+
+
+# ---------------------------------------------------------------------------
+# POST /template — seed default budget categories
+# ---------------------------------------------------------------------------
+
+@router.post("/template")
+async def seed_template(_user: str = Depends(get_current_user)):
+    """Seed the budget with a standard set of categories.
+
+    Only runs when budget_groups is completely empty — safe to call multiple
+    times without duplicating data. Returns immediately if groups already exist.
+    """
+    with get_db() as conn:
+        existing = conn.execute("SELECT COUNT(*) AS n FROM budget_groups").fetchone()
+        if existing["n"] > 0:
+            return {"status": "already_exists"}
+
+        groups_created = 0
+        for order, group_def in enumerate(TEMPLATE, start=1):
+            cur = conn.execute(
+                "INSERT INTO budget_groups (name, type, display_order) VALUES (?, ?, ?)",
+                (group_def["name"], group_def["type"], order)
+            )
+            gid = cur.lastrowid
+            groups_created += 1
+
+            for item_order, item_name in enumerate(group_def["items"], start=1):
+                conn.execute(
+                    "INSERT INTO budget_items (group_id, name, display_order) VALUES (?, ?, ?)",
+                    (gid, item_name, item_order)
+                )
+
+    return {"status": "seeded", "groups_created": groups_created}

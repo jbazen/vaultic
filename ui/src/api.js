@@ -353,6 +353,90 @@ export async function getManualEntryHistory(entryId, days = 1825) {
   return res.json();
 }
 
+// ── Budget ────────────────────────────────────────────────────────────────────
+// month format: "YYYY-MM" (e.g. "2026-03")
+
+export async function getBudget(month) {
+  const res = await apiFetch(`/api/budget/${month}`);
+  return res.json();
+}
+export async function seedBudgetTemplate() {
+  const res = await apiFetch("/api/budget/template", { method: "POST" });
+  return res.json();
+}
+export async function createBudgetGroup(name, type) {
+  const res = await apiFetch("/api/budget/groups", { method: "POST", body: JSON.stringify({ name, type }) });
+  return res.json();
+}
+export async function updateBudgetGroup(id, data) {
+  const res = await apiFetch(`/api/budget/groups/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+  return res.json();
+}
+export async function deleteBudgetGroup(id) {
+  const res = await apiFetch(`/api/budget/groups/${id}`, { method: "DELETE" });
+  return res.json();
+}
+export async function createBudgetItem(groupId, name) {
+  const res = await apiFetch(`/api/budget/groups/${groupId}/items`, { method: "POST", body: JSON.stringify({ name }) });
+  return res.json();
+}
+export async function updateBudgetItem(id, name) {
+  const res = await apiFetch(`/api/budget/items/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+  return res.json();
+}
+export async function deleteBudgetItem(id) {
+  const res = await apiFetch(`/api/budget/items/${id}`, { method: "DELETE" });
+  return res.json();
+}
+export async function setBudgetAmount(itemId, month, planned) {
+  const res = await apiFetch(`/api/budget/items/${itemId}/amount`, {
+    method: "PUT", body: JSON.stringify({ month, planned }),
+  });
+  return res.json();
+}
+export async function getUnassignedTransactions(month) {
+  const res = await apiFetch(`/api/budget/unassigned/${month}`);
+  return res.json();
+}
+export async function assignTransaction(transactionId, itemId) {
+  const res = await apiFetch("/api/budget/assign", { method: "POST", body: JSON.stringify({ transaction_id: transactionId, item_id: itemId }) });
+  return res.json();
+}
+export async function unassignTransaction(transactionId) {
+  const res = await apiFetch(`/api/budget/assign/${encodeURIComponent(transactionId)}`, { method: "DELETE" });
+  return res.json();
+}
+
+// ── Fund Financials ───────────────────────────────────────────────────────────
+export async function getFunds() {
+  const res = await apiFetch("/api/funds");
+  return res.json();
+}
+export async function createFund(data) {
+  const res = await apiFetch("/api/funds", { method: "POST", body: JSON.stringify(data) });
+  return res.json();
+}
+export async function updateFund(id, data) {
+  const res = await apiFetch(`/api/funds/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+  return res.json();
+}
+export async function deleteFund(id) {
+  const res = await apiFetch(`/api/funds/${id}`, { method: "DELETE" });
+  return res.json();
+}
+export async function getFundTransactions(id) {
+  const res = await apiFetch(`/api/funds/${id}/transactions`);
+  return res.json();
+}
+export async function addFundTransaction(id, data) {
+  const res = await apiFetch(`/api/funds/${id}/transactions`, { method: "POST", body: JSON.stringify(data) });
+  return res.json();
+}
+export async function deleteFundTransaction(id) {
+  const res = await apiFetch(`/api/funds/transactions/${id}`, { method: "DELETE" });
+  return res.json();
+}
+
 // Toggles whether a manual entry is excluded from the net worth total.
 // Useful when a PDF import creates both an "Overall Portfolio" summary entry
 // and individual per-account entries — exclude the summary to avoid double-counting.
