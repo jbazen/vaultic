@@ -312,6 +312,65 @@ class TestManualEntries:
         res = client.patch("/api/manual/1/rename", json={"name": "Hacker"})
         assert res.status_code == 401
 
+    def test_manual_entry_history_requires_auth(self, client):
+        """GET /api/manual/{id}/history must reject unauthenticated requests."""
+        res = client.get("/api/manual/1/history")
+        assert res.status_code == 401
+
+    def test_manual_entry_history_nonexistent_returns_404(self, client, auth_headers):
+        """History for a non-existent entry ID returns 404."""
+        res = client.get("/api/manual/999999/history", headers=auth_headers)
+        assert res.status_code == 404
+
+    def test_manual_entry_history_days_validation(self, client, auth_headers):
+        """days param over 3650 is rejected with 422."""
+        # First create an entry so we have a valid ID
+        res = client.post("/api/manual", headers=auth_headers, json={
+            "name": "History Days Test", "category": "invested", "value": 1000.0,
+        })
+        entries = client.get("/api/manual", headers=auth_headers).json()
+        entry = next((e for e in entries if e["name"] == "History Days Test"), None)
+        eid = entry["id"]
+
+        res = client.get(f"/api/manual/{eid}/history?days=9999", headers=auth_headers)
+        assert res.status_code == 422
+
+    def test_manual_entry_history_returns_snapshots(self, client, auth_headers):
+        """
+        History endpoint returns snapshot rows keyed by name from manual_entry_snapshots.
+        Simulates PDF import history by inserting snapshot rows directly.
+        """
+        from api.database import get_db
+
+        # Create a manual entry
+        client.post("/api/manual", headers=auth_headers, json={
+            "name": "History Chart Test", "category": "invested", "value": 100000.0,
+        })
+        entries = client.get("/api/manual", headers=auth_headers).json()
+        entry = next((e for e in entries if e["name"] == "History Chart Test"), None)
+        eid = entry["id"]
+
+        # Seed snapshot rows for two past dates (simulates two PDF uploads)
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO manual_entry_snapshots (name, category, value, snapped_at) VALUES (?,?,?,?)",
+                ("History Chart Test", "invested", 95000.0, "2026-01-01")
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO manual_entry_snapshots (name, category, value, snapped_at) VALUES (?,?,?,?)",
+                ("History Chart Test", "invested", 100000.0, "2026-02-01")
+            )
+
+        res = client.get(f"/api/manual/{eid}/history?days=365", headers=auth_headers)
+        assert res.status_code == 200
+        rows = res.json()
+        # Both snapshot rows should be returned in ascending date order
+        assert len(rows) >= 2
+        assert rows[0]["snapped_at"] == "2026-01-01"
+        assert rows[0]["current"] == 95000.0
+        assert "current" in rows[0]
+        assert "snapped_at" in rows[0]
+
     def test_delete_entry(self, client, auth_headers):
         # Add an entry
         res = client.post("/api/manual", headers=auth_headers, json={

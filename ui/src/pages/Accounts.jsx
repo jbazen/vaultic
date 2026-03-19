@@ -3,6 +3,7 @@ import {
   getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries,
   getAccountHoldings, getAccountInvestmentTransactions, toggleExcludeFromNetWorth,
   deleteManualEntry, updateAccountNotes, renameManualEntry, getBalanceHistory,
+  getManualEntryHistory,
 } from "../api.js";
 import PlaidLink from "../components/PlaidLink.jsx";
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
@@ -327,6 +328,26 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(entry.name);
   const [nameSaving, setNameSaving] = useState(false);
+  // Full balance history (all snapshots, max 5 years) for the Performance tab.
+  // Loaded once when the Performance tab is first opened; BalanceChart filters
+  // client-side by the selected period (30D/90D/1Y/3Y) without re-fetching.
+  const [perfHistory, setPerfHistory] = useState(null);
+  const [perfLoading, setPerfLoading] = useState(false);
+
+  async function handleTabChange(tab) {
+    setActiveTab(tab);
+    if (tab === "performance" && perfHistory === null && !perfLoading) {
+      setPerfLoading(true);
+      try {
+        const data = await getManualEntryHistory(entry.id, 1825);
+        setPerfHistory(data);
+      } catch {
+        setPerfHistory([]);
+      } finally {
+        setPerfLoading(false);
+      }
+    }
+  }
 
   async function handleNameSave() {
     if (!nameDraft.trim()) return;
@@ -435,9 +456,9 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
       {expanded && (
         <div style={{ marginTop: 14 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <button style={tabBtn(activeTab === "holdings")} onClick={() => setActiveTab("holdings")}>Holdings</button>
-            <button style={tabBtn(activeTab === "transactions")} onClick={() => setActiveTab("transactions")}>Transactions</button>
-            <button style={tabBtn(activeTab === "performance")} onClick={() => setActiveTab("performance")}>Performance</button>
+            <button style={tabBtn(activeTab === "holdings")} onClick={() => handleTabChange("holdings")}>Holdings</button>
+            <button style={tabBtn(activeTab === "transactions")} onClick={() => handleTabChange("transactions")}>Transactions</button>
+            <button style={tabBtn(activeTab === "performance")} onClick={() => handleTabChange("performance")}>Performance</button>
           </div>
 
           {/* Holdings tab — asset allocation bar + holdings table */}
@@ -540,33 +561,14 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
             )
           )}
 
-          {/* Performance tab — balance chart not available for PDF imports */}
+          {/* Performance tab — balance chart built from manual_entry_snapshots history.
+              Every PDF import writes a snapshot row, so uploading monthly PDFs (or
+              historical PDFs from past months) builds up the same time-series chart
+              used for Plaid-connected accounts. */}
           {activeTab === "performance" && (
-            <div style={{ padding: "16px 0" }}>
-              <div style={{ color: "var(--text2)", fontSize: 13, marginBottom: 12 }}>
-                Live performance charts require a connected account. This account was imported via PDF.
-              </div>
-              <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 4 }}>Current Value</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: "var(--text)" }}>{fmt(entry.value)}</div>
-                </div>
-                {entry.entered_at && (
-                  <div>
-                    <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 4 }}>As Of</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: "var(--text2)" }}>{fmtDate(entry.entered_at)}</div>
-                  </div>
-                )}
-                {entry.activity_summary?.twr_pct != null && (
-                  <div>
-                    <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 4 }}>Period Return (PDF)</div>
-                    <div style={{ fontSize: 22, fontWeight: 700, color: entry.activity_summary.twr_pct >= 0 ? "#34d399" : "#f87171" }}>
-                      {entry.activity_summary.twr_pct > 0 ? "+" : ""}{entry.activity_summary.twr_pct.toFixed(2)}%
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+            perfLoading
+              ? <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>Loading…</div>
+              : <BalanceChart data={perfHistory ?? []} />
           )}
         </div>
       )}
@@ -689,20 +691,34 @@ function InvestmentTransactionsTable({ transactions }) {
 }
 
 // ── Balance History Chart ──────────────────────────────────────────────────────
-// Fetches and renders account balance over time for investment/retirement accounts.
-// Self-contained: manages its own days state and data fetching.
-function BalanceChart({ accountId }) {
+// Renders account balance over time for investment/retirement accounts.
+// Two modes:
+//   accountId  — fetches from /api/accounts/{id}/balances (Plaid-connected accounts)
+//   data       — pre-loaded [{snapped_at, current}] array; filters client-side by
+//                the selected period (PDF-imported accounts using manual_entry_snapshots)
+// Both modes produce identical charts so the UI is consistent across account types.
+function BalanceChart({ accountId, data: preloadedData }) {
   const [days, setDays] = useState(365);
   const [history, setHistory] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!preloadedData);
 
   useEffect(() => {
+    // When pre-loaded data is provided (PDF-imported), filter it client-side
+    // by the selected period rather than making a new network request.
+    if (preloadedData) {
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
+      setHistory(preloadedData.filter(r => r.snapped_at >= cutoffStr));
+      return;
+    }
+    // Plaid-connected path: fetch balance snapshots from the server.
     setLoading(true);
     getBalanceHistory(accountId, days)
       .then(data => setHistory(data))
       .catch(() => setHistory([]))
       .finally(() => setLoading(false));
-  }, [accountId, days]);
+  }, [accountId, days, preloadedData]);
 
   const periods = [
     { label: "30D", days: 30 },
@@ -764,7 +780,7 @@ function BalanceChart({ accountId }) {
       <ResponsiveContainer width="100%" height={160}>
         <AreaChart data={history} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
           <defs>
-            <linearGradient id={`grad-${accountId}`} x1="0" y1="0" x2="0" y2="1">
+            <linearGradient id={`grad-${accountId ?? "manual"}`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%"  stopColor="var(--accent)" stopOpacity={0.3} />
               <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
             </linearGradient>
@@ -788,7 +804,7 @@ function BalanceChart({ accountId }) {
             dataKey="current"
             stroke="var(--accent)"
             strokeWidth={2}
-            fill={`url(#grad-${accountId})`}
+            fill={`url(#grad-${accountId ?? "manual"})`}
           />
         </AreaChart>
       </ResponsiveContainer>

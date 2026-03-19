@@ -205,8 +205,8 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             summary_json = json.dumps(summary) if summary else None
             if not name:
                 continue
-            # Delete existing entry with same name so re-imports don't stack up.
-            # ON DELETE CASCADE in manual_holdings removes stale holdings too.
+            # Delete existing entry with same name so re-imports don't double-count in net worth.
+            # ON DELETE CASCADE removes stale holdings; history is preserved in manual_entry_snapshots.
             conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
             cursor = conn.execute(
                 "INSERT INTO manual_entries (name, category, value, notes, summary_json, entered_at) VALUES (?,?,?,?,?,?)",
@@ -214,6 +214,39 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             )
             entry_id = cursor.lastrowid
             saved += 1
+
+            # Determine snapshot date from the PDF statement period.
+            # Use ending_date from activity_summary so that uploading a historical
+            # PDF (e.g. a January statement uploaded today) records the correct
+            # historical date rather than today — this lets users build up a full
+            # performance history by uploading PDFs from past months/years.
+            # Falls back to today if no statement date is found in the PDF.
+            snapshot_date = today
+            if summary:
+                for date_field in ("ending_date", "beginning_date"):
+                    raw_date = summary.get(date_field)
+                    if raw_date:
+                        # PDF dates come in various formats: "3/16/2026", "2026-03-16", etc.
+                        try:
+                            from datetime import datetime
+                            for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%Y/%m/%d"):
+                                try:
+                                    snapshot_date = datetime.strptime(str(raw_date), fmt).date().isoformat()
+                                    break
+                                except ValueError:
+                                    continue
+                            break  # Stop after first successful date_field
+                        except Exception:
+                            pass  # Fall back to today
+
+            # Append a balance snapshot for performance chart history.
+            # ON CONFLICT updates value so re-importing the same statement period
+            # reflects any corrected figures without duplicating rows.
+            conn.execute("""
+                INSERT INTO manual_entry_snapshots (name, category, value, snapped_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(name, snapped_at) DO UPDATE SET value = excluded.value
+            """, (name, category, value, snapshot_date))
 
             # Save holdings if present
             holdings = e.get("holdings") or []

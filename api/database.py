@@ -201,6 +201,17 @@ MIGRATIONS = [
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP)""",
     # User-written description shown inline on Dashboard/Accounts pages (editable via pencil icon)
     "ALTER TABLE accounts ADD COLUMN notes TEXT",
+    # Append-only balance history for PDF-imported manual entries — one row per (name, date).
+    # Separate from manual_entries so re-imports don't destroy history used for performance charts.
+    """CREATE TABLE IF NOT EXISTS manual_entry_snapshots (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        name      TEXT NOT NULL,
+        category  TEXT NOT NULL,
+        value     REAL NOT NULL,
+        snapped_at DATE NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(name, snapped_at)
+    )""",
 ]
 
 

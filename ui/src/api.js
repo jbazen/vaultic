@@ -345,6 +345,14 @@ export async function deleteManualEntry(id) {
   return res.json();
 }
 
+// Fetches balance history for a PDF-imported manual entry from manual_entry_snapshots.
+// Returns [{snapped_at, current}] in ascending date order — same shape as
+// getBalanceHistory() so BalanceChart renders both Plaid and PDF accounts identically.
+export async function getManualEntryHistory(entryId, days = 1825) {
+  const res = await apiFetch(`/api/manual/${entryId}/history?days=${days}`);
+  return res.json();
+}
+
 // Toggles whether a manual entry is excluded from the net worth total.
 // Useful when a PDF import creates both an "Overall Portfolio" summary entry
 // and individual per-account entries — exclude the summary to avoid double-counting.
