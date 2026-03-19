@@ -737,8 +737,8 @@ function BalanceChart({ accountId, data: preloadedData }) {
   });
 
   if (loading) return <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>Loading…</div>;
-  if (!history || history.length < 2) {
-    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>Not enough history yet — check back after a few syncs.</div>;
+  if (!history || history.length === 0) {
+    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>No history yet — sync this account or import a PDF to start tracking performance.</div>;
   }
 
   const first = history[0]?.current ?? 0;
@@ -805,6 +805,8 @@ function BalanceChart({ accountId, data: preloadedData }) {
             stroke="var(--accent)"
             strokeWidth={2}
             fill={`url(#grad-${accountId ?? "manual"})`}
+            dot={history.length === 1 ? { r: 5, fill: "var(--accent)" } : false}
+            activeDot={{ r: 4 }}
           />
         </AreaChart>
       </ResponsiveContainer>
