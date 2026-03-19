@@ -1,7 +1,7 @@
 /**
  * Budget.jsx — Zero-based monthly budget page.
  *
- * Layout mirrors EveryDollar's UI in Vaultic's dark theme:
+ * Layout in Vaultic's dark theme:
  *   • Left column  — collapsible budget groups with inline editing
  *   • Right panel  — sticky Summary (donut chart) or Transactions panel
  *

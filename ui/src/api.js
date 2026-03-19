@@ -376,7 +376,7 @@ export async function importBudgetCSV(files) {
   return res.json();
 }
 
-// Import a single month from EveryDollar API JSON (copy from DevTools Network tab).
+// Import a single month from external budget app API JSON (copy from DevTools Network tab).
 export async function importBudgetJSON(jsonData) {
   const res = await apiFetch("/api/budget/import/json", {
     method: "POST",

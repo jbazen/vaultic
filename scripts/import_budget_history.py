@@ -1,35 +1,35 @@
 """
-import_everydollar_history.py
-─────────────────────────────
-Fetches your EveryDollar budget month-by-month, saves each month as a local
-JSON file under imports/everydollar/, and imports each one into Vaultic.
+import_budget_history.py
+────────────────────────
+Fetches your budget history month-by-month, saves each month as a local
+JSON file under imports/budget/, and imports each one into Vaultic.
 
 SETUP
 -----
-1. Log into everydollar.com in your browser.
+1. Log into your budget app in your browser.
 2. Open DevTools (F12) → Network tab → filter Fetch/XHR → navigate to any
    budget month to trigger the request.
 3. Find the getBudgetByDate request → right-click → Copy → Copy as cURL (bash).
 4. From that cURL output:
-   a) EVERYDOLLAR_COOKIES  = value between quotes after -b '...'
-   b) EVERYDOLLAR_CSRF_TOKEN = value after -H 'x-csrf-token: ...'
+   a) SESSION_COOKIES  = value between quotes after -b '...'
+   b) CSRF_TOKEN = value after -H 'x-csrf-token: ...'
 5. VAULTIC_TOKEN: open vaulticsage.com → DevTools → Console → run:
        localStorage.getItem("vaultic_token")
 6. Set START_DATE (script loops from there to today).
 7. Run:
        pip install requests python-dateutil
-       python scripts/import_everydollar_history.py
+       python scripts/import_budget_history.py
 
 RESUME BEHAVIOR
 ---------------
-Each fetched month is saved to imports/everydollar/YYYY-MM.json before being
+Each fetched month is saved to imports/budget/YYYY-MM.json before being
 imported. If the script is interrupted and re-run, months with existing JSON
-files are loaded from disk (no re-fetch from EveryDollar) and re-imported into
-Vaultic (safe — INSERT OR IGNORE prevents duplicate history rows).
+files are loaded from disk (no re-fetch) and re-imported into Vaultic
+(safe — INSERT OR IGNORE prevents duplicate history rows).
 
 SESSION NOTES
 -------------
-The EveryDollar session cookie typically expires after ~30 min of inactivity.
+The session cookie typically expires after ~30 min of inactivity.
 If you hit a 401 mid-run, copy fresh cookies from DevTools and re-run — the
 script will skip months already saved to disk and pick up from where it failed.
 """
@@ -46,35 +46,39 @@ from dateutil.relativedelta import relativedelta
 
 # Value between single quotes after -b in the cURL bash output.
 # Starts with "SESSION=..." and is one long semicolon-separated string.
-EVERYDOLLAR_COOKIES = "PASTE_COOKIE_STRING_HERE"
+SESSION_COOKIES = "PASTE_COOKIE_STRING_HERE"
 
 # Value after -H 'x-csrf-token: ...' in the cURL bash output.
-EVERYDOLLAR_CSRF_TOKEN = "PASTE_CSRF_TOKEN_HERE"
+CSRF_TOKEN = "PASTE_CSRF_TOKEN_HERE"
 
 # Your Vaultic JWT — run this in browser console on vaulticsage.com:
 #   localStorage.getItem("vaultic_token")
 VAULTIC_TOKEN = "PASTE_YOUR_VAULTIC_TOKEN_HERE"
 
-# Earliest month to import. EveryDollar data goes back to Oct 2015.
+# Earliest month to import (data goes back to Oct 2015).
 START_DATE = "2015-10-01"
 
 # Vaultic base URL
 VAULTIC_BASE_URL = "https://vaulticsage.com"
 
-# Seconds to sleep between EveryDollar fetches.
+# Seconds to sleep between live fetches (cached months skip this).
 # 1.0s is plenty — ~2 min total for 10 years of history.
 SLEEP_SECONDS = 1.0
 
 # ── END CONFIG ────────────────────────────────────────────────────────────────
 
-EVERYDOLLAR_URL = "https://www.everydollar.com/app/api/budgets/search/getBudgetByDate"
+# NOTE: The URL and headers below contain references to the source budget app's
+# domain — these are required for the HTTP requests to work and cannot be removed.
+# TODO: If this script is ever distributed or open-sourced, abstract the source
+# app URL/headers into a config parameter so the script is app-agnostic.
+BUDGET_API_URL = "https://www.everydollar.com/app/api/budgets/search/getBudgetByDate"
 
 # Local folder where each month's raw JSON is saved before importing.
-IMPORTS_DIR = Path(__file__).parent.parent / "imports" / "everydollar"
+IMPORTS_DIR = Path(__file__).parent.parent / "imports" / "budget"
 
-EVERYDOLLAR_HEADERS = {
-    "Cookie": EVERYDOLLAR_COOKIES,
-    "x-csrf-token": EVERYDOLLAR_CSRF_TOKEN,
+BUDGET_HEADERS = {
+    "Cookie": SESSION_COOKIES,
+    "x-csrf-token": CSRF_TOKEN,
     "accept": "application/json, text/plain, */*",
     "accept-language": "en-US,en;q=0.9",
     "referer": "https://www.everydollar.com/app/budget",
@@ -103,7 +107,7 @@ def month_range(start: date, end: date):
 
 
 def load_or_fetch(month_date: date) -> dict | None:
-    """Return cached JSON from disk if available, otherwise fetch from EveryDollar.
+    """Return cached JSON from disk if available, otherwise fetch from the budget API.
 
     Saves the response to disk before returning so future runs can skip the
     network call entirely.
@@ -121,14 +125,14 @@ def load_or_fetch(month_date: date) -> dict | None:
             # Corrupt cache — delete and re-fetch
             cache_file.unlink()
 
-    # ── Fetch from EveryDollar ────────────────────────────────────────────────
+    # ── Fetch from budget API ─────────────────────────────────────────────────
     date_str = month_date.strftime("%Y-%m-%d")
     print(f"→ {label}  ", end="", flush=True)
     try:
         resp = requests.get(
-            EVERYDOLLAR_URL,
+            BUDGET_API_URL,
             params={"date": date_str},
-            headers=EVERYDOLLAR_HEADERS,
+            headers=BUDGET_HEADERS,
             timeout=15,
         )
     except requests.RequestException as e:
@@ -151,7 +155,7 @@ def load_or_fetch(month_date: date) -> dict | None:
         print("✗ response was not valid JSON")
         return None
 
-    # Unwrap if EveryDollar wraps the budget in a top-level key
+    # Unwrap if the response wraps the budget in a top-level key
     if isinstance(data, dict) and "budget" in data and "groups" not in data:
         data = data["budget"]
 
@@ -189,9 +193,9 @@ def import_to_vaultic(budget_json: dict) -> dict | None:
 
 def main():
     # ── Validate config ───────────────────────────────────────────────────────
-    if any("PASTE" in v for v in [EVERYDOLLAR_COOKIES, EVERYDOLLAR_CSRF_TOKEN, VAULTIC_TOKEN]):
+    if any("PASTE" in v for v in [SESSION_COOKIES, CSRF_TOKEN, VAULTIC_TOKEN]):
         print(
-            "ERROR: Fill in EVERYDOLLAR_COOKIES, EVERYDOLLAR_CSRF_TOKEN, and "
+            "ERROR: Fill in SESSION_COOKIES, CSRF_TOKEN, and "
             "VAULTIC_TOKEN in the script before running."
         )
         return
@@ -204,10 +208,10 @@ def main():
 
     cached_count = sum(1 for m in months if (IMPORTS_DIR / f"{m.strftime('%Y-%m')}.json").exists())
 
-    print(f"EveryDollar history import — {len(months)} months "
+    print(f"Budget history import — {len(months)} months "
           f"({start.strftime('%Y-%m')} → {end.strftime('%Y-%m')})")
     print(f"{cached_count} already cached on disk, "
-          f"{len(months) - cached_count} will be fetched from EveryDollar")
+          f"{len(months) - cached_count} will be fetched from the budget API")
     print(f"Importing into: {VAULTIC_BASE_URL}")
     print("─" * 65)
 
@@ -223,7 +227,7 @@ def main():
         budget = load_or_fetch(month_date)
         if budget is None:
             skipped += 1
-            # If we got a 401 from EveryDollar, abort — no point continuing
+            # If we got a 401, abort — session expired, no point continuing
             if not is_cached:
                 auth_failed = True
                 break

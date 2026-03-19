@@ -301,6 +301,11 @@ MIGRATIONS = [
     # Add status column to transaction_assignments so rows can be distinguished
     # between manually assigned ('manual') and auto-categorized ('auto') entries.
     "ALTER TABLE transaction_assignments ADD COLUMN status TEXT DEFAULT 'manual'",
+    # Add missing UNIQUE constraints — without these, INSERT OR IGNORE never fires
+    # and every import creates duplicate groups/items. These are safe to run on
+    # existing data only if duplicates have been removed first (see cleanup script).
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_groups_name ON budget_groups(name)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_items_group_name ON budget_items(group_id, name)",
 ]
 
 

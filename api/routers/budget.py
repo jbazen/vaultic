@@ -698,25 +698,25 @@ async def import_csv(
 
 
 # ---------------------------------------------------------------------------
-# POST /import/json — import one month from EveryDollar Network-tab JSON
+# POST /import/json — import one month from external budget app Network-tab JSON
 # ---------------------------------------------------------------------------
 
 @router.post("/import/json")
-async def import_everydollar_json(
+async def import_budget_json(
     payload: dict,
     _user: str = Depends(get_current_user),
 ):
-    """Import a single month's budget from the EveryDollar API JSON response.
+    """Import a single month's budget from an external budget app API JSON response.
 
     To get this JSON:
-      1. Open everydollar.com, navigate to any budget month.
+      1. Open your budget app and navigate to any budget month.
       2. Open DevTools (F12) → Network → Fetch/XHR → refresh the page.
       3. Find the request that returns your budget data (look for a response
          containing "groups" and "budgetItems").
       4. Click it → Response tab → copy the entire JSON body.
       5. Paste it into the Vaultic import UI.
 
-    JSON structure expected (EveryDollar API format):
+    JSON structure expected:
       {
         "id": "...",
         "date": "YYYY-MM-DD",        ← month derived from this
@@ -745,7 +745,7 @@ async def import_everydollar_json(
     Side effects — same as CSV import:
       1. Creates budget_groups / budget_items if they don't exist.
       2. Appends every allocation to budget_history.
-      3. Seeds budget_amounts with the exact planned amounts from EveryDollar
+      3. Seeds budget_amounts with the exact planned amounts
          (amountBudgeted / 100) via INSERT OR IGNORE.
       4. Seeds / increments budget_auto_rules for each (merchant, item_id) pair.
     """
@@ -753,7 +753,7 @@ async def import_everydollar_json(
     if "groups" not in payload or "date" not in payload:
         raise HTTPException(
             status_code=422,
-            detail="Invalid JSON: expected EveryDollar budget format with 'date' and 'groups' keys.",
+            detail="Invalid JSON: expected budget format with 'date' and 'groups' keys.",
         )
 
     # Derive YYYY-MM month string from the budget's date field.
@@ -849,7 +849,7 @@ async def import_everydollar_json(
                         """INSERT INTO budget_history
                            (group_name, item_id, item_name, month, date,
                             merchant, amount, note, type, source_file)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'everydollar_json')""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, 'budget_json')""",
                         (group_name, iid, item_name, month, alloc_date,
                          merchant, amount_dollars, item_type),
                     )

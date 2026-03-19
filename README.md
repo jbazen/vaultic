@@ -747,7 +747,7 @@ Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client po
 
 ## Roadmap
 
-- [ ] **Budget module** — zero-based budgeting to replace EveryDollar; Plaid transactions auto-categorized into budget lines; Sage learns merchant → category mappings over time
+- [ ] **Budget module** — zero-based budgeting; Plaid transactions auto-categorized into budget lines; Sage learns merchant → category mappings over time
 - [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth (completed)
 - [ ] **River** — no retail API available; plan to transfer BTC to Coinbase
 - [ ] **Plaid Production** — applied (pending approval); EIN obtained, security questionnaire submitted
