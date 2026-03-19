@@ -424,6 +424,10 @@ export async function getUnassignedTransactions(month) {
   const res = await apiFetch(`/api/budget/unassigned/${month}`);
   return res.json();
 }
+export async function getAssignedTransactions(month) {
+  const res = await apiFetch(`/api/budget/assigned/${month}`);
+  return res.json();
+}
 export async function assignTransaction(transactionId, itemId) {
   const res = await apiFetch("/api/budget/assign", { method: "POST", body: JSON.stringify({ transaction_id: transactionId, item_id: itemId }) });
   return res.json();

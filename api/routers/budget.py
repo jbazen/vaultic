@@ -368,20 +368,61 @@ async def set_amount(item_id: int, body: AmountSet, _user: str = Depends(get_cur
 async def get_unassigned(month: str, _user: str = Depends(get_current_user)):
     """Return non-pending transactions for this month that have no budget assignment.
 
-    A transaction is considered unassigned when it has no row in
-    transaction_assignments OR when its assignment row has item_id = NULL
-    (which happens after the referenced item is deleted).
+    Also returns suggested_item_id / suggested_item_name from budget_auto_rules
+    for the merchant with the highest match_count, so the UI can show one-click
+    assignment badges (e.g. "+ Groceries").
     """
     _validate_month(month)
 
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
+                   best.item_id  AS suggested_item_id,
+                   bi.name       AS suggested_item_name
             FROM transactions t
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+            -- Best auto-rule: pick the rule with the highest match_count for the merchant
+            LEFT JOIN (
+                SELECT merchant, item_id, MAX(match_count) AS match_count
+                FROM budget_auto_rules
+                GROUP BY merchant
+            ) best ON best.merchant = COALESCE(t.merchant_name, t.name)
+            LEFT JOIN budget_items bi ON bi.id = best.item_id
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+            ORDER BY t.date DESC
+        """, (month,)).fetchall()
+
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /assigned/{month} — transactions that have been assigned to a budget item
+# ---------------------------------------------------------------------------
+
+@router.get("/assigned/{month}")
+async def get_assigned(month: str, _user: str = Depends(get_current_user)):
+    """Return non-pending transactions for this month that ARE assigned to a budget item.
+
+    Includes item_name and group_name so the UI can display "Housing / Mortgage"
+    without a second round-trip.
+    """
+    _validate_month(month)
+
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
+                   ta.item_id,
+                   bi.name AS item_name,
+                   bg.name AS group_name
+            FROM transactions t
+            JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+            JOIN budget_items bi ON bi.id = ta.item_id
+            JOIN budget_groups bg ON bg.id = bi.group_id
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+              AND ta.item_id IS NOT NULL
             ORDER BY t.date DESC
         """, (month,)).fetchall()
 

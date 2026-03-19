@@ -36,3 +36,6 @@ Thumbs.db
 
 # EveryDollar JSON imports (raw API responses — not for version control)
 imports/
+
+# Design reference screenshots (local only)
+screenshots/
