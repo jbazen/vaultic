@@ -472,13 +472,20 @@ function TransactionsPanel({ month, allGroups }) {
                   borderRadius: 6, color: "var(--text)", fontSize: 11, padding: "4px 8px",
                 }}>
                 <option value="" disabled>Assign to budget item…</option>
-                {allGroups.map(g => (
-                  <optgroup key={g.id} label={g.name}>
-                    {g.items.map(i => (
-                      <option key={i.id} value={i.id}>{i.name}</option>
-                    ))}
-                  </optgroup>
-                ))}
+                {allGroups.map(g => {
+                  // Mirror the auto-hide logic: only show items active this month.
+                  // Items with $0 planned and $0 spent are hidden from the budget
+                  // view and shouldn't clutter the assignment dropdown either.
+                  const activeItems = g.items.filter(i => i.planned > 0 || i.spent > 0);
+                  if (activeItems.length === 0) return null;
+                  return (
+                    <optgroup key={g.id} label={g.name}>
+                      {activeItems.map(i => (
+                        <option key={i.id} value={i.id}>{i.name}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
               </select>
             )}
           </div>
