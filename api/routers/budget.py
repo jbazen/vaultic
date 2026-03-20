@@ -556,13 +556,20 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
                 skipped += 1
                 continue
 
-            # Skip if zero or multiple history entries share this amount (ambiguous).
-            matches = history_by_amount.get(amt, [])
-            if len(matches) != 1:
+            # Deduplicate history matches by item_id — multiple budget_history rows
+            # can share the same dollar amount if the same charge appeared across
+            # different months' imports. What matters is whether they all point to
+            # the same item. If they do, the match is still unambiguous.
+            raw_matches = history_by_amount.get(amt, [])
+            unique_items = list(set(raw_matches))
+
+            if len(unique_items) != 1:
+                # Zero matches = no history entry for this amount.
+                # 2+ distinct items = genuinely ambiguous, can't pick safely.
                 skipped += 1
                 continue
 
-            item_id = matches[0]
+            item_id = unique_items[0]
             conn.execute("""
                 INSERT OR IGNORE INTO transaction_assignments (transaction_id, item_id, status)
                 VALUES (?, ?, 'auto')

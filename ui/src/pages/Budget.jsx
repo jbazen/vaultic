@@ -920,6 +920,14 @@ export default function Budget() {
     finally { setLoading(false); }
   }, [month]);
 
+  // Silent refresh — updates budget data in place without showing a loading
+  // spinner or resetting scroll position. Used after transaction assignment
+  // so spent/remaining totals update smoothly without the page jumping to top.
+  const silentLoad = useCallback(async () => {
+    try { setBudget(await getBudget(month)); }
+    catch { /* ignore — stale data is fine for a background refresh */ }
+  }, [month]);
+
   useEffect(() => { load(); }, [load]);
 
   async function handleAddGroup() {
@@ -1113,7 +1121,7 @@ export default function Budget() {
               {rightTab === "summary" ? (
                 <SummaryPanel groups={groups} summary={summary} />
               ) : (
-                <TransactionsPanel month={month} allGroups={groups} onBudgetUpdate={load} />
+                <TransactionsPanel month={month} allGroups={groups} onBudgetUpdate={silentLoad} />
               )}
             </div>
           </div>
