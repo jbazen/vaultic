@@ -134,11 +134,11 @@ TOOLS = [
     },
     {
         "name": "get_budget_history",
-        "description": "Get historical spending totals by budget category across multiple months — imported from 10+ years of budget data. Returns monthly aggregated totals (group, item, total_spent, num_transactions) — not individual transactions. Use this to analyze spending trends, calculate monthly averages, compare months, or answer questions about long-term spending patterns.",
+        "description": "Get historical spending totals by budget category across multiple months — imported from 10+ years of budget data going back to October 2015. Returns monthly aggregated totals (group, item, total_spent, num_transactions) — not individual transactions. Use this to analyze spending trends, calculate monthly averages, compare months, or answer questions about long-term spending patterns. Pass months=0 to get ALL available history (10+ years).",
         "input_schema": {
             "type": "object",
             "properties": {
-                "months": {"type": "integer", "description": "How many recent months of history to return (default 12, max 60)"},
+                "months": {"type": "integer", "description": "How many recent months of history to return (default 12, pass 0 for all available history back to Oct 2015)"},
                 "group_name": {"type": "string", "description": "Optional: filter to a specific budget group name (e.g. 'Food', 'Housing')"}
             },
             "required": [],
@@ -274,10 +274,18 @@ def _call_tool(name: str, inputs: dict) -> str:
             # Returns monthly totals aggregated by group+item — NOT individual transactions.
             # Raw rows would be thousands of records (10+ years × 50 txns/month) which
             # blows up the input token budget. Aggregated totals are ~10-20x smaller.
-            num_months = min(inputs.get("months", 12), 60)
+            # months=0 means return all available history (no date filter).
+            num_months = inputs.get("months", 12)
             group_filter = inputs.get("group_name", "").strip().lower()
             with get_db() as conn:
-                query = """
+                if num_months and num_months > 0:
+                    date_clause = "WHERE bh.month >= date('now', '-' || ? || ' months', 'start of month')"
+                    params: list = [num_months]
+                else:
+                    # All history — no date filter
+                    date_clause = "WHERE 1=1"
+                    params = []
+                query = f"""
                     SELECT bh.month,
                            bg.name AS group_name,
                            bi.name AS item_name,
@@ -286,9 +294,8 @@ def _call_tool(name: str, inputs: dict) -> str:
                     FROM budget_history bh
                     JOIN budget_items bi  ON bi.id  = bh.item_id
                     JOIN budget_groups bg ON bg.id  = bi.group_id
-                    WHERE bh.month >= date('now', '-' || ? || ' months', 'start of month')
+                    {date_clause}
                 """
-                params: list = [num_months]
                 if group_filter:
                     query += " AND LOWER(bg.name) LIKE ?"
                     params.append(f"%{group_filter}%")
@@ -296,8 +303,9 @@ def _call_tool(name: str, inputs: dict) -> str:
                 rows = conn.execute(query, params).fetchall()
             if not rows:
                 return "No budget history found for the requested period."
+            period_label = "all available history" if not num_months else f"last {num_months} months"
             return (
-                f"Budget history — monthly totals by category (last {num_months} months, "
+                f"Budget history — monthly totals by category ({period_label}, "
                 f"{len(rows)} category-months):\n"
                 + str([dict(r) for r in rows])
             )
