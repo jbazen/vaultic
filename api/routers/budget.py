@@ -583,6 +583,95 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
 
 
 # ---------------------------------------------------------------------------
+# GET /items/{item_id}/detail — full detail for an item (modal data)
+# ---------------------------------------------------------------------------
+
+@router.get("/items/{item_id}/detail")
+async def get_item_detail(
+    item_id: int,
+    month: str,
+    _user: str = Depends(get_current_user),
+):
+    """Return everything needed to populate the item detail modal:
+
+      - Item name and group name
+      - Planned, spent, and remaining for the requested month
+      - Transactions assigned to this item this month (from Plaid)
+      - Last 4 months of spending from budget_history for the mini bar chart
+    """
+    _validate_month(month)
+
+    with get_db() as conn:
+        item = conn.execute("""
+            SELECT bi.id, bi.name, bg.name AS group_name, bg.type AS group_type
+            FROM budget_items bi
+            JOIN budget_groups bg ON bg.id = bi.group_id
+            WHERE bi.id = ? AND bi.is_deleted = 0
+        """, (item_id,)).fetchone()
+
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
+        # Planned amount for the requested month
+        amt_row = conn.execute(
+            "SELECT planned FROM budget_amounts WHERE item_id = ? AND month = ?",
+            (item_id, month)
+        ).fetchone()
+        planned = float(amt_row["planned"]) if amt_row else 0.0
+
+        # Plaid transactions assigned to this item this month
+        txn_rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name,
+                   ABS(t.amount) AS amount
+            FROM transaction_assignments ta
+            JOIN transactions t ON t.transaction_id = ta.transaction_id
+            WHERE ta.item_id = ?
+              AND strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+            ORDER BY t.date DESC
+        """, (item_id, month)).fetchall()
+
+        spent = sum(float(r["amount"]) for r in txn_rows)
+
+        # Last 4 months of spending from imported budget history — used for the
+        # mini bar chart so the user can see their spending trend at a glance.
+        # Includes the current month if it has any budget_history entries.
+        history_rows = conn.execute("""
+            SELECT month, ROUND(SUM(amount), 2) AS total
+            FROM budget_history
+            WHERE item_id = ? AND month <= ?
+            GROUP BY month
+            ORDER BY month DESC
+            LIMIT 4
+        """, (item_id, month)).fetchall()
+
+    return {
+        "item_id": item_id,
+        "name": item["name"],
+        "group_name": item["group_name"],
+        "group_type": item["group_type"],
+        "month": month,
+        "planned": planned,
+        "spent": spent,
+        "remaining": planned - spent,
+        "transactions": [
+            {
+                "transaction_id": r["transaction_id"],
+                "date": r["date"],
+                "merchant": r["merchant_name"] or r["name"] or "Unknown",
+                "amount": float(r["amount"]),
+            }
+            for r in txn_rows
+        ],
+        # Oldest-first so bar chart renders left-to-right chronologically
+        "monthly_history": [
+            {"month": r["month"], "spent": float(r["total"])}
+            for r in reversed(history_rows)
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /template — seed default budget categories
 # ---------------------------------------------------------------------------
 
