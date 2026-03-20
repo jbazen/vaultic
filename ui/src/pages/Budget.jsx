@@ -559,9 +559,11 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
 // ── Item detail modal ─────────────────────────────────────────────────────────
 // Shows when the user clicks a budget item row. Displays planned/spent/remaining,
 // a mini bar chart of the last few months, and all transactions for this month.
-function ItemDetailModal({ itemId, itemName, month, onClose }) {
+function ItemDetailModal({ itemId, itemName, month, onClose, onUpdate }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(itemName);
 
   useEffect(() => {
     setLoading(true);
@@ -569,6 +571,16 @@ function ItemDetailModal({ itemId, itemName, month, onClose }) {
       .then(setDetail)
       .finally(() => setLoading(false));
   }, [itemId, month]);
+
+  async function saveName() {
+    const trimmed = nameDraft.trim();
+    if (!trimmed || trimmed === (detail?.name ?? itemName)) { setEditingName(false); return; }
+    await updateBudgetItem(itemId, trimmed);
+    setEditingName(false);
+    onUpdate?.();
+    // Refresh detail so the modal reflects the new name
+    getItemDetail(itemId, month).then(setDetail);
+  }
 
   // Close on Escape key
   useEffect(() => {
@@ -634,13 +646,28 @@ function ItemDetailModal({ itemId, itemName, month, onClose }) {
       }}>
         {/* Header */}
         <div style={{ padding: "16px 16px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 4 }}>
               {detail?.group_name ?? ""}
             </div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", lineHeight: 1.2 }}>
-              {itemName}
-            </div>
+            {editingName ? (
+              <input value={nameDraft} onChange={e => setNameDraft(e.target.value)}
+                onBlur={saveName}
+                onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
+                autoFocus
+                style={{
+                  width: "100%", background: "var(--bg3)",
+                  border: "1px solid var(--accent)", borderRadius: 4,
+                  color: "var(--text)", fontSize: 16, fontWeight: 700, padding: "3px 8px",
+                }}
+              />
+            ) : (
+              <div onClick={() => { setNameDraft(detail?.name ?? itemName); setEditingName(true); }}
+                style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", lineHeight: 1.2, cursor: "text" }}
+                title="Click to rename">
+                {detail?.name ?? itemName}
+              </div>
+            )}
           </div>
           <button onClick={onClose} style={{
             background: "none", border: "none", color: "var(--text2)",
@@ -748,6 +775,7 @@ function ItemDetailModal({ itemId, itemName, month, onClose }) {
           itemName={activeItem.name}
           month={month}
           onClose={() => setActiveItem(null)}
+          onUpdate={load}
         />
       )}
     </div>
@@ -804,25 +832,14 @@ function AmountCell({ value, onSave }) {
 }
 
 // ── Budget item row ───────────────────────────────────────────────────────────
+// Clicking anywhere on the row opens the detail modal.
+// Rename is handled inside the modal. Planned amount is editable via AmountCell.
 function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem }) {
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState(item.name);
   const isIncome = groupType === "income";
   const remaining = item.planned - item.spent;
 
-  async function saveName() {
-    const trimmed = nameDraft.trim();
-    if (!trimmed || trimmed === item.name) { setEditingName(false); return; }
-    await updateBudgetItem(item.id, trimmed);
-    setEditingName(false);
-    onUpdate();
-  }
-
-  // Remaining column: blue = money left, red = over budget
-  // Spent column: green when there's spending, gray otherwise
   function valueCell() {
     if (isIncome) {
-      // Income group shows received amount (what's come in so far)
       return (
         <span style={{ fontSize: 13, color: item.spent > 0 ? "#22c55e" : "var(--text2)" }}>
           {item.spent > 0 ? fmt(item.spent) : "—"}
@@ -836,22 +853,17 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem }) {
         </span>
       );
     }
-    // Remaining view (default)
     if (item.planned === 0) {
       return <span style={{ fontSize: 13, color: "var(--text2)" }}>—</span>;
     }
     return (
-      <span style={{
-        fontSize: 13, fontWeight: 600,
-        color: remaining < 0 ? "var(--red)" : "#3b82f6",
-      }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: remaining < 0 ? "var(--red)" : "#3b82f6" }}>
         {remaining < 0 ? `-${fmt(Math.abs(remaining))}` : fmt(remaining)}
       </span>
     );
   }
 
   return (
-    // Clicking anywhere on the row (except name/planned/delete) opens the detail modal
     <div onClick={() => onOpenItem?.(item)} style={{
       display: "grid", gridTemplateColumns: "1fr 110px 90px 28px",
       gap: 8, alignItems: "center",
@@ -859,40 +871,17 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem }) {
       borderBottom: "1px solid var(--border)",
       cursor: "pointer",
     }}>
-      {/* Item name — click to start editing (stopPropagation so row click doesn't fire) */}
-      <div style={{ minWidth: 0 }}>
-        {editingName ? (
-          <input value={nameDraft} onChange={e => setNameDraft(e.target.value)}
-            onBlur={saveName}
-            onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { setEditingName(false); setNameDraft(item.name); } }}
-            onClick={e => e.stopPropagation()}
-            autoFocus
-            style={{
-              width: "100%", background: "var(--bg3)",
-              border: "1px solid var(--accent)", borderRadius: 4,
-              color: "var(--text)", fontSize: 13, padding: "2px 6px",
-            }}
-          />
-        ) : (
-          <span
-            onClick={e => { e.stopPropagation(); setNameDraft(item.name); setEditingName(true); }}
-            style={{
-              fontSize: 13, color: "var(--text)", cursor: "text",
-              display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-            }}
-            title="Click to rename">
-            {item.name}
-          </span>
-        )}
+      {/* Item name — read-only in the row; rename via the detail modal */}
+      <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ fontSize: 13, color: "var(--text)" }}>{item.name}</span>
       </div>
 
-      {/* Planned — click to edit; stop propagation so row click doesn't open modal */}
+      {/* Planned — click to edit; stop propagation so it doesn't open the modal */}
       <div onClick={e => e.stopPropagation()}>
         <AmountCell value={item.planned}
           onSave={v => setBudgetAmount(item.id, month, v).then(onUpdate)} />
       </div>
 
-      {/* Remaining / Spent / Received — clicking this area opens the modal via row click */}
       <div style={{ textAlign: "right" }}>{valueCell()}</div>
 
       {/* Delete */}
