@@ -237,8 +237,9 @@ function SheetView() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   // Which person's overall balance column to highlight: HEATHER | JASON | TOTAL
-  const [person, setPerson]   = useState("TOTAL");
-  const [limit, setLimit]     = useState(6);
+  const [person, setPerson]       = useState("TOTAL");
+  const [limit, setLimit]         = useState(6);
+  const [selectedRow, setSelectedRow] = useState(null); // index of clicked row
 
   useEffect(() => {
     setLoading(true);
@@ -339,15 +340,24 @@ function SheetView() {
               ))}
             </div>
 
-            {/* Category rows */}
-            {categories.map((cat, ci) => (
-              <div key={ci} style={{
+            {/* Category rows — click to highlight, click again to deselect */}
+            {categories.map((cat, ci) => {
+              const isSelected = selectedRow === ci;
+              return (
+              <div key={ci}
+                onClick={() => setSelectedRow(isSelected ? null : ci)}
+                style={{
                 display: "grid", gridTemplateColumns: gridCols,
                 gap: 4, padding: "8px 12px",
                 borderBottom: "1px solid var(--border)",
-                background: ci % 2 === 0 ? "var(--bg2)" : "transparent",
-                borderRadius: ci % 2 === 0 ? 4 : 0,
+                background: isSelected
+                  ? "color-mix(in srgb, var(--accent) 18%, transparent)"
+                  : ci % 2 === 0 ? "var(--bg2)" : "transparent",
+                borderRadius: 4,
                 alignItems: "center",
+                cursor: "pointer",
+                outline: isSelected ? "1px solid var(--accent)" : "none",
+                outlineOffset: "-1px",
               }}>
                 {/* Fund name */}
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{cat.name}</div>
@@ -386,7 +396,8 @@ function SheetView() {
                   );
                 })}
               </div>
-            ))}
+              );
+            })}
 
           </div>
         </div>
