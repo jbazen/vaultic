@@ -786,7 +786,6 @@ function AmountCell({ value, onSave }) {
 function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem }) {
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(item.name);
-  const [hoveringName, setHoveringName] = useState(false);
   const isIncome = groupType === "income";
   const remaining = item.planned - item.spent;
 
@@ -831,62 +830,53 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem }) {
   }
 
   return (
-    <div style={{
+    // Clicking anywhere on the row (except name/planned/delete) opens the detail modal
+    <div onClick={() => onOpenItem?.(item)} style={{
       display: "grid", gridTemplateColumns: "1fr 110px 90px 28px",
       gap: 8, alignItems: "center",
       padding: "9px 16px",
       borderBottom: "1px solid var(--border)",
+      cursor: "pointer",
     }}>
-      {/* Item name — click to open detail modal; pencil icon on hover to rename */}
-      <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}
-        onMouseEnter={() => setHoveringName(true)}
-        onMouseLeave={() => setHoveringName(false)}>
+      {/* Item name — click to start editing (stopPropagation so row click doesn't fire) */}
+      <div style={{ minWidth: 0 }}>
         {editingName ? (
           <input value={nameDraft} onChange={e => setNameDraft(e.target.value)}
             onBlur={saveName}
             onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { setEditingName(false); setNameDraft(item.name); } }}
+            onClick={e => e.stopPropagation()}
             autoFocus
             style={{
-              flex: 1, background: "var(--bg3)",
+              width: "100%", background: "var(--bg3)",
               border: "1px solid var(--accent)", borderRadius: 4,
               color: "var(--text)", fontSize: 13, padding: "2px 6px",
             }}
           />
         ) : (
-          <>
-            <span onClick={() => onOpenItem?.(item)}
-              style={{
-                fontSize: 13, color: "var(--text)", cursor: "pointer",
-                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-              }}
-              title="Click to view detail">
-              {item.name}
-            </span>
-            {/* Pencil icon — only visible on hover; click to rename */}
-            <button
-              onClick={e => { e.stopPropagation(); setNameDraft(item.name); setEditingName(true); }}
-              title="Rename item"
-              style={{
-                background: "none", border: "none", padding: 0, cursor: "pointer",
-                fontSize: 11, color: "var(--text2)", lineHeight: 1, flexShrink: 0,
-                opacity: hoveringName ? 1 : 0, transition: "opacity 0.15s",
-              }}>
-              ✎
-            </button>
-          </>
+          <span
+            onClick={e => { e.stopPropagation(); setNameDraft(item.name); setEditingName(true); }}
+            style={{
+              fontSize: 13, color: "var(--text)", cursor: "text",
+              display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}
+            title="Click to rename">
+            {item.name}
+          </span>
         )}
       </div>
 
-      {/* Planned — click to edit */}
-      <AmountCell value={item.planned}
-        onSave={v => setBudgetAmount(item.id, month, v).then(onUpdate)} />
+      {/* Planned — click to edit; stop propagation so row click doesn't open modal */}
+      <div onClick={e => e.stopPropagation()}>
+        <AmountCell value={item.planned}
+          onSave={v => setBudgetAmount(item.id, month, v).then(onUpdate)} />
+      </div>
 
-      {/* Remaining / Spent / Received */}
+      {/* Remaining / Spent / Received — clicking this area opens the modal via row click */}
       <div style={{ textAlign: "right" }}>{valueCell()}</div>
 
       {/* Delete */}
       <button
-        onClick={() => { if (window.confirm(`Delete "${item.name}"?`)) deleteBudgetItem(item.id).then(onUpdate); }}
+        onClick={e => { e.stopPropagation(); if (window.confirm(`Delete "${item.name}"?`)) deleteBudgetItem(item.id).then(onUpdate); }}
         title="Delete item"
         style={{
           background: "none", border: "none", color: "var(--text2)",
