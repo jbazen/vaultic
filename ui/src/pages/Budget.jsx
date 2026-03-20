@@ -21,7 +21,7 @@ import {
   createBudgetGroup, updateBudgetGroup, deleteBudgetGroup,
   createBudgetItem, updateBudgetItem, deleteBudgetItem, setBudgetAmount,
   getUnassignedTransactions, getAssignedTransactions,
-  assignTransaction, unassignTransaction, autoAssignFromHistory,
+  assignTransaction, unassignTransaction, autoAssignFromHistory, unassignAll,
   getItemDetail,
 } from "../api.js";
 
@@ -367,6 +367,13 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
     onBudgetUpdate?.();
   }
 
+  async function handleUnassignAll() {
+    if (!window.confirm(`Unassign all ${assigned.length} tracked transactions for this month?`)) return;
+    await unassignAll(month);
+    await loadAll();
+    onBudgetUpdate?.();
+  }
+
   async function handleAutoAssign() {
     setAutoAssigning(true);
     setAutoResult(null);
@@ -421,6 +428,20 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
           padding: "6px 10px", marginBottom: 8,
         }}
       />
+
+      {/* Unassign all — only shown on Tracked tab when there are assigned transactions */}
+      {tab === "tracked" && assigned.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <button onClick={handleUnassignAll}
+            style={{
+              width: "100%", padding: "6px 0", borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+              color: "var(--red)", cursor: "pointer",
+            }}>
+            ✕ Unassign all ({assigned.length})
+          </button>
+        </div>
+      )}
 
       {/* Auto-assign button — only shown on New tab when there are unassigned transactions */}
       {tab === "new" && unassigned.length > 0 && (

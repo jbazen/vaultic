@@ -489,6 +489,30 @@ async def unassign_transaction(transaction_id: str, _user: str = Depends(get_cur
 
 
 # ---------------------------------------------------------------------------
+# DELETE /assign-all/{month} — remove all assignments for a month (bulk reset)
+# ---------------------------------------------------------------------------
+
+@router.delete("/assign-all/{month}")
+async def unassign_all(month: str, _user: str = Depends(get_current_user)):
+    """Remove every transaction assignment for the given month.
+
+    Useful for bulk-resetting before re-running auto-assign.
+    Only removes assignments for transactions whose date falls in the month.
+    """
+    _validate_month(month)
+    with get_db() as conn:
+        result = conn.execute("""
+            DELETE FROM transaction_assignments
+            WHERE transaction_id IN (
+                SELECT transaction_id FROM transactions
+                WHERE strftime('%Y-%m', date) = ?
+            )
+        """, (month,))
+        deleted = result.rowcount
+    return {"status": "ok", "unassigned": deleted}
+
+
+# ---------------------------------------------------------------------------
 # POST /auto-assign/{month} — match unassigned transactions to budget items
 #                              by dollar amount using imported budget history
 # ---------------------------------------------------------------------------
@@ -580,6 +604,73 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
         "assigned": assigned,
         "skipped": skipped,
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /auto-assign/{month}/debug — show why transactions were skipped
+# ---------------------------------------------------------------------------
+
+@router.get("/auto-assign/{month}/debug")
+async def auto_assign_debug(month: str, _user: str = Depends(get_current_user)):
+    """Return skip reasons for every unassigned transaction so we can diagnose misses.
+
+    Each row includes: amount, merchant, reason (no_history_match /
+    duplicate_plaid_amount / ambiguous_history / would_assign), and the
+    budget_history entries that matched (if any).
+    """
+    _validate_month(month)
+
+    with get_db() as conn:
+        unassigned = conn.execute("""
+            SELECT t.transaction_id, t.merchant_name, t.name,
+                   ROUND(ABS(t.amount), 2) AS amount
+            FROM transactions t
+            LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+              AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+        """, (month,)).fetchall()
+
+        history = conn.execute("""
+            SELECT ROUND(amount, 2) AS amount, item_id,
+                   (SELECT name FROM budget_items WHERE id = bh.item_id) AS item_name
+            FROM budget_history bh
+            WHERE month = ? AND item_id IS NOT NULL
+        """, (month,)).fetchall()
+
+    history_by_amount: dict[float, list] = defaultdict(list)
+    for row in history:
+        history_by_amount[row["amount"]].append(
+            {"item_id": row["item_id"], "item_name": row["item_name"]}
+        )
+
+    txn_amount_counts: dict[float, int] = defaultdict(int)
+    for txn in unassigned:
+        txn_amount_counts[txn["amount"]] += 1
+
+    results = []
+    for txn in unassigned:
+        amt = txn["amount"]
+        raw_matches = history_by_amount.get(amt, [])
+        unique_items = list({m["item_id"]: m for m in raw_matches}.values())
+
+        if txn_amount_counts[amt] > 1:
+            reason = "duplicate_plaid_amount"
+        elif len(unique_items) == 0:
+            reason = "no_history_match"
+        elif len(unique_items) > 1:
+            reason = "ambiguous_history"
+        else:
+            reason = "would_assign"
+
+        results.append({
+            "amount": amt,
+            "merchant": txn["merchant_name"] or txn["name"],
+            "reason": reason,
+            "history_matches": unique_items,
+        })
+
+    return sorted(results, key=lambda r: r["reason"])
 
 
 # ---------------------------------------------------------------------------
