@@ -49,6 +49,36 @@ def _validate_month(month: str):
         raise HTTPException(status_code=422, detail="month must be in YYYY-MM format")
 
 
+def _spent_for_item(conn, item_id: int, month: str) -> float:
+    """Return total spending for a budget item in a given month.
+
+    Checks both transaction_assignments (direct single-item assignments) and
+    transaction_splits (multi-item splits) so the total is always correct
+    regardless of how the user categorized each transaction.
+    """
+    # Direct assignments: use the full transaction amount
+    direct = conn.execute("""
+        SELECT COALESCE(SUM(ABS(t.amount)), 0) AS spent
+        FROM transaction_assignments ta
+        JOIN transactions t ON t.transaction_id = ta.transaction_id
+        WHERE ta.item_id = ?
+          AND strftime('%Y-%m', t.date) = ?
+          AND t.pending = 0
+    """, (item_id, month)).fetchone()["spent"]
+
+    # Split assignments: use the per-split amount, not the full transaction amount
+    split = conn.execute("""
+        SELECT COALESCE(SUM(ts.amount), 0) AS spent
+        FROM transaction_splits ts
+        JOIN transactions t ON t.transaction_id = ts.transaction_id
+        WHERE ts.item_id = ?
+          AND strftime('%Y-%m', t.date) = ?
+          AND t.pending = 0
+    """, (item_id, month)).fetchone()["spent"]
+
+    return float(direct) + float(split)
+
+
 # ---------------------------------------------------------------------------
 # Pydantic request bodies
 # ---------------------------------------------------------------------------
@@ -70,6 +100,17 @@ class AmountSet(BaseModel):
 class AssignBody(BaseModel):
     transaction_id: str
     item_id: int
+
+
+class SplitItem(BaseModel):
+    """One leg of a split transaction — item to assign and dollar amount."""
+    item_id: int
+    amount: float
+
+
+class SplitsBody(BaseModel):
+    """Request body for PUT /transactions/{id}/splits."""
+    splits: List[SplitItem]
 
 
 # ---------------------------------------------------------------------------
@@ -146,16 +187,8 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
 
                 # Spent = sum of absolute transaction amounts assigned to this item
                 # within the target month, excluding pending transactions.
-                # ABS() handles the Plaid sign convention (positive = outflow).
-                spent_row = conn.execute("""
-                    SELECT COALESCE(SUM(ABS(t.amount)), 0) AS spent
-                    FROM transaction_assignments ta
-                    JOIN transactions t ON t.transaction_id = ta.transaction_id
-                    WHERE ta.item_id = ?
-                      AND strftime('%Y-%m', t.date) = ?
-                      AND t.pending = 0
-                """, (iid, month)).fetchone()
-                spent = float(spent_row["spent"])
+                # Checks both direct assignments and splits via _spent_for_item.
+                spent = _spent_for_item(conn, iid, month)
 
                 items_out.append({
                     "id": iid,
@@ -536,6 +569,10 @@ async def unassign_transaction(transaction_id: str, _user: str = Depends(get_cur
             "DELETE FROM transaction_assignments WHERE transaction_id = ?",
             (transaction_id,)
         )
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (transaction_id,)
+        )
     return {"status": "unassigned"}
 
 
@@ -832,19 +869,39 @@ async def get_item_detail(
         ).fetchone()
         planned = float(amt_row["planned"]) if amt_row else 0.0
 
-        # Plaid transactions assigned to this item this month
+        # Transactions assigned to this item: either directly (transaction_assignments)
+        # or as part of a split (transaction_splits). UNION combines both sources.
+        # display_amount is the split amount for splits, full amount for direct assigns.
         txn_rows = conn.execute("""
             SELECT t.transaction_id, t.date, t.name, t.merchant_name,
-                   ABS(t.amount) AS amount
+                   ABS(t.amount) AS full_amount,
+                   ABS(t.amount) AS display_amount,
+                   0 AS is_split,
+                   a.name AS account_name, a.mask AS account_mask,
+                   a.subtype AS account_subtype
             FROM transaction_assignments ta
             JOIN transactions t ON t.transaction_id = ta.transaction_id
+            LEFT JOIN accounts a ON a.id = t.account_id
             WHERE ta.item_id = ?
               AND strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
-            ORDER BY t.date DESC
-        """, (item_id, month)).fetchall()
+            UNION ALL
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name,
+                   ABS(t.amount) AS full_amount,
+                   ts.amount AS display_amount,
+                   1 AS is_split,
+                   a.name AS account_name, a.mask AS account_mask,
+                   a.subtype AS account_subtype
+            FROM transaction_splits ts
+            JOIN transactions t ON t.transaction_id = ts.transaction_id
+            LEFT JOIN accounts a ON a.id = t.account_id
+            WHERE ts.item_id = ?
+              AND strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+            ORDER BY date DESC
+        """, (item_id, month, item_id, month)).fetchall()
 
-        spent = sum(float(r["amount"]) for r in txn_rows)
+        spent = sum(float(r["display_amount"]) for r in txn_rows)
 
         # Last 4 months of spending from imported budget history — used for the
         # mini bar chart so the user can see their spending trend at a glance.
@@ -872,7 +929,12 @@ async def get_item_detail(
                 "transaction_id": r["transaction_id"],
                 "date": r["date"],
                 "merchant": r["merchant_name"] or r["name"] or "Unknown",
-                "amount": float(r["amount"]),
+                "amount": float(r["display_amount"]),
+                "full_amount": float(r["full_amount"]),
+                "is_split": bool(r["is_split"]),
+                "account_name": r["account_name"],
+                "account_mask": r["account_mask"],
+                "account_subtype": r["account_subtype"],
             }
             for r in txn_rows
         ],
@@ -882,6 +944,155 @@ async def get_item_detail(
             for r in reversed(history_rows)
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /transactions/{transaction_id} — detail + current assignment/splits
+# ---------------------------------------------------------------------------
+
+@router.get("/transactions/{transaction_id}")
+async def get_transaction_detail(
+    transaction_id: str,
+    _user: str = Depends(get_current_user),
+):
+    """Return full details for a single transaction including current assignment or splits.
+
+    Used by the Edit Expense modal to pre-populate the form. Returns:
+      - transaction metadata (date, merchant, amount, account info)
+      - current splits list: one entry if directly assigned, multiple if split
+    """
+    with get_db() as conn:
+        txn = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name,
+                   ABS(t.amount) AS amount,
+                   a.name AS account_name, a.mask AS account_mask,
+                   a.subtype AS account_subtype
+            FROM transactions t
+            LEFT JOIN accounts a ON a.id = t.account_id
+            WHERE t.transaction_id = ?
+        """, (transaction_id,)).fetchone()
+
+        if not txn:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        # Check for a direct single-item assignment
+        assignment = conn.execute("""
+            SELECT ta.item_id, bi.name AS item_name, bg.name AS group_name
+            FROM transaction_assignments ta
+            JOIN budget_items bi ON bi.id = ta.item_id
+            JOIN budget_groups bg ON bg.id = bi.group_id
+            WHERE ta.transaction_id = ?
+        """, (transaction_id,)).fetchone()
+
+        # Check for split assignments (mutually exclusive with direct assignment)
+        split_rows = conn.execute("""
+            SELECT ts.item_id, ts.amount, bi.name AS item_name, bg.name AS group_name
+            FROM transaction_splits ts
+            JOIN budget_items bi ON bi.id = ts.item_id
+            JOIN budget_groups bg ON bg.id = bi.group_id
+            WHERE ts.transaction_id = ?
+            ORDER BY ts.id
+        """, (transaction_id,)).fetchall()
+
+    # Build current splits list for the form
+    if split_rows:
+        current_splits = [
+            {
+                "item_id": r["item_id"],
+                "amount": float(r["amount"]),
+                "item_name": r["item_name"],
+                "group_name": r["group_name"],
+            }
+            for r in split_rows
+        ]
+    elif assignment:
+        # Single assignment — represent as a one-item split list for UI consistency
+        current_splits = [{
+            "item_id": assignment["item_id"],
+            "amount": float(txn["amount"]),
+            "item_name": assignment["item_name"],
+            "group_name": assignment["group_name"],
+        }]
+    else:
+        current_splits = []
+
+    return {
+        "transaction_id": txn["transaction_id"],
+        "date": txn["date"],
+        "merchant": txn["merchant_name"] or txn["name"] or "Unknown",
+        "amount": float(txn["amount"]),
+        "account_name": txn["account_name"],
+        "account_mask": txn["account_mask"],
+        "account_subtype": txn["account_subtype"],
+        "splits": current_splits,
+    }
+
+
+# ---------------------------------------------------------------------------
+# PUT /transactions/{transaction_id}/splits — save assignment or split
+# ---------------------------------------------------------------------------
+
+@router.put("/transactions/{transaction_id}/splits")
+async def save_transaction_splits(
+    transaction_id: str,
+    body: SplitsBody,
+    _user: str = Depends(get_current_user),
+):
+    """Assign a transaction to one or more budget items with specific amounts.
+
+    Single split: stored in transaction_assignments (existing behavior).
+    Multiple splits: stored in transaction_splits; transaction_assignments row
+    for this transaction is removed.
+
+    Validates that split amounts sum to the full transaction amount (±$0.02
+    tolerance for floating-point rounding).
+    """
+    if not body.splits:
+        raise HTTPException(status_code=422, detail="splits list cannot be empty")
+
+    with get_db() as conn:
+        txn = conn.execute(
+            "SELECT ABS(amount) AS amount FROM transactions WHERE transaction_id = ?",
+            (transaction_id,)
+        ).fetchone()
+        if not txn:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        total = round(float(txn["amount"]), 2)
+        split_sum = round(sum(s.amount for s in body.splits), 2)
+        if abs(split_sum - total) > 0.02:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Split amounts ({split_sum:.2f}) must sum to transaction total ({total:.2f})",
+            )
+
+        # Clear any existing assignment and splits for this transaction
+        conn.execute(
+            "DELETE FROM transaction_assignments WHERE transaction_id = ?",
+            (transaction_id,)
+        )
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (transaction_id,)
+        )
+
+        if len(body.splits) == 1:
+            # Single item — use regular transaction_assignments (backward compatible)
+            conn.execute(
+                "INSERT INTO transaction_assignments (transaction_id, item_id, status)"
+                " VALUES (?, ?, 'manual')",
+                (transaction_id, body.splits[0].item_id)
+            )
+        else:
+            # Multiple splits — store in transaction_splits with per-split amounts
+            for split in body.splits:
+                conn.execute(
+                    "INSERT INTO transaction_splits (transaction_id, item_id, amount)"
+                    " VALUES (?, ?, ?)",
+                    (transaction_id, split.item_id, round(split.amount, 2))
+                )
+
+    return {"status": "saved", "splits": len(body.splits)}
 
 
 # ---------------------------------------------------------------------------

@@ -298,6 +298,20 @@ MIGRATIONS = [
         updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(merchant, item_id)
     )""",
+    # transaction_splits: stores split assignments when a single Plaid transaction
+    # is divided across multiple budget line items. A transaction with splits will
+    # have rows here but NOT in transaction_assignments — the two are mutually
+    # exclusive. When a transaction is assigned to a single item (no split),
+    # transaction_assignments is used (existing behavior). When split across 2+
+    # items, rows go here with a per-split amount that sums to the full txn amount.
+    """CREATE TABLE IF NOT EXISTS transaction_splits (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        transaction_id TEXT NOT NULL,
+        item_id        INTEGER REFERENCES budget_items(id) ON DELETE SET NULL,
+        amount         REAL NOT NULL,
+        created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(transaction_id, item_id)
+    )""",
     # Add status column to transaction_assignments so rows can be distinguished
     # between manually assigned ('manual') and auto-categorized ('auto') entries.
     "ALTER TABLE transaction_assignments ADD COLUMN status TEXT DEFAULT 'manual'",

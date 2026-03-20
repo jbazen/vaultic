@@ -506,3 +506,22 @@ export async function toggleExcludeFromNetWorth(id) {
   const res = await apiFetch(`/api/manual/${id}/exclude`, { method: "PATCH" });
   return res.json(); // { exclude_from_net_worth: 0 | 1 }
 }
+
+// ── Edit Expense / transaction split API ──────────────────────────────────────
+
+/** Fetch full transaction details + current assignment/splits for the edit modal. */
+export async function getTransaction(transactionId) {
+  const res = await apiFetch(`/api/budget/transactions/${encodeURIComponent(transactionId)}`);
+  return res.json();
+}
+
+/** Save assignment or split for a transaction.
+ *  splits: [{item_id, amount}, ...] — amounts must sum to the transaction total.
+ */
+export async function saveTransactionSplits(transactionId, splits) {
+  const res = await apiFetch(
+    `/api/budget/transactions/${encodeURIComponent(transactionId)}/splits`,
+    { method: "PUT", body: JSON.stringify({ splits }) }
+  );
+  return res.json();
+}

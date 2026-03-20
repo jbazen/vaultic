@@ -23,6 +23,7 @@ import {
   getUnassignedTransactions, getAssignedTransactions,
   assignTransaction, unassignTransaction, autoAssignFromHistory, unassignAll,
   autoAssignDebug, getItemDetail, reorderGroups, reorderItems,
+  getTransaction, saveTransactionSplits,
 } from "../api.js";
 
 // ── Color palette — one color per expense group (income is always green) ──────
@@ -607,14 +608,290 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
   );
 }
 
+// ── Edit Expense modal ─────────────────────────────────────────────────────────
+// Opens when the user clicks a transaction row inside ItemDetailModal.
+// Lets the user assign the transaction to one budget item, or split it across
+// multiple items with custom amounts that must sum to the full transaction total.
+function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
+  const [txn, setTxn] = useState(null);
+  const [splits, setSplits] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Load transaction details and pre-populate splits from current assignment
+  useEffect(() => {
+    if (!txnId) return;
+    setTxn(null);
+    setError(null);
+    getTransaction(txnId).then(data => {
+      setTxn(data);
+      setSplits(
+        data.splits.length > 0
+          ? data.splits.map(s => ({ item_id: s.item_id, amount: String(s.amount.toFixed(2)) }))
+          : [{ item_id: null, amount: data.amount.toFixed(2) }]
+      );
+    }).catch(() => setError("Failed to load transaction"));
+  }, [txnId]);
+
+  // Close on Escape
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  function addSplit() {
+    setSplits(prev => [...prev, { item_id: null, amount: "0.00" }]);
+  }
+
+  function removeSplit(idx) {
+    setSplits(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  function updateSplit(idx, field, value) {
+    setSplits(prev => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s));
+  }
+
+  const splitTotal = splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+  const totalMatch = txn && Math.abs(splitTotal - txn.amount) < 0.02;
+  const canSave = txn && splits.length > 0
+    && splits.every(s => s.item_id != null && parseFloat(s.amount) > 0)
+    && totalMatch;
+
+  async function handleSave() {
+    if (!canSave) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await saveTransactionSplits(txnId, splits.map(s => ({
+        item_id: parseInt(s.item_id),
+        amount: parseFloat(parseFloat(s.amount).toFixed(2)),
+      })));
+      onSaved?.();
+      onClose();
+    } catch (e) {
+      setError(e.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete() {
+    await unassignTransaction(txnId);
+    onSaved?.();
+    onClose();
+  }
+
+  // Account display string: "CREDIT CARD *1941" style
+  function accountLabel(txnData) {
+    if (!txnData) return "";
+    const subtype = (txnData.account_subtype || "").replace(/_/g, " ").toUpperCase();
+    const mask = txnData.account_mask ? ` *${txnData.account_mask}` : "";
+    return (subtype || txnData.account_name || "ACCOUNT") + mask;
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 600,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width: 440, maxHeight: "85vh", overflowY: "auto",
+          background: "var(--bg2)", borderRadius: 12,
+          border: "1px solid var(--border)",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
+          padding: "20px 24px",
+        }}
+      >
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", flex: 1 }}>
+            Edit Expense
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 18, cursor: "pointer", lineHeight: 1 }}
+          >✕</button>
+        </div>
+
+        {!txn && !error && (
+          <div style={{ padding: "32px 0", textAlign: "center", color: "var(--text2)", fontSize: 13 }}>
+            Loading…
+          </div>
+        )}
+
+        {error && (
+          <div style={{ padding: "16px 0", textAlign: "center", color: "var(--red)", fontSize: 13 }}>
+            {error}
+          </div>
+        )}
+
+        {txn && (
+          <>
+            {/* Transaction info */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)", marginBottom: 3 }}>
+                {txn.merchant}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>
+                {txn.date} · {accountLabel(txn)}
+              </div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: "var(--red)" }}>
+                -{fmt(txn.amount)}
+              </div>
+            </div>
+
+            {/* Split assignment rows */}
+            <div style={{ marginBottom: 4 }}>
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: "var(--text2)",
+                textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 10,
+              }}>
+                Budget Assignment
+              </div>
+
+              {splits.map((split, idx) => (
+                <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                  {/* Remove button — only shown when there's more than one split */}
+                  {splits.length > 1 ? (
+                    <button
+                      onClick={() => removeSplit(idx)}
+                      title="Remove this split"
+                      style={{
+                        width: 22, height: 22, borderRadius: "50%",
+                        background: "var(--red)", border: "none", color: "#fff",
+                        cursor: "pointer", fontSize: 16, lineHeight: 1, flexShrink: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}
+                    >−</button>
+                  ) : (
+                    // Spacer so the dropdown stays aligned when there's only one split
+                    <div style={{ width: 22, flexShrink: 0 }} />
+                  )}
+
+                  {/* Budget item dropdown */}
+                  <select
+                    value={split.item_id ?? ""}
+                    onChange={e => updateSplit(idx, "item_id", e.target.value ? parseInt(e.target.value) : null)}
+                    style={{
+                      flex: 1, background: "var(--bg3)",
+                      border: `1px solid ${split.item_id ? "var(--border)" : "var(--accent)"}`,
+                      borderRadius: 6, color: "var(--text)", fontSize: 13, padding: "7px 8px",
+                    }}
+                  >
+                    <option value="">Select budget item…</option>
+                    {allGroups.map(g => (
+                      <optgroup key={g.id} label={g.name}>
+                        {(g.items || []).map(item => (
+                          <option key={item.id} value={item.id}>{item.name}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+
+                  {/* Amount input */}
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={split.amount}
+                    onChange={e => updateSplit(idx, "amount", e.target.value)}
+                    style={{
+                      width: 84, background: "var(--bg3)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6, color: "var(--text)", fontSize: 13, padding: "7px 8px",
+                      textAlign: "right",
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Add a Split button */}
+            <button
+              onClick={addSplit}
+              style={{
+                background: "none", border: "none", color: "var(--accent)",
+                cursor: "pointer", fontSize: 13, fontWeight: 600,
+                padding: "4px 0", marginBottom: 12,
+              }}
+            >
+              + Add a Split
+            </button>
+
+            {/* Running total vs transaction amount */}
+            <div style={{
+              fontSize: 12, marginBottom: 16, textAlign: "right",
+              color: totalMatch ? "var(--text2)" : "var(--red)",
+            }}>
+              {splits.length > 1 ? (
+                <>Split total: {fmt(splitTotal)} / {fmt(txn.amount)}{!totalMatch && " — must equal transaction amount"}</>
+              ) : null}
+            </div>
+
+            {/* Action buttons */}
+            <div style={{
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              borderTop: "1px solid var(--border)", paddingTop: 16, gap: 8,
+            }}>
+              <button
+                onClick={handleDelete}
+                style={{
+                  background: "none", border: "none", color: "var(--red)",
+                  cursor: "pointer", fontSize: 13, fontWeight: 600, flexShrink: 0,
+                }}
+              >
+                Delete Transaction
+              </button>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={onClose}
+                  style={{
+                    padding: "8px 16px", borderRadius: 6,
+                    border: "1px solid var(--border)",
+                    background: "none", color: "var(--text)",
+                    cursor: "pointer", fontSize: 13,
+                  }}
+                >Cancel</button>
+
+                <button
+                  onClick={handleSave}
+                  disabled={!canSave || saving}
+                  style={{
+                    padding: "8px 18px", borderRadius: 6, border: "none",
+                    background: canSave && !saving ? "var(--accent)" : "var(--bg3)",
+                    color: canSave && !saving ? "#fff" : "var(--text2)",
+                    cursor: canSave && !saving ? "pointer" : "not-allowed",
+                    fontSize: 13, fontWeight: 600,
+                  }}
+                >
+                  {saving ? "Saving…" : "Track Expense"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Item detail modal ─────────────────────────────────────────────────────────
 // Shows when the user clicks a budget item row. Displays planned/spent/remaining,
 // a mini bar chart of the last few months, and all transactions for this month.
-function ItemDetailModal({ itemId, itemName, month, onClose, onUpdate }) {
+function ItemDetailModal({ itemId, itemName, month, allGroups, onClose, onUpdate }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(itemName);
+  const [editTxn, setEditTxn] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -773,12 +1050,18 @@ function ItemDetailModal({ itemId, itemName, month, onClose, onUpdate }) {
             ) : (
               <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
                 {detail.transactions.map((t, i) => (
-                  <div key={t.transaction_id} style={{
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                    padding: "10px 12px",
-                    borderBottom: i < detail.transactions.length - 1 ? "1px solid var(--border)" : "none",
-                    background: i % 2 === 0 ? "var(--bg3)" : "transparent",
-                  }}>
+                  <div
+                    key={t.transaction_id}
+                    onClick={() => setEditTxn(t.transaction_id)}
+                    style={{
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                      padding: "10px 12px",
+                      borderBottom: i < detail.transactions.length - 1 ? "1px solid var(--border)" : "none",
+                      background: i % 2 === 0 ? "var(--bg3)" : "transparent",
+                      cursor: "pointer",
+                    }}
+                    title="Click to edit or split this transaction"
+                  >
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)",
                         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -786,8 +1069,17 @@ function ItemDetailModal({ itemId, itemName, month, onClose, onUpdate }) {
                       </div>
                       <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 1 }}>{t.date}</div>
                     </div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)", flexShrink: 0 }}>
-                      -{fmt(t.amount)}
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", flexShrink: 0, gap: 2 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)" }}>
+                        -{fmt(t.amount)}
+                      </div>
+                      {t.is_split && (
+                        <div style={{
+                          fontSize: 9, fontWeight: 700, color: "var(--accent)",
+                          background: "color-mix(in srgb, var(--accent) 15%, transparent)",
+                          borderRadius: 3, padding: "1px 4px", letterSpacing: "0.4px",
+                        }}>SPLIT</div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -818,6 +1110,21 @@ function ItemDetailModal({ itemId, itemName, month, onClose, onUpdate }) {
           </div>
         )}
       </div>
+
+        {/* Edit Expense modal — nested inside ItemDetailModal so it inherits context */}
+        {editTxn && (
+          <EditExpenseModal
+            txnId={editTxn}
+            allGroups={allGroups || []}
+            onClose={() => setEditTxn(null)}
+            onSaved={() => {
+              setEditTxn(null);
+              // Reload item detail to reflect the updated assignment
+              getItemDetail(itemId, month).then(setDetail);
+              onUpdate?.();
+            }}
+          />
+        )}
     </div>
   );
 }
@@ -1544,6 +1851,7 @@ export default function Budget() {
           itemId={activeItem.id}
           itemName={activeItem.name}
           month={month}
+          allGroups={groups}
           onClose={() => setActiveItem(null)}
           onUpdate={load}
         />
