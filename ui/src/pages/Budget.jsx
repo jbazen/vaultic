@@ -332,7 +332,7 @@ function SummaryPanel({ groups, summary }) {
 }
 
 // ── Transactions panel (right side) ───────────────────────────────────────────
-function TransactionsPanel({ month, allGroups }) {
+function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
   const [tab, setTab] = useState("new"); // new | tracked
   const [unassigned, setUnassigned] = useState([]);
   const [assigned, setAssigned] = useState([]);
@@ -355,7 +355,15 @@ function TransactionsPanel({ month, allGroups }) {
   async function handleAssign(txnId, itemId) {
     if (!itemId) return;
     await assignTransaction(txnId, parseInt(itemId));
-    loadAll();
+    // Reload both the transactions panel and the budget groups (spent/remaining totals)
+    await loadAll();
+    onBudgetUpdate?.();
+  }
+
+  async function handleUnassign(txnId) {
+    await unassignTransaction(txnId);
+    await loadAll();
+    onBudgetUpdate?.();
   }
 
   async function handleAutoAssign() {
@@ -364,15 +372,13 @@ function TransactionsPanel({ month, allGroups }) {
     try {
       const result = await autoAssignFromHistory(month);
       setAutoResult(result);
-      if (result.assigned > 0) loadAll();
+      if (result.assigned > 0) {
+        await loadAll();
+        onBudgetUpdate?.();
+      }
     } finally {
       setAutoAssigning(false);
     }
-  }
-
-  async function handleUnassign(txnId) {
-    await unassignTransaction(txnId);
-    loadAll();
   }
 
   const txns = (tab === "new" ? unassigned : assigned).filter(t => {
@@ -1107,7 +1113,7 @@ export default function Budget() {
               {rightTab === "summary" ? (
                 <SummaryPanel groups={groups} summary={summary} />
               ) : (
-                <TransactionsPanel month={month} allGroups={groups} />
+                <TransactionsPanel month={month} allGroups={groups} onBudgetUpdate={load} />
               )}
             </div>
           </div>
