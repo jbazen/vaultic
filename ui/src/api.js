@@ -452,6 +452,18 @@ export async function getItemDetail(itemId, month) {
   const res = await apiFetch(`/api/budget/items/${itemId}/detail?month=${month}`);
   return res.json();
 }
+export async function reorderGroups(ids) {
+  const res = await apiFetch("/api/budget/groups/reorder", {
+    method: "PATCH", body: JSON.stringify({ ids }),
+  });
+  return res.json();
+}
+export async function reorderItems(ids) {
+  const res = await apiFetch("/api/budget/items/reorder", {
+    method: "PATCH", body: JSON.stringify({ ids }),
+  });
+  return res.json();
+}
 
 // ── Fund Financials ───────────────────────────────────────────────────────────
 export async function getFunds() {

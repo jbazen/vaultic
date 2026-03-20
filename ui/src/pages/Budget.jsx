@@ -22,7 +22,7 @@ import {
   createBudgetItem, updateBudgetItem, deleteBudgetItem, setBudgetAmount,
   getUnassignedTransactions, getAssignedTransactions,
   assignTransaction, unassignTransaction, autoAssignFromHistory, unassignAll,
-  autoAssignDebug, getItemDetail,
+  autoAssignDebug, getItemDetail, reorderGroups, reorderItems,
 } from "../api.js";
 
 // ── Color palette — one color per expense group (income is always green) ──────
@@ -43,6 +43,33 @@ const PALETTE = [
 
 function getGroupColor(index) {
   return PALETTE[index % PALETTE.length];
+}
+
+// ── Drag handle — 6-dot grip icon shown on hover to the left of names ─────────
+function DragHandle({ onMouseDown }) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      style={{
+        display: "flex", flexDirection: "column", gap: 2,
+        padding: "0 4px", cursor: "grab", flexShrink: 0, opacity: 0,
+        transition: "opacity 0.15s",
+      }}
+      className="drag-handle"
+      title="Drag to reorder"
+    >
+      {[0, 1].map(row => (
+        <div key={row} style={{ display: "flex", gap: 2 }}>
+          {[0, 1, 2].map(col => (
+            <div key={col} style={{
+              width: 3, height: 3, borderRadius: "50%",
+              background: "var(--text2)",
+            }} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -840,7 +867,9 @@ function AmountCell({ value, onSave }) {
 // ── Budget item row ───────────────────────────────────────────────────────────
 // Clicking anywhere on the row opens the detail modal.
 // Rename is handled inside the modal. Planned amount is editable via AmountCell.
-function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem }) {
+function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem,
+                   dragHandleProps, isDragOver,
+                   onDragStart, onDragOver, onDrop, onDragEnd }) {
   const isIncome = groupType === "income";
   const remaining = item.planned - item.spent;
 
@@ -870,13 +899,25 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem }) {
   }
 
   return (
-    <div onClick={() => onOpenItem?.(item)} style={{
-      display: "grid", gridTemplateColumns: "1fr 110px 90px 28px",
-      gap: 8, alignItems: "center",
-      padding: "9px 16px",
-      borderBottom: "1px solid var(--border)",
-      cursor: "pointer",
-    }}>
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={`budget-item-row${isDragOver ? " drag-over-item" : ""}`}
+      onClick={() => onOpenItem?.(item)}
+      style={{
+        display: "grid", gridTemplateColumns: "20px 1fr 110px 90px 28px",
+        gap: 8, alignItems: "center",
+        padding: "9px 16px 9px 8px",
+        borderBottom: "1px solid var(--border)",
+        cursor: "pointer",
+      }}
+    >
+      {/* Drag handle */}
+      <DragHandle onMouseDown={dragHandleProps?.onMouseDown} />
+
       {/* Item name — read-only in the row; rename via the detail modal */}
       <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         <span style={{ fontSize: 13, color: "var(--text)" }}>{item.name}</span>
@@ -947,7 +988,9 @@ function GroupTotalsRow({ group, showSpent }) {
 }
 
 // ── Budget group section ──────────────────────────────────────────────────────
-function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem }) {
+function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
+                        dragHandleProps, isDragOver,
+                        onDragStart, onDragOver, onDrop, onDragEnd }) {
   const [collapsed, setCollapsed] = useState(false);
   const [showSpent, setShowSpent] = useState(false);  // toggles Remaining ↔ Spent column
   const [editingName, setEditingName] = useState(false);
@@ -981,18 +1024,64 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem }) {
     onUpdate();
   }
 
+  // ── Item drag state (items only reorder within this group) ────────────────
+  const [dragItemId, setDragItemId]       = useState(null);
+  const [dragOverItemId, setDragOverItemId] = useState(null);
+
+  function handleItemDragStart(e, itemId) {
+    setDragItemId(itemId);
+    e.dataTransfer.effectAllowed = "move";
+    e.stopPropagation(); // prevent triggering group drag
+  }
+
+  function handleItemDragOver(e, itemId) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (dragItemId && dragItemId !== itemId) setDragOverItemId(itemId);
+  }
+
+  async function handleItemDrop(e, targetItemId) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragItemId || dragItemId === targetItemId) {
+      setDragItemId(null); setDragOverItemId(null); return;
+    }
+    const visibleItems = group.items.filter(i => i.planned > 0 || i.spent > 0);
+    const ids = visibleItems.map(i => i.id);
+    const fromIdx = ids.indexOf(dragItemId);
+    const toIdx   = ids.indexOf(targetItemId);
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, dragItemId);
+    setDragItemId(null); setDragOverItemId(null);
+    await reorderItems(ids);
+    onUpdate();
+  }
+
   return (
-    <div style={{
-      marginBottom: 6, borderRadius: 8, overflow: "hidden",
-      border: "1px solid var(--border)", background: "var(--bg2)",
-    }}>
-      {/* ── Group header ── */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 10, padding: "11px 16px",
-        cursor: "pointer", userSelect: "none",
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={isDragOver ? "drag-over-group" : ""}
+      style={{
+        marginBottom: 6, borderRadius: 8, overflow: "hidden",
+        border: "1px solid var(--border)", background: "var(--bg2)",
       }}
+    >
+      {/* ── Group header ── */}
+      <div
+        className="budget-group-row"
+        style={{
+          display: "flex", alignItems: "center", gap: 6, padding: "11px 12px 11px 8px",
+          cursor: "pointer", userSelect: "none",
+        }}
         onClick={() => { if (!editingName) setCollapsed(c => !c); }}
       >
+        {/* Drag handle — shown on row hover, grabs the whole group */}
+        <DragHandle onMouseDown={dragHandleProps?.onMouseDown} />
+
         {/* Collapse chevron */}
         <span style={{ color: "var(--text2)", fontSize: 10, width: 10, flexShrink: 0 }}>
           {collapsed ? "▶" : "▼"}
@@ -1050,10 +1139,11 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem }) {
         <>
           {/* Column headers */}
           <div style={{
-            display: "grid", gridTemplateColumns: "1fr 110px 90px 28px",
-            gap: 8, padding: "5px 16px",
+            display: "grid", gridTemplateColumns: "20px 1fr 110px 90px 28px",
+            gap: 8, padding: "5px 16px 5px 8px",
             background: "var(--bg3)", borderTop: "1px solid var(--border)",
           }}>
+            <div />
             <div style={{ fontSize: 10, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
               Item
             </div>
@@ -1088,7 +1178,14 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem }) {
             .map(item => (
               <ItemRow key={item.id} item={item} month={month}
                 groupType={group.type} showSpent={showSpent}
-                onUpdate={onUpdate} onOpenItem={onOpenItem} />
+                onUpdate={onUpdate} onOpenItem={onOpenItem}
+                isDragOver={dragOverItemId === item.id && dragItemId !== item.id}
+                dragHandleProps={{ onMouseDown: () => {} }}
+                onDragStart={e => handleItemDragStart(e, item.id)}
+                onDragOver={e => handleItemDragOver(e, item.id)}
+                onDrop={e => handleItemDrop(e, item.id)}
+                onDragEnd={() => { setDragItemId(null); setDragOverItemId(null); }}
+              />
             ))}
 
           {/* Group totals row */}
@@ -1141,6 +1238,11 @@ export default function Budget() {
   const [newGroupType, setNewGroupType] = useState("expense");
   const [activeItem, setActiveItem] = useState(null); // item clicked for detail modal
 
+  // ── Drag-and-drop state ──────────────────────────────────────────────────
+  // Groups and items use separate drag state so they don't interfere.
+  const [dragGroupId, setDragGroupId]         = useState(null); // group being dragged
+  const [dragOverGroupId, setDragOverGroupId] = useState(null); // group being hovered over
+
   const load = useCallback(async () => {
     setLoading(true);
     try { setBudget(await getBudget(month)); }
@@ -1186,6 +1288,37 @@ export default function Budget() {
   let expIdx = 0;
   const groupColorIdx = {};
   visibleGroups.forEach(g => { if (g.type !== "income") groupColorIdx[g.id] = expIdx++; });
+
+  // ── Group drag handlers ────────────────────────────────────────────────────
+  function handleGroupDragStart(e, groupId) {
+    setDragGroupId(groupId);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleGroupDragOver(e, groupId) {
+    e.preventDefault();
+    if (dragGroupId && dragGroupId !== groupId) setDragOverGroupId(groupId);
+  }
+
+  async function handleGroupDrop(e, targetGroupId) {
+    e.preventDefault();
+    if (!dragGroupId || dragGroupId === targetGroupId) {
+      setDragGroupId(null); setDragOverGroupId(null); return;
+    }
+    // Reorder: move dragGroupId to the position of targetGroupId
+    const ids = visibleGroups.map(g => g.id);
+    const fromIdx = ids.indexOf(dragGroupId);
+    const toIdx   = ids.indexOf(targetGroupId);
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, dragGroupId);
+    setDragGroupId(null); setDragOverGroupId(null);
+    await reorderGroups(ids);
+    await load();
+  }
+
+  function handleGroupDragEnd() {
+    setDragGroupId(null); setDragOverGroupId(null);
+  }
 
   return (
     <div>
@@ -1279,7 +1412,14 @@ export default function Budget() {
               <GroupSection key={g.id} group={g} month={month}
                 colorIndex={groupColorIdx[g.id] ?? 0}
                 onUpdate={load}
-                onOpenItem={setActiveItem} />
+                onOpenItem={setActiveItem}
+                isDragOver={dragOverGroupId === g.id && dragGroupId !== g.id}
+                dragHandleProps={{ onMouseDown: () => {} }}
+                onDragStart={e => handleGroupDragStart(e, g.id)}
+                onDragOver={e => handleGroupDragOver(e, g.id)}
+                onDrop={e => handleGroupDrop(e, g.id)}
+                onDragEnd={handleGroupDragEnd}
+              />
             ))}
 
             {/* Add group */}
