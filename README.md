@@ -21,10 +21,10 @@ Vaultic is a self-hosted personal finance dashboard that aggregates all your acc
 11. [Deployment](#deployment)
 12. [Backups & Disaster Recovery](#backups--disaster-recovery)
 13. [CI/CD Pipeline](#cicd-pipeline)
-13. [Running Tests](#running-tests)
-14. [Test Coverage](#test-coverage)
-15. [Costs](#costs)
-16. [Roadmap](#roadmap)
+14. [Running Tests](#running-tests)
+15. [Test Coverage](#test-coverage)
+16. [Costs](#costs)
+17. [Roadmap](#roadmap)
 
 ---
 
@@ -40,9 +40,12 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 - **PDF import** — parse Investor360/NFS account statements using Claude AI extraction (for Parker Financial IRA/college fund accounts that Plaid cannot reach)
 - **Manual entries** — home value, car value, credit score, and any other asset or liability
 - **Net worth history** — daily snapshots, historical charts
+- **Zero-based budget module** — monthly budget with Plaid transaction auto-assignment, drag-to-reorder groups and items, carryforward of planned amounts month-to-month
+- **Fund Financials** — read-only Google Sheets viewer for savings category running totals (6M / 1Y / 2Y / 5Y / All range selector); native sinking fund tracker also built in
 - **Voice interface** — "Hey Sage" wake word, push-to-talk (Whisper), hands-free voice mode, OpenAI TTS (fable voice) or free browser TTS
 - **2FA (TOTP)** — Google Authenticator / Authy enrollment
 - **Security logging** — verbose audit log of every login, API call, sync event, and Sage query, with live tail viewer in the UI
+- **Continuous backup** — Litestream streams every SQLite WAL change to Cloudflare R2 within ~1 second; 7-day retention; one-command restore
 
 ---
 
@@ -567,17 +570,19 @@ cp .env.example .env
 nano .env   # fill in all values; use PLAID_ENV=production when ready
 ```
 
-### systemd service (`/etc/systemd/system/vaultic-api.service`)
+### systemd service
+
+The service file (`deploy/vaultic-api.service`) is deployed automatically by CI/CD. It runs `deploy/start.sh`, which loads Litestream credentials and wraps uvicorn with Litestream for continuous backup:
 
 ```ini
 [Unit]
-Description=Vaultic API
+Description=Vaultic API (with Litestream backup)
 After=network.target
 
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vaultic
-ExecStart=/home/ubuntu/vaultic/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000
+ExecStart=/bin/bash /home/ubuntu/vaultic/deploy/start.sh
 Restart=always
 RestartSec=5
 
@@ -628,6 +633,61 @@ server {
 
 ---
 
+## Backups & Disaster Recovery
+
+Vaultic uses **Litestream** to stream every SQLite WAL change to **Cloudflare R2** in near-real-time (typically within 1 second). This provides continuous, automatic point-in-time backup with zero application code changes.
+
+### How it works
+
+The systemd service (`deploy/vaultic-api.service`) runs `deploy/start.sh`, which wraps uvicorn with:
+
+```bash
+litestream replicate -config deploy/litestream.yml -exec "uvicorn api.main:app ..."
+```
+
+Litestream watches the SQLite WAL file and ships changes to R2. The app runs normally — no backup logic needed in application code.
+
+### Configuration
+
+| Setting | Value |
+|---|---|
+| **Provider** | Cloudflare R2 (S3-compatible) |
+| **Bucket** | `vaultic-backup` |
+| **Path** | `vaultic.db` |
+| **Retention** | 7 days (168h) |
+| **Sync interval** | 1 second |
+| **Config file** | `deploy/litestream.yml` |
+
+### Required `.env` values (server-side only, never committed)
+
+```bash
+LITESTREAM_ACCESS_KEY_ID=your_r2_access_key_id
+LITESTREAM_SECRET_ACCESS_KEY=your_r2_secret_access_key
+```
+
+These are loaded by `deploy/start.sh` at startup — **not** via systemd `EnvironmentFile` (which would fail because it is evaluated before `ExecStartPre` runs, meaning dynamically written env files are always missing on first load).
+
+### Restoring from backup
+
+Run this on a fresh server **before** starting the service:
+
+```bash
+bash /home/ubuntu/vaultic/deploy/restore.sh
+sudo systemctl start vaultic-api
+```
+
+The restore script:
+1. Loads Litestream credentials from `.env`
+2. Warns if a database file already exists (prompts before overwriting)
+3. Backs up the existing file to `vaultic.db.pre-restore.TIMESTAMP`
+4. Runs `litestream restore` to pull the latest snapshot + WAL from R2
+
+### Migrating to PostgreSQL
+
+If you ever migrate from SQLite to PostgreSQL, swap Litestream for [WAL-G](https://github.com/wal-g/wal-g) or [pgBackRest](https://pgbackrest.org/) — same concept, same S3-compatible destination.
+
+---
+
 ## CI/CD Pipeline
 
 On every push to `main`:
@@ -660,7 +720,7 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend unit tests across:**
+**Backend unit tests — 137 tests across:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
 - `test_accounts.py` — Accounts, net worth (investable field, monthly aggregation), manual entries (all 10 categories)
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable
@@ -668,6 +728,8 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 - `test_sage.py` — Chat endpoint, tool dispatch, rate limiting (429)
 - `test_pdf.py` — PDF ingestion, `_salvage_json` recovery, duplicate prevention, holdings + activity_summary save
 - `test_rate_limit.py` — Sliding window rate limit behavior
+- `test_transactions.py` — Balance history endpoints, transaction insertion
+- `test_sheet.py` — Google Sheet CSV parser (17 tests): `_parse_dollar`, `_month_sort_key`, endpoint structure/values/auth/error handling, mocked HTTP
 
 **Playwright E2E — 18 tests across:**
 - `tests/e2e/auth.spec.js` — Login, wrong password, 2FA step, logout
@@ -682,6 +744,7 @@ All E2E tests use mocked API routes — no live backend required.
 - ⬜ Plaid link token, token exchange, sync (requires Plaid SDK mock)
 - ⬜ OpenAI TTS endpoint (requires OpenAI mock)
 - ⬜ Security log endpoint
+- ⬜ Budget CRUD endpoints (groups, items, amounts, assignment, auto-assign)
 
 **Frontend:**
 - ⬜ No component unit tests (no Vitest/Jest setup)
@@ -749,10 +812,14 @@ Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client po
 
 ## Roadmap
 
-- [ ] **Budget module** — zero-based budgeting; Plaid transactions auto-categorized into budget lines; Sage learns merchant → category mappings over time
-- [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth (completed)
-- [ ] **River** — no retail API available; plan to transfer BTC to Coinbase
-- [ ] **Plaid Production** — applied (pending approval); EIN obtained, security questionnaire submitted
+- [x] **Budget module** — zero-based budgeting with Plaid transaction auto-assignment, drag-to-reorder, external budget CSV import, month carryforward (complete)
+- [x] **Fund Financials** — Google Sheets read-only viewer + native sinking fund tracker (complete)
+- [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth (complete)
+- [x] **Continuous backup** — Litestream → Cloudflare R2, 7-day retention, one-command restore (complete)
+- [x] **Plaid Production** — approved 2026-03-17; non-OAuth institutions live; OAuth (Chase, Rocket Mortgage, Health Equity) pending approval (~early April 2026)
+- [x] **Test suite** — 137 backend unit tests + 18 Playwright E2E tests (complete)
+- [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
+- [ ] **River Bitcoin** — no retail API; plan to transfer BTC to Coinbase
+- [ ] **Sage budget tools** — `get_budget`, `get_budget_history` so Sage can answer "how much did I spend on groceries last month?"
 - [ ] **Tax module** — W-4 multi-job wizard, quarterly estimated tax calculator (1040-ES), capital gains tracker, withholding tracker
-- [x] **Test suite** — 80 backend unit tests + 18 Playwright E2E tests (completed)
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen
