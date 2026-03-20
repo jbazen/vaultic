@@ -747,14 +747,16 @@ function AmountCell({ value, onSave }) {
   }
 
   async function commit() {
-    const v = parseFloat(draft);
+    // Strip leading $ or commas, then validate as a non-negative dollar amount
+    const cleaned = draft.replace(/[$,]/g, "").trim();
+    const v = parseFloat(cleaned);
     setEditing(false);
-    if (!isNaN(v) && v !== value) await onSave(v);
+    if (!isNaN(v) && v >= 0 && v !== value) await onSave(Math.round(v * 100) / 100);
   }
 
   if (editing) {
     return (
-      <input ref={ref} type="number" min="0" step="any" value={draft}
+      <input ref={ref} type="text" inputMode="decimal" value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
