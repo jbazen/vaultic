@@ -879,6 +879,16 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem,
                    onDragStart, onDragOver, onDrop, onDragEnd }) {
   const isIncome = groupType === "income";
   const remaining = item.planned - item.spent;
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft]     = useState(item.name);
+
+  async function saveName() {
+    const trimmed = nameDraft.trim();
+    setEditingName(false);
+    if (!trimmed || trimmed === item.name) return;
+    await updateBudgetItem(item.id, trimmed);
+    onUpdate();
+  }
 
   function valueCell() {
     if (isIncome) {
@@ -925,9 +935,30 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem,
       {/* Drag handle */}
       <DragHandle onMouseDown={dragHandleProps?.onMouseDown} />
 
-      {/* Item name — read-only in the row; rename via the detail modal */}
-      <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        <span style={{ fontSize: 13, color: "var(--text)" }}>{item.name}</span>
+      {/* Item name — click to rename inline; stops propagation so modal doesn't open */}
+      <div onClick={e => e.stopPropagation()} style={{ minWidth: 0 }}>
+        {editingName ? (
+          <input
+            value={nameDraft}
+            onChange={e => setNameDraft(e.target.value)}
+            onBlur={saveName}
+            onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { setEditingName(false); setNameDraft(item.name); } }}
+            autoFocus
+            style={{
+              width: "100%", background: "var(--bg3)", border: "1px solid var(--accent)",
+              borderRadius: 4, color: "var(--text)", fontSize: 13, padding: "2px 6px",
+            }}
+          />
+        ) : (
+          <span
+            onClick={() => { setNameDraft(item.name); setEditingName(true); }}
+            title="Click to rename"
+            style={{ fontSize: 13, color: "var(--text)", cursor: "text",
+              display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {item.name}
+          </span>
+        )}
       </div>
 
       {/* Planned — click to edit; stop propagation so it doesn't open the modal */}
