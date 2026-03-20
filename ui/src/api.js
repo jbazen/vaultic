@@ -494,6 +494,10 @@ export async function deleteFundTransaction(id) {
   const res = await apiFetch(`/api/funds/transactions/${id}`, { method: "DELETE" });
   return res.json();
 }
+export async function getSheetFundFinancials() {
+  const res = await apiFetch("/api/sheet/fund-financials");
+  return res.json();
+}
 
 // Toggles whether a manual entry is excluded from the net worth total.
 // Useful when a PDF import creates both an "Overall Portfolio" summary entry

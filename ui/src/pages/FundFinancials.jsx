@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import {
   getFunds, createFund, updateFund, deleteFund,
   getFundTransactions, addFundTransaction, deleteFundTransaction,
+  getSheetFundFinancials,
 } from "../api.js";
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -218,13 +219,121 @@ function FundCard({ fund, onUpdate }) {
   );
 }
 
+// ── Google Sheet viewer ───────────────────────────────────────────────────────
+function SheetView() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  // Which person column to show: "TOTAL" by default
+  const [person, setPerson]   = useState("TOTAL");
+
+  useEffect(() => {
+    getSheetFundFinancials()
+      .then(setData)
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div style={{ color: "var(--text2)", padding: "40px 0", textAlign: "center" }}>Loading sheet…</div>;
+  if (error)   return <div style={{ color: "var(--red)", padding: "40px 0", textAlign: "center" }}>Failed to load: {error}</div>;
+  if (!data)   return null;
+
+  const { months, persons, categories } = data;
+  const currentMonth = months[months.length - 1];
+
+  // Available person tabs — show all found in sheet
+  const personTabs = persons.filter(p => p);
+
+  return (
+    <div>
+      {/* Person selector */}
+      {personTabs.length > 1 && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          {personTabs.map(p => (
+            <button key={p} onClick={() => setPerson(p)}
+              style={{
+                padding: "5px 16px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", border: "1px solid var(--border)",
+                background: person === p ? "var(--accent)" : "var(--bg2)",
+                color: person === p ? "#fff" : "var(--text2)",
+              }}>
+              {p}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Month columns header */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: `1fr repeat(${months.length}, 90px)`,
+        gap: 4, padding: "6px 12px",
+        background: "var(--bg3)", borderRadius: 8, marginBottom: 4,
+        fontSize: 10, fontWeight: 700, color: "var(--text2)", textTransform: "uppercase",
+      }}>
+        <div>Category</div>
+        {months.map(m => (
+          <div key={m} style={{ textAlign: "right", color: m === currentMonth ? "var(--accent)" : "var(--text2)" }}>
+            {m}
+          </div>
+        ))}
+      </div>
+
+      {/* Category rows */}
+      {categories.map((cat, ci) => {
+        const personRow = cat.rows.find(r => r.person === person);
+        if (!personRow) return null;
+
+        const currentVal = personRow.values[currentMonth];
+
+        return (
+          <div key={ci} style={{
+            display: "grid",
+            gridTemplateColumns: `1fr repeat(${months.length}, 90px)`,
+            gap: 4, padding: "8px 12px",
+            borderBottom: "1px solid var(--border)",
+            background: ci % 2 === 0 ? "var(--bg2)" : "transparent",
+            borderRadius: ci % 2 === 0 ? 4 : 0,
+            alignItems: "center",
+          }}>
+            {/* Category name */}
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{cat.name}</div>
+
+            {/* Values per month */}
+            {months.map(m => {
+              const val = personRow.values[m];
+              const isCurrent = m === currentMonth;
+              return (
+                <div key={m} style={{
+                  textAlign: "right", fontSize: 12, fontWeight: isCurrent ? 700 : 400,
+                  color: val == null ? "var(--text2)"
+                    : val < 0 ? "var(--red)"
+                    : isCurrent ? "var(--accent)" : "var(--text)",
+                }}>
+                  {val == null ? "—" : `$${Math.abs(val).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+
+      <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 12, textAlign: "right" }}>
+        Read-only · Current month: <strong>{currentMonth}</strong>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Fund Financials Page ──────────────────────────────────────────────────────
 export default function FundFinancials() {
-  const [funds, setFunds] = useState([]);
+  const [tab, setTab]         = useState("sheet"); // "sheet" | "native"
+  const [funds, setFunds]     = useState([]);
   const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", target_amount: "" });
-  const [saving, setSaving] = useState(false);
+  const [adding, setAdding]   = useState(false);
+  const [form, setForm]       = useState({ name: "", description: "", target_amount: "" });
+  const [saving, setSaving]   = useState(false);
 
   async function load() {
     getFunds().then(setFunds).finally(() => setLoading(false));
@@ -256,8 +365,29 @@ export default function FundFinancials() {
     <div>
       <div className="page-header">
         <h2>Fund Financials</h2>
-        <p>Track sinking funds for planned expenses — clothes, vacation, gifts, and more</p>
+        <p>Savings fund balances and history</p>
       </div>
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 20 }}>
+        {[
+          { key: "sheet",  label: "Google Sheet" },
+          { key: "native", label: "Native Funds" },
+        ].map(({ key, label }) => (
+          <button key={key} onClick={() => setTab(key)}
+            style={{
+              padding: "8px 20px", fontSize: 13, fontWeight: tab === key ? 700 : 400,
+              background: "none", border: "none", cursor: "pointer",
+              borderBottom: `2px solid ${tab === key ? "var(--accent)" : "transparent"}`,
+              color: tab === key ? "var(--text)" : "var(--text2)",
+            }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "sheet" && <SheetView />}
+      {tab === "native" && (<>
 
       {/* Total banner */}
       {!loading && funds.length > 0 && (
@@ -330,6 +460,7 @@ export default function FundFinancials() {
             onClick={() => setAdding(true)}>+ New fund</button>
         )
       )}
+      </>)}
     </div>
   );
 }
