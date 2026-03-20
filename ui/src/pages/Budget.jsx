@@ -935,13 +935,15 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem,
       {/* Drag handle */}
       <DragHandle onMouseDown={dragHandleProps?.onMouseDown} />
 
-      {/* Item name — click to rename inline; stops propagation so modal doesn't open */}
-      <div onClick={e => e.stopPropagation()} style={{ minWidth: 0 }}>
+      {/* Item name — only the text span is click-to-rename; rest of the cell
+          bubbles up to the row's onClick which opens the detail modal. */}
+      <div style={{ minWidth: 0 }}>
         {editingName ? (
           <input
             value={nameDraft}
             onChange={e => setNameDraft(e.target.value)}
             onBlur={saveName}
+            onClick={e => e.stopPropagation()}
             onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") { setEditingName(false); setNameDraft(item.name); } }}
             autoFocus
             style={{
@@ -951,10 +953,11 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem,
           />
         ) : (
           <span
-            onClick={() => { setNameDraft(item.name); setEditingName(true); }}
+            onClick={e => { e.stopPropagation(); setNameDraft(item.name); setEditingName(true); }}
             title="Click to rename"
             style={{ fontSize: 13, color: "var(--text)", cursor: "text",
-              display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              display: "inline-block", maxWidth: "100%",
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
           >
             {item.name}
           </span>

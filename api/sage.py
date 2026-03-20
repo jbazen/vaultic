@@ -121,6 +121,29 @@ TOOLS = [
             "required": ["url"],
         },
     },
+    {
+        "name": "get_budget",
+        "description": "Get the full zero-based budget for a specific month — all groups (Income, Housing, Food, etc.), their line items, planned amounts, and actual spending. Use this to answer questions about budget targets, spending vs. plan, or whether the user is over/under budget in any category.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "month": {"type": "string", "description": "Month in YYYY-MM format (e.g. '2026-03'). Defaults to current month if omitted."}
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_budget_history",
+        "description": "Get historical spending totals by budget category across multiple months — imported from 10+ years of budget data. Use this to analyze spending trends, calculate monthly averages, compare months, or answer questions about long-term spending patterns. Each row is one transaction: date, merchant, amount, and which budget category it was assigned to.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "months": {"type": "integer", "description": "How many recent months of history to return (default 12, max 60)"},
+                "group_name": {"type": "string", "description": "Optional: filter to a specific budget group name (e.g. 'Food', 'Housing')"}
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -194,6 +217,67 @@ def _call_tool(name: str, inputs: dict) -> str:
 
         elif name == "fetch_page":
             return _fetch_page(inputs.get("url", ""))
+
+        elif name == "get_budget":
+            from datetime import date as _date
+            month = inputs.get("month") or _date.today().strftime("%Y-%m")
+            with get_db() as conn:
+                groups = conn.execute("""
+                    SELECT id, name, type FROM budget_groups
+                    WHERE is_deleted = 0 ORDER BY display_order, id
+                """).fetchall()
+                result = []
+                for g in groups:
+                    items = conn.execute("""
+                        SELECT bi.id, bi.name,
+                               COALESCE(ba.planned, 0) AS planned,
+                               COALESCE(
+                                   (SELECT ROUND(SUM(ABS(t.amount)), 2)
+                                    FROM transaction_assignments ta
+                                    JOIN transactions t ON t.transaction_id = ta.transaction_id
+                                    WHERE ta.item_id = bi.id
+                                      AND strftime('%Y-%m', t.date) = ?
+                                      AND t.pending = 0), 0
+                               ) AS spent
+                        FROM budget_items bi
+                        LEFT JOIN budget_amounts ba ON ba.item_id = bi.id AND ba.month = ?
+                        WHERE bi.group_id = ? AND bi.is_deleted = 0
+                        ORDER BY bi.display_order, bi.id
+                    """, (month, month, g["id"])).fetchall()
+                    group_planned = sum(i["planned"] for i in items)
+                    group_spent   = sum(i["spent"]   for i in items)
+                    result.append({
+                        "group": g["name"],
+                        "type":  g["type"],
+                        "planned": group_planned,
+                        "spent":   group_spent,
+                        "remaining": group_planned - group_spent,
+                        "items": [dict(i) for i in items],
+                    })
+            return f"Budget for {month}:\n" + str(result)
+
+        elif name == "get_budget_history":
+            num_months = min(inputs.get("months", 12), 60)
+            group_filter = inputs.get("group_name", "").strip().lower()
+            with get_db() as conn:
+                # budget_history holds imported historical transactions (pre-Vaultic data)
+                query = """
+                    SELECT bh.month, bg.name AS group_name, bi.name AS item_name,
+                           bh.date, bh.merchant, ROUND(ABS(bh.amount), 2) AS amount
+                    FROM budget_history bh
+                    JOIN budget_items bi  ON bi.id  = bh.item_id
+                    JOIN budget_groups bg ON bg.id  = bi.group_id
+                    WHERE bh.month >= date('now', '-' || ? || ' months', 'start of month')
+                """
+                params: list = [num_months]
+                if group_filter:
+                    query += " AND LOWER(bg.name) LIKE ?"
+                    params.append(f"%{group_filter}%")
+                query += " ORDER BY bh.month DESC, bh.date DESC LIMIT 2000"
+                rows = conn.execute(query, params).fetchall()
+            if not rows:
+                return "No budget history found for the requested period."
+            return f"Budget history ({len(rows)} transactions, last {num_months} months):\n" + str([dict(r) for r in rows])
 
         return f"Unknown tool: {name}"
     except Exception as e:

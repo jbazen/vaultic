@@ -262,7 +262,7 @@ function SheetView() {
   };
 
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div>
       {/* Controls row: person toggle + range selector */}
       <div style={{ display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         {/* Person pills */}
@@ -310,81 +310,87 @@ function SheetView() {
         <div style={{ color: "var(--text2)", padding: "20px 0", textAlign: "center" }}>No data found in sheet.</div>
       )}
 
-      {/* Column headers */}
-      {!loading && categories.length > 0 && <div style={{
-        display: "grid", gridTemplateColumns: gridCols,
-        gap: 4, padding: "6px 12px",
-        background: "var(--bg3)", borderRadius: 8, marginBottom: 4,
-        minWidth: 600,
-      }}>
-        <div style={{ ...headerStyle, textAlign: "left" }}>Category</div>
-        {["HEATHER", "JASON", "TOTAL"].map(p => (
-          <div key={p} style={{
-            ...headerStyle,
-            color: p === person ? "var(--accent)" : "var(--text2)",
-          }}>{p}</div>
-        ))}
-        {months.map(m => (
-          <div key={m} style={{
-            ...headerStyle,
-            color: m === currentMonth ? "var(--accent)" : "var(--text2)",
-          }}>{m}</div>
-        ))}
-      </div>}
+      {/* Scrollable table — header + all data rows share one overflow container so
+          they scroll together and CSS grid widths stay in sync across all rows. */}
+      {!loading && categories.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          {/* min-width forces the inner block to be at least as wide as all columns need;
+              without this, 1fr collapses and breaks alignment at wide column counts. */}
+          <div style={{ minWidth: `calc(160px + 88px + 88px + 100px + ${months.length} * 94px)` }}>
 
-      {/* Category rows */}
-      {!loading && categories.map((cat, ci) => {
-        // Pick the highlighted person's overall balance for emphasis
-        const overallVal = cat[person.toLowerCase()];
-
-        return (
-          <div key={ci} style={{
-            display: "grid", gridTemplateColumns: gridCols,
-            gap: 4, padding: "8px 12px", minWidth: 600,
-            borderBottom: "1px solid var(--border)",
-            background: ci % 2 === 0 ? "var(--bg2)" : "transparent",
-            borderRadius: ci % 2 === 0 ? 4 : 0,
-            alignItems: "center",
-          }}>
-            {/* Fund name */}
-            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{cat.name}</div>
-
-            {/* Overall per-person balances (HEATHER / JASON / TOTAL) */}
-            {["HEATHER", "JASON", "TOTAL"].map(p => {
-              const val = cat[p.toLowerCase()];
-              const isHighlighted = p === person;
-              return (
+            {/* Column headers */}
+            <div style={{
+              display: "grid", gridTemplateColumns: gridCols,
+              gap: 4, padding: "6px 12px",
+              background: "var(--bg3)", borderRadius: 8, marginBottom: 4,
+            }}>
+              <div style={{ ...headerStyle, textAlign: "left" }}>Category</div>
+              {["HEATHER", "JASON", "TOTAL"].map(p => (
                 <div key={p} style={{
-                  textAlign: "right", fontSize: 12,
-                  fontWeight: isHighlighted ? 700 : 400,
-                  color: val == null ? "var(--text2)"
-                    : val < 0 ? "var(--red)"
-                    : isHighlighted ? "var(--accent)" : "var(--text)",
-                }}>
-                  {val == null ? "—" : `$${Math.abs(val).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                </div>
-              );
-            })}
-
-            {/* End-of-month balance for each recent month */}
-            {months.map(m => {
-              const val = cat.monthly[m];
-              const isCurrent = m === currentMonth;
-              return (
+                  ...headerStyle,
+                  color: p === person ? "var(--accent)" : "var(--text2)",
+                }}>{p}</div>
+              ))}
+              {months.map(m => (
                 <div key={m} style={{
-                  textAlign: "right", fontSize: 12,
-                  fontWeight: isCurrent ? 700 : 400,
-                  color: val == null ? "var(--text2)"
-                    : val < 0 ? "var(--red)"
-                    : isCurrent ? "var(--accent)" : "var(--text)",
-                }}>
-                  {val == null ? "—" : `$${Math.abs(val).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
-                </div>
-              );
-            })}
+                  ...headerStyle,
+                  color: m === currentMonth ? "var(--accent)" : "var(--text2)",
+                }}>{m}</div>
+              ))}
+            </div>
+
+            {/* Category rows */}
+            {categories.map((cat, ci) => (
+              <div key={ci} style={{
+                display: "grid", gridTemplateColumns: gridCols,
+                gap: 4, padding: "8px 12px",
+                borderBottom: "1px solid var(--border)",
+                background: ci % 2 === 0 ? "var(--bg2)" : "transparent",
+                borderRadius: ci % 2 === 0 ? 4 : 0,
+                alignItems: "center",
+              }}>
+                {/* Fund name */}
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{cat.name}</div>
+
+                {/* Overall per-person balances */}
+                {["HEATHER", "JASON", "TOTAL"].map(p => {
+                  const val = cat[p.toLowerCase()];
+                  const isHighlighted = p === person;
+                  return (
+                    <div key={p} style={{
+                      textAlign: "right", fontSize: 12,
+                      fontWeight: isHighlighted ? 700 : 400,
+                      color: val == null ? "var(--text2)"
+                        : val < 0 ? "var(--red)"
+                        : isHighlighted ? "var(--accent)" : "var(--text)",
+                    }}>
+                      {val == null ? "—" : `$${Math.abs(val).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    </div>
+                  );
+                })}
+
+                {/* End-of-month balance for each recent month */}
+                {months.map(m => {
+                  const val = cat.monthly[m];
+                  const isCurrent = m === currentMonth;
+                  return (
+                    <div key={m} style={{
+                      textAlign: "right", fontSize: 12,
+                      fontWeight: isCurrent ? 700 : 400,
+                      color: val == null ? "var(--text2)"
+                        : val < 0 ? "var(--red)"
+                        : isCurrent ? "var(--accent)" : "var(--text)",
+                    }}>
+                      {val == null ? "—" : `$${Math.abs(val).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+
           </div>
-        );
-      })}
+        </div>
+      )}
 
       {!loading && currentMonth && (
         <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 12, textAlign: "right" }}>
