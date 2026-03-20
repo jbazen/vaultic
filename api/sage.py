@@ -144,6 +144,20 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "search_budget_history",
+        "description": "Search budget history for specific transactions by merchant name and/or amount. Use this when the user asks about a specific charge — e.g. 'which budget item did Amazon $8.47 go to in April 2022?' Returns individual matching rows with the merchant, amount, date, and which budget item it was assigned to. Much more efficient than get_budget_history for targeted lookups.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "merchant": {"type": "string", "description": "Merchant name to search for (case-insensitive, partial match — e.g. 'amazon', 'target', 'netflix')"},
+                "month": {"type": "string", "description": "Optional: narrow to a specific month in YYYY-MM format"},
+                "amount": {"type": "number", "description": "Optional: filter by exact dollar amount (absolute value, e.g. 8.47)"},
+                "limit": {"type": "integer", "description": "Max rows to return (default 20, max 100)"}
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -288,6 +302,43 @@ def _call_tool(name: str, inputs: dict) -> str:
                 + str([dict(r) for r in rows])
             )
 
+        elif name == "search_budget_history":
+            # Targeted transaction search — for specific merchant/amount questions.
+            # Much cheaper than get_budget_history for "which item did Amazon $8.47 go to?"
+            merchant = inputs.get("merchant", "").strip()
+            month = inputs.get("month", "").strip()
+            amount = inputs.get("amount")
+            limit = min(inputs.get("limit", 20), 100)
+            with get_db() as conn:
+                query = """
+                    SELECT bh.month, bh.date, bh.merchant, bh.amount, bh.note,
+                           bg.name AS group_name, bi.name AS item_name
+                    FROM budget_history bh
+                    JOIN budget_items bi  ON bi.id  = bh.item_id
+                    JOIN budget_groups bg ON bg.id  = bi.group_id
+                    WHERE 1=1
+                """
+                params: list = []
+                if merchant:
+                    query += " AND LOWER(bh.merchant) LIKE ?"
+                    params.append(f"%{merchant.lower()}%")
+                if month:
+                    query += " AND bh.month = ?"
+                    params.append(month)
+                if amount is not None:
+                    # Match within a cent to handle float rounding
+                    query += " AND ABS(ABS(bh.amount) - ?) < 0.015"
+                    params.append(float(amount))
+                query += " ORDER BY bh.month DESC, bh.date DESC LIMIT ?"
+                params.append(limit)
+                rows = conn.execute(query, params).fetchall()
+            if not rows:
+                return "No matching transactions found in budget history."
+            return (
+                f"Found {len(rows)} matching transaction(s):\n"
+                + str([dict(r) for r in rows])
+            )
+
         return f"Unknown tool: {name}"
     except Exception as e:
         logger.error(f"Tool {name} error: {e}")
@@ -426,6 +477,47 @@ def _sanitize_messages(messages: list[dict]) -> list[dict]:
     return sanitized
 
 
+def _truncate_history_tool_results(messages: list[dict], max_chars: int = 800) -> list[dict]:
+    """
+    Cap the content length of tool_result blocks in old history messages.
+
+    Large tool responses (e.g. a get_budget_history call that returned 200 rows)
+    get stored in the conversation history and then resent verbatim to the API on
+    every subsequent turn. With a 20-message window and a couple of budget calls,
+    this easily blows the 50K TPM rate limit.
+
+    This function truncates any tool_result content in the history that exceeds
+    max_chars, appending a "[truncated — use a tool to re-fetch if needed]" marker
+    so Claude knows the data was cut. We apply this AFTER trim so only the messages
+    that survive trimming are charged against the token budget.
+
+    The most recent turn is NOT truncated — only messages that are already in
+    history before the new user message is appended.
+    """
+    result = []
+    for msg in messages:
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            result.append(msg)
+            continue
+        new_content = []
+        changed = False
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_result"
+                and isinstance(block.get("content"), str)
+                and len(block["content"]) > max_chars
+            ):
+                truncated = block["content"][:max_chars] + " [truncated — use a tool to re-fetch if needed]"
+                new_content.append({**block, "content": truncated})
+                changed = True
+            else:
+                new_content.append(block)
+        result.append({**msg, "content": new_content} if changed else msg)
+    return result
+
+
 def _trim_history(messages: list[dict], keep: int = 20) -> list[dict]:
     """
     Trim message history to at most `keep` recent messages, always starting
@@ -465,8 +557,12 @@ def chat(messages: list[dict], user_message: str, attachments: list[dict] | None
     """
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
-    # Order matters: trim → sanitize → append new user message.
+    # Order matters: trim → truncate old tool results → sanitize → append new user message.
+    # Truncating large tool_result content in history prevents token accumulation
+    # across turns (a 200-row budget response resent on every turn quickly blows
+    # the 50K TPM rate limit even after we fixed get_budget_history to aggregate).
     messages = _trim_history(list(messages))
+    messages = _truncate_history_tool_results(messages)
     messages = _sanitize_messages(messages)
 
     # Build user content — plain string for text-only, list of blocks when
