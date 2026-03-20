@@ -444,6 +444,10 @@ export async function unassignAll(month) {
   const res = await apiFetch(`/api/budget/assign-all/${month}`, { method: "DELETE" });
   return res.json();
 }
+export async function autoAssignDebug(month) {
+  const res = await apiFetch(`/api/budget/auto-assign/${month}/debug`);
+  return res.json();
+}
 export async function getItemDetail(itemId, month) {
   const res = await apiFetch(`/api/budget/items/${itemId}/detail?month=${month}`);
   return res.json();
