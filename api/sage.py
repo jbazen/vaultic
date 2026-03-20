@@ -134,7 +134,7 @@ TOOLS = [
     },
     {
         "name": "get_budget_history",
-        "description": "Get historical spending totals by budget category across multiple months — imported from 10+ years of budget data. Use this to analyze spending trends, calculate monthly averages, compare months, or answer questions about long-term spending patterns. Each row is one transaction: date, merchant, amount, and which budget category it was assigned to.",
+        "description": "Get historical spending totals by budget category across multiple months — imported from 10+ years of budget data. Returns monthly aggregated totals (group, item, total_spent, num_transactions) — not individual transactions. Use this to analyze spending trends, calculate monthly averages, compare months, or answer questions about long-term spending patterns.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -257,13 +257,18 @@ def _call_tool(name: str, inputs: dict) -> str:
             return f"Budget for {month}:\n" + str(result)
 
         elif name == "get_budget_history":
+            # Returns monthly totals aggregated by group+item — NOT individual transactions.
+            # Raw rows would be thousands of records (10+ years × 50 txns/month) which
+            # blows up the input token budget. Aggregated totals are ~10-20x smaller.
             num_months = min(inputs.get("months", 12), 60)
             group_filter = inputs.get("group_name", "").strip().lower()
             with get_db() as conn:
-                # budget_history holds imported historical transactions (pre-Vaultic data)
                 query = """
-                    SELECT bh.month, bg.name AS group_name, bi.name AS item_name,
-                           bh.date, bh.merchant, ROUND(ABS(bh.amount), 2) AS amount
+                    SELECT bh.month,
+                           bg.name AS group_name,
+                           bi.name AS item_name,
+                           ROUND(SUM(ABS(bh.amount)), 2) AS total_spent,
+                           COUNT(*) AS num_transactions
                     FROM budget_history bh
                     JOIN budget_items bi  ON bi.id  = bh.item_id
                     JOIN budget_groups bg ON bg.id  = bi.group_id
@@ -273,11 +278,15 @@ def _call_tool(name: str, inputs: dict) -> str:
                 if group_filter:
                     query += " AND LOWER(bg.name) LIKE ?"
                     params.append(f"%{group_filter}%")
-                query += " ORDER BY bh.month DESC, bh.date DESC LIMIT 2000"
+                query += " GROUP BY bh.month, bi.id ORDER BY bh.month DESC, bg.name, bi.name"
                 rows = conn.execute(query, params).fetchall()
             if not rows:
                 return "No budget history found for the requested period."
-            return f"Budget history ({len(rows)} transactions, last {num_months} months):\n" + str([dict(r) for r in rows])
+            return (
+                f"Budget history — monthly totals by category (last {num_months} months, "
+                f"{len(rows)} category-months):\n"
+                + str([dict(r) for r in rows])
+            )
 
         return f"Unknown tool: {name}"
     except Exception as e:
