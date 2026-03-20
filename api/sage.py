@@ -134,12 +134,22 @@ TOOLS = [
     },
     {
         "name": "get_budget_history",
-        "description": "Get historical spending totals by budget category across multiple months — imported from 10+ years of budget data going back to October 2015. Returns monthly aggregated totals (group, item, total_spent, num_transactions) — not individual transactions. Use this to analyze spending trends, calculate monthly averages, compare months, or answer questions about long-term spending patterns. Pass months=0 to get ALL available history (10+ years).",
+        "description": (
+            "Get historical spending totals by budget category — data goes back to October 2015 (10+ years). "
+            "Returns monthly aggregated totals (group, item, total_spent, num_transactions) per category-month. "
+            "Use group_name and/or item_name filters to narrow results. "
+            "IMPORTANT: pass months=0 ONLY when also providing group_name or item_name — "
+            "requesting all history with no filter returns 3000+ rows and will exceed token limits. "
+            "For a specific item across all time (e.g. 'Jason Income since 2015'), use months=0 + item_name. "
+            "For trends in one group, use months=0 + group_name. "
+            "For broad multi-category analysis, use a month range (e.g. months=24)."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "months": {"type": "integer", "description": "How many recent months of history to return (default 12, pass 0 for all available history back to Oct 2015)"},
-                "group_name": {"type": "string", "description": "Optional: filter to a specific budget group name (e.g. 'Food', 'Housing')"}
+                "months": {"type": "integer", "description": "Months of history to return (default 12, pass 0 for all history back to Oct 2015 — requires group_name or item_name filter when using 0)"},
+                "group_name": {"type": "string", "description": "Filter to a specific budget group (e.g. 'Food', 'Housing', 'Income')"},
+                "item_name": {"type": "string", "description": "Filter to a specific budget line item by name (e.g. 'Jason Income', 'Mortgage', 'Groceries') — partial match"}
             },
             "required": [],
         },
@@ -274,15 +284,27 @@ def _call_tool(name: str, inputs: dict) -> str:
             # Returns monthly totals aggregated by group+item — NOT individual transactions.
             # Raw rows would be thousands of records (10+ years × 50 txns/month) which
             # blows up the input token budget. Aggregated totals are ~10-20x smaller.
-            # months=0 means return all available history (no date filter).
+            # months=0 means all history, but requires a group or item filter to stay
+            # within Claude's 200K token context limit.
             num_months = inputs.get("months", 12)
             group_filter = inputs.get("group_name", "").strip().lower()
+            item_filter  = inputs.get("item_name",  "").strip().lower()
+
+            # Guard: all-history with no filter = ~3000+ rows = token overflow.
+            # Fall back to 24 months so Sage at least gets something useful,
+            # and tell it to retry with a filter for the full range.
+            if not num_months and not group_filter and not item_filter:
+                return (
+                    "Cannot return all history with no filters — that's 3000+ rows and exceeds "
+                    "the token limit. Retry with group_name or item_name to get full history for "
+                    "a specific category. For broad multi-category analysis use months=24 or less."
+                )
+
             with get_db() as conn:
                 if num_months and num_months > 0:
                     date_clause = "WHERE bh.month >= date('now', '-' || ? || ' months', 'start of month')"
                     params: list = [num_months]
                 else:
-                    # All history — no date filter
                     date_clause = "WHERE 1=1"
                     params = []
                 query = f"""
@@ -299,6 +321,9 @@ def _call_tool(name: str, inputs: dict) -> str:
                 if group_filter:
                     query += " AND LOWER(bg.name) LIKE ?"
                     params.append(f"%{group_filter}%")
+                if item_filter:
+                    query += " AND LOWER(bi.name) LIKE ?"
+                    params.append(f"%{item_filter}%")
                 query += " GROUP BY bh.month, bi.id ORDER BY bh.month DESC, bg.name, bi.name"
                 rows = conn.execute(query, params).fetchall()
             if not rows:
