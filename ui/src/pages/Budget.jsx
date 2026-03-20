@@ -21,7 +21,7 @@ import {
   createBudgetGroup, updateBudgetGroup, deleteBudgetGroup,
   createBudgetItem, updateBudgetItem, deleteBudgetItem, setBudgetAmount,
   getUnassignedTransactions, getAssignedTransactions,
-  assignTransaction, unassignTransaction,
+  assignTransaction, unassignTransaction, autoAssignFromHistory,
 } from "../api.js";
 
 // ── Color palette — one color per expense group (income is always green) ──────
@@ -338,6 +338,8 @@ function TransactionsPanel({ month, allGroups }) {
   const [assigned, setAssigned] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [autoAssigning, setAutoAssigning] = useState(false);
+  const [autoResult, setAutoResult] = useState(null); // {assigned, skipped} after run
 
   async function loadAll() {
     setLoading(true);
@@ -348,12 +350,24 @@ function TransactionsPanel({ month, allGroups }) {
     setLoading(false);
   }
 
-  useEffect(() => { loadAll(); }, [month]);
+  useEffect(() => { loadAll(); setAutoResult(null); }, [month]);
 
   async function handleAssign(txnId, itemId) {
     if (!itemId) return;
     await assignTransaction(txnId, parseInt(itemId));
     loadAll();
+  }
+
+  async function handleAutoAssign() {
+    setAutoAssigning(true);
+    setAutoResult(null);
+    try {
+      const result = await autoAssignFromHistory(month);
+      setAutoResult(result);
+      if (result.assigned > 0) loadAll();
+    } finally {
+      setAutoAssigning(false);
+    }
   }
 
   async function handleUnassign(txnId) {
@@ -400,6 +414,25 @@ function TransactionsPanel({ month, allGroups }) {
           padding: "6px 10px", marginBottom: 8,
         }}
       />
+
+      {/* Auto-assign button — only shown on New tab when there are unassigned transactions */}
+      {tab === "new" && unassigned.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <button onClick={handleAutoAssign} disabled={autoAssigning}
+            style={{
+              width: "100%", padding: "6px 0", borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)",
+              color: "#3b82f6", cursor: autoAssigning ? "default" : "pointer", opacity: autoAssigning ? 0.6 : 1,
+            }}>
+            {autoAssigning ? "Matching…" : "⚡ Auto-assign from budget history"}
+          </button>
+          {autoResult && (
+            <div style={{ fontSize: 11, color: "var(--text2)", textAlign: "center", marginTop: 4 }}>
+              {autoResult.assigned} assigned, {autoResult.skipped} skipped (ambiguous amount)
+            </div>
+          )}
+        </div>
+      )}
 
       {loading && (
         <div style={{ color: "var(--text2)", fontSize: 12, textAlign: "center", padding: "16px 0" }}>

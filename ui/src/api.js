@@ -436,6 +436,10 @@ export async function unassignTransaction(transactionId) {
   const res = await apiFetch(`/api/budget/assign/${encodeURIComponent(transactionId)}`, { method: "DELETE" });
   return res.json();
 }
+export async function autoAssignFromHistory(month) {
+  const res = await apiFetch(`/api/budget/auto-assign/${month}`, { method: "POST" });
+  return res.json();
+}
 
 // ── Fund Financials ───────────────────────────────────────────────────────────
 export async function getFunds() {

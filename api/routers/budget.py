@@ -489,6 +489,93 @@ async def unassign_transaction(transaction_id: str, _user: str = Depends(get_cur
 
 
 # ---------------------------------------------------------------------------
+# POST /auto-assign/{month} — match unassigned transactions to budget items
+#                              by dollar amount using imported budget history
+# ---------------------------------------------------------------------------
+
+@router.post("/auto-assign/{month}")
+async def auto_assign_from_history(month: str, _user: str = Depends(get_current_user)):
+    """Auto-assign unassigned Plaid transactions using dollar-amount matching
+    against budget_history rows imported from the external budget app.
+
+    Strategy:
+      For each unassigned Plaid transaction, find a budget_history entry for
+      the same month with the same dollar amount. Create the assignment only
+      when the match is unambiguous — exactly one Plaid transaction has that
+      amount AND exactly one history entry has that amount for the month.
+      Duplicate amounts on either side are skipped to avoid mismatches.
+
+    Returns the count of transactions assigned and skipped.
+    """
+    _validate_month(month)
+
+    with get_db() as conn:
+        # All unassigned (or un-categorized) Plaid transactions for the month.
+        # Plaid amounts: positive = outflow (expense), negative = inflow (income).
+        unassigned = conn.execute("""
+            SELECT t.transaction_id, ABS(t.amount) AS amount
+            FROM transactions t
+            LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+              AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+        """, (month,)).fetchall()
+
+        if not unassigned:
+            return {"assigned": 0, "skipped": 0, "message": "No unassigned transactions"}
+
+        # All budget_history entries for the month that are linked to a budget item.
+        # These were imported from the external budget app and represent the
+        # "correct" assignment for each historical transaction.
+        history = conn.execute("""
+            SELECT ROUND(amount, 2) AS amount, item_id
+            FROM budget_history
+            WHERE month = ? AND item_id IS NOT NULL
+        """, (month,)).fetchall()
+
+        # Build a map: dollar_amount → list of item_ids from history.
+        # If an amount maps to multiple history entries we can't safely pick one.
+        history_by_amount: dict[float, list[int]] = defaultdict(list)
+        for row in history:
+            history_by_amount[row["amount"]].append(row["item_id"])
+
+        # Count how many unassigned Plaid transactions share each dollar amount.
+        # If two transactions have the same amount we can't tell which is which.
+        txn_amount_counts: dict[float, int] = defaultdict(int)
+        for txn in unassigned:
+            txn_amount_counts[round(txn["amount"], 2)] += 1
+
+        assigned = 0
+        skipped = 0
+
+        for txn in unassigned:
+            amt = round(txn["amount"], 2)
+
+            # Skip if multiple Plaid transactions share this amount (ambiguous).
+            if txn_amount_counts[amt] > 1:
+                skipped += 1
+                continue
+
+            # Skip if zero or multiple history entries share this amount (ambiguous).
+            matches = history_by_amount.get(amt, [])
+            if len(matches) != 1:
+                skipped += 1
+                continue
+
+            item_id = matches[0]
+            conn.execute("""
+                INSERT OR IGNORE INTO transaction_assignments (transaction_id, item_id, status)
+                VALUES (?, ?, 'auto')
+            """, (txn["transaction_id"], item_id))
+            assigned += 1
+
+    return {
+        "assigned": assigned,
+        "skipped": skipped,
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /template — seed default budget categories
 # ---------------------------------------------------------------------------
 
