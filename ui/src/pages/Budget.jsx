@@ -530,7 +530,14 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                   whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                   {merchant}
                 </div>
-                <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 1 }}>{t.date}</div>
+                <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 1, display: "flex", gap: 6 }}>
+                  <span>{t.date}</span>
+                  {t.account_name && (
+                    <span style={{ color: "var(--text2)", opacity: 0.7 }}>
+                      {t.account_name.toUpperCase()}{t.account_mask ? `*${t.account_mask}` : ""}
+                    </span>
+                  )}
+                </div>
 
                 {/* One-click category suggestion badge (New tab only) */}
                 {tab === "new" && t.suggested_item_name && (

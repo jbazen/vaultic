@@ -447,8 +447,11 @@ async def get_unassigned(month: str, _user: str = Depends(get_current_user)):
         rows = conn.execute("""
             SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
                    best.item_id  AS suggested_item_id,
-                   bi.name       AS suggested_item_name
+                   bi.name       AS suggested_item_name,
+                   COALESCE(a.display_name, a.name) AS account_name,
+                   a.mask        AS account_mask
             FROM transactions t
+            LEFT JOIN accounts a ON a.id = t.account_id
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             -- Best auto-rule: pick the rule with the highest match_count for the merchant
             LEFT JOIN (
@@ -484,8 +487,11 @@ async def get_assigned(month: str, _user: str = Depends(get_current_user)):
             SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
                    ta.item_id,
                    bi.name AS item_name,
-                   bg.name AS group_name
+                   bg.name AS group_name,
+                   COALESCE(a.display_name, a.name) AS account_name,
+                   a.mask  AS account_mask
             FROM transactions t
+            LEFT JOIN accounts a ON a.id = t.account_id
             JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             JOIN budget_items bi ON bi.id = ta.item_id
             JOIN budget_groups bg ON bg.id = bi.group_id
