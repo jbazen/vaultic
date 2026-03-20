@@ -220,11 +220,15 @@ function FundCard({ fund, onUpdate }) {
 }
 
 // ── Google Sheet viewer ───────────────────────────────────────────────────────
+// Renders the wife's Fund Financials Google Sheet in read-only mode.
+// Response shape from /api/sheet/fund-financials:
+//   months:     string[]  – last N month labels, oldest→newest
+//   categories: { name, heather, jason, total, monthly: {month: amount} }[]
 function SheetView() {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
-  // Which person column to show: "TOTAL" by default
+  // Which person's overall balance column to highlight: HEATHER | JASON | TOTAL
   const [person, setPerson]   = useState("TOTAL");
 
   useEffect(() => {
@@ -236,76 +240,103 @@ function SheetView() {
 
   if (loading) return <div style={{ color: "var(--text2)", padding: "40px 0", textAlign: "center" }}>Loading sheet…</div>;
   if (error)   return <div style={{ color: "var(--red)", padding: "40px 0", textAlign: "center" }}>Failed to load: {error}</div>;
-  if (!data)   return null;
+  if (!data || !data.categories?.length) return (
+    <div style={{ color: "var(--text2)", padding: "40px 0", textAlign: "center" }}>No data found in sheet.</div>
+  );
 
-  const { months, persons, categories } = data;
+  const { months, categories } = data;
   const currentMonth = months[months.length - 1];
 
-  // Available person tabs — show all found in sheet
-  const personTabs = persons.filter(p => p);
+  // Column template: name | HEATHER | JASON | TOTAL | one col per recent month
+  const gridCols = `1fr 88px 88px 100px repeat(${months.length}, 90px)`;
+
+  // Shared header/cell styles
+  const headerStyle = {
+    fontSize: 10, fontWeight: 700, color: "var(--text2)",
+    textTransform: "uppercase", textAlign: "right",
+  };
 
   return (
-    <div>
-      {/* Person selector */}
-      {personTabs.length > 1 && (
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          {personTabs.map(p => (
-            <button key={p} onClick={() => setPerson(p)}
-              style={{
-                padding: "5px 16px", borderRadius: 20, fontSize: 12, fontWeight: 700,
-                cursor: "pointer", border: "1px solid var(--border)",
-                background: person === p ? "var(--accent)" : "var(--bg2)",
-                color: person === p ? "#fff" : "var(--text2)",
-              }}>
-              {p}
-            </button>
-          ))}
-        </div>
-      )}
+    <div style={{ overflowX: "auto" }}>
+      {/* Person toggle pills — switch which overall-balance column is highlighted */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {["HEATHER", "JASON", "TOTAL"].map(p => (
+          <button key={p} onClick={() => setPerson(p)}
+            style={{
+              padding: "5px 16px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+              cursor: "pointer", border: "1px solid var(--border)",
+              background: person === p ? "var(--accent)" : "var(--bg2)",
+              color: person === p ? "#fff" : "var(--text2)",
+            }}>
+            {p}
+          </button>
+        ))}
+      </div>
 
-      {/* Month columns header */}
+      {/* Column headers */}
       <div style={{
-        display: "grid",
-        gridTemplateColumns: `1fr repeat(${months.length}, 90px)`,
+        display: "grid", gridTemplateColumns: gridCols,
         gap: 4, padding: "6px 12px",
         background: "var(--bg3)", borderRadius: 8, marginBottom: 4,
-        fontSize: 10, fontWeight: 700, color: "var(--text2)", textTransform: "uppercase",
+        minWidth: 600,
       }}>
-        <div>Category</div>
+        <div style={{ ...headerStyle, textAlign: "left" }}>Category</div>
+        {["HEATHER", "JASON", "TOTAL"].map(p => (
+          <div key={p} style={{
+            ...headerStyle,
+            color: p === person ? "var(--accent)" : "var(--text2)",
+          }}>{p}</div>
+        ))}
         {months.map(m => (
-          <div key={m} style={{ textAlign: "right", color: m === currentMonth ? "var(--accent)" : "var(--text2)" }}>
-            {m}
-          </div>
+          <div key={m} style={{
+            ...headerStyle,
+            color: m === currentMonth ? "var(--accent)" : "var(--text2)",
+          }}>{m}</div>
         ))}
       </div>
 
       {/* Category rows */}
       {categories.map((cat, ci) => {
-        const personRow = cat.rows.find(r => r.person === person);
-        if (!personRow) return null;
-
-        const currentVal = personRow.values[currentMonth];
+        // Pick the highlighted person's overall balance for emphasis
+        const overallVal = cat[person.toLowerCase()];
 
         return (
           <div key={ci} style={{
-            display: "grid",
-            gridTemplateColumns: `1fr repeat(${months.length}, 90px)`,
-            gap: 4, padding: "8px 12px",
+            display: "grid", gridTemplateColumns: gridCols,
+            gap: 4, padding: "8px 12px", minWidth: 600,
             borderBottom: "1px solid var(--border)",
             background: ci % 2 === 0 ? "var(--bg2)" : "transparent",
             borderRadius: ci % 2 === 0 ? 4 : 0,
             alignItems: "center",
           }}>
-            {/* Category name */}
+            {/* Fund name */}
             <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{cat.name}</div>
 
-            {/* Values per month */}
+            {/* Overall per-person balances (HEATHER / JASON / TOTAL) */}
+            {["HEATHER", "JASON", "TOTAL"].map(p => {
+              const val = cat[p.toLowerCase()];
+              const isHighlighted = p === person;
+              return (
+                <div key={p} style={{
+                  textAlign: "right", fontSize: 12,
+                  fontWeight: isHighlighted ? 700 : 400,
+                  color: val == null ? "var(--text2)"
+                    : val < 0 ? "var(--red)"
+                    : isHighlighted ? "var(--accent)" : "var(--text)",
+                }}>
+                  {val == null ? "—" : `$${Math.abs(val).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                </div>
+              );
+            })}
+
+            {/* End-of-month balance for each recent month */}
             {months.map(m => {
-              const val = personRow.values[m];
+              const val = cat.monthly[m];
               const isCurrent = m === currentMonth;
               return (
                 <div key={m} style={{
-                  textAlign: "right", fontSize: 12, fontWeight: isCurrent ? 700 : 400,
+                  textAlign: "right", fontSize: 12,
+                  fontWeight: isCurrent ? 700 : 400,
                   color: val == null ? "var(--text2)"
                     : val < 0 ? "var(--red)"
                     : isCurrent ? "var(--accent)" : "var(--text)",
@@ -319,7 +350,7 @@ function SheetView() {
       })}
 
       <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 12, textAlign: "right" }}>
-        Read-only · Current month: <strong>{currentMonth}</strong>
+        Read-only · Source: Google Sheets · Current month: <strong>{currentMonth}</strong>
       </div>
     </div>
   );
