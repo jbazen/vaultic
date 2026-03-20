@@ -1,26 +1,42 @@
-# systemd service for the Vaultic FastAPI backend
+# systemd service for the Vaultic FastAPI backend + Litestream replication.
+#
+# Litestream wraps uvicorn so replication starts before the app and stops
+# cleanly after the app exits. All WAL changes are streamed to Cloudflare R2.
 #
 # One-time setup on server:
 #   sudo cp deploy/vaultic-api.service /etc/systemd/system/vaultic-api.service
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable vaultic-api
 #   sudo systemctl start vaultic-api
+#
+# NOTE: EnvironmentFile is intentionally omitted — systemd mangles multi-line
+# PEM keys (Coinbase EC private key). load_dotenv() in api/main.py handles
+# .env loading. Litestream reads its credentials via the ExecStartPre env export.
 
 [Unit]
-Description=Vaultic FastAPI Backend
+Description=Vaultic FastAPI Backend + Litestream Replication
 After=network.target
 
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vaultic
-ExecStart=/home/ubuntu/vaultic/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000
+
+# Export Litestream credentials from .env before starting.
+# We source .env and extract only the two Litestream vars to avoid the
+# multi-line PEM issue that breaks EnvironmentFile.
+ExecStartPre=/bin/bash -c '\
+  export $(grep -E "^LITESTREAM_" /home/ubuntu/vaultic/.env | xargs) && \
+  echo "LITESTREAM_ACCESS_KEY_ID=$LITESTREAM_ACCESS_KEY_ID" > /run/litestream.env && \
+  echo "LITESTREAM_SECRET_ACCESS_KEY=$LITESTREAM_SECRET_ACCESS_KEY" >> /run/litestream.env'
+
+EnvironmentFile=/run/litestream.env
+
+ExecStart=/usr/local/bin/litestream replicate \
+  -config /home/ubuntu/vaultic/deploy/litestream.yml \
+  -exec "/home/ubuntu/vaultic/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000"
+
 Restart=always
 RestartSec=5
-# .env is loaded by load_dotenv() in api/main.py, but EnvironmentFile makes
-# the vars available to the process environment as a safety net
-# NOTE: Do NOT use EnvironmentFile here. systemd's parser mangles multi-line
-# PEM keys (like the Coinbase EC private key stored with \n sequences).
-# load_dotenv() in api/main.py handles .env loading correctly instead.
 
 [Install]
 WantedBy=multi-user.target

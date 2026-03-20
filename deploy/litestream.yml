@@ -1,0 +1,33 @@
+# Litestream configuration — continuous SQLite replication to Cloudflare R2.
+#
+# Litestream watches the SQLite WAL and streams every change to R2 in
+# near-real-time (typically within 1 second). On a new server, run:
+#
+#   litestream restore -config /home/ubuntu/vaultic/deploy/litestream.yml \
+#       /home/ubuntu/vaultic/data/vaultic.db
+#
+# Then start the service normally. The systemd ExecStart already wraps
+# uvicorn with `litestream replicate -exec ...` so replication is always
+# running while the app is up.
+#
+# Environment variables (set in /home/ubuntu/vaultic/.env and loaded by
+# the deploy/restore scripts — NOT via systemd EnvironmentFile due to the
+# multi-line Coinbase PEM key issue):
+#   LITESTREAM_ACCESS_KEY_ID
+#   LITESTREAM_SECRET_ACCESS_KEY
+
+dbs:
+  - path: /home/ubuntu/vaultic/data/vaultic.db
+    replicas:
+      - type: s3
+        bucket: vaultic-backup
+        path: vaultic.db
+        endpoint: https://86e77850f8740665498b90703731f7f4.r2.cloudflarestorage.com
+        region: auto
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        # Keep 7 days of snapshots for point-in-time recovery
+        retention: 168h
+        retention-check-interval: 1h
+        # Sync WAL changes every 1 second
+        sync-interval: 1s
