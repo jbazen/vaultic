@@ -494,8 +494,8 @@ export async function deleteFundTransaction(id) {
   const res = await apiFetch(`/api/funds/transactions/${id}`, { method: "DELETE" });
   return res.json();
 }
-export async function getSheetFundFinancials() {
-  const res = await apiFetch("/api/sheet/fund-financials");
+export async function getSheetFundFinancials(limit = 6) {
+  const res = await apiFetch(`/api/sheet/fund-financials?limit=${limit}`);
   return res.json();
 }
 

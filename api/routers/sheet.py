@@ -43,8 +43,8 @@ CSV_URL   = (
 # Matches month labels exported by Google Sheets: "Oct-15", "Jan-26", etc.
 MONTH_RE = re.compile(r"^[A-Za-z]{3}-\d{2}$")
 
-# How many recent months to return (keeps the response small)
-RECENT_MONTHS = 6
+# Default months to return if caller doesn't specify
+DEFAULT_MONTHS = 6
 
 
 def _parse_dollar(val: str) -> float | None:
@@ -85,7 +85,10 @@ def _month_sort_key(label: str) -> int:
 
 
 @router.get("/fund-financials")
-async def get_sheet_data(_user: str = Depends(get_current_user)):
+async def get_sheet_data(
+    limit: int = DEFAULT_MONTHS,
+    _user: str = Depends(get_current_user),
+):
     """Fetch and parse the Fund Financials Google Sheet.
 
     Returns:
@@ -207,18 +210,16 @@ async def get_sheet_data(_user: str = Depends(get_current_user)):
             "monthly": monthly,
         })
 
-    # ── Step 5: Trim to recent months ─────────────────────────────────────────
-    recent_months = (
-        all_months[-RECENT_MONTHS:]
-        if len(all_months) > RECENT_MONTHS
-        else all_months
-    )
+    # ── Step 5: Trim to requested range ──────────────────────────────────────
+    # limit=0 means return everything; otherwise return the last N months.
+    recent_months = all_months[-limit:] if limit > 0 else all_months
 
-    # Trim each category's monthly dict to recent months only
+    # Trim each category's monthly dict to the selected months only
     for cat in categories:
         cat["monthly"] = {m: cat["monthly"].get(m) for m in recent_months}
 
     return {
         "months":     recent_months,
         "categories": categories,
+        "total_months": len(all_months),
     }

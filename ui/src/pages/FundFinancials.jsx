@@ -224,27 +224,32 @@ function FundCard({ fund, onUpdate }) {
 // Response shape from /api/sheet/fund-financials:
 //   months:     string[]  – last N month labels, oldest→newest
 //   categories: { name, heather, jason, total, monthly: {month: amount} }[]
+const RANGE_OPTIONS = [
+  { label: "6M",  value: 6 },
+  { label: "1Y",  value: 12 },
+  { label: "2Y",  value: 24 },
+  { label: "5Y",  value: 60 },
+  { label: "All", value: 0 },
+];
+
 function SheetView() {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   // Which person's overall balance column to highlight: HEATHER | JASON | TOTAL
   const [person, setPerson]   = useState("TOTAL");
+  const [limit, setLimit]     = useState(6);
 
   useEffect(() => {
-    getSheetFundFinancials()
+    setLoading(true);
+    setError(null);
+    getSheetFundFinancials(limit)
       .then(setData)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [limit]);
 
-  if (loading) return <div style={{ color: "var(--text2)", padding: "40px 0", textAlign: "center" }}>Loading sheet…</div>;
-  if (error)   return <div style={{ color: "var(--red)", padding: "40px 0", textAlign: "center" }}>Failed to load: {error}</div>;
-  if (!data || !data.categories?.length) return (
-    <div style={{ color: "var(--text2)", padding: "40px 0", textAlign: "center" }}>No data found in sheet.</div>
-  );
-
-  const { months, categories } = data;
+  const { months, categories } = data || { months: [], categories: [] };
   const currentMonth = months[months.length - 1];
 
   // Column template: name | HEATHER | JASON | TOTAL | one col per recent month
@@ -258,23 +263,55 @@ function SheetView() {
 
   return (
     <div style={{ overflowX: "auto" }}>
-      {/* Person toggle pills — switch which overall-balance column is highlighted */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {["HEATHER", "JASON", "TOTAL"].map(p => (
-          <button key={p} onClick={() => setPerson(p)}
-            style={{
-              padding: "5px 16px", borderRadius: 20, fontSize: 12, fontWeight: 700,
-              cursor: "pointer", border: "1px solid var(--border)",
-              background: person === p ? "var(--accent)" : "var(--bg2)",
-              color: person === p ? "#fff" : "var(--text2)",
-            }}>
-            {p}
-          </button>
-        ))}
+      {/* Controls row: person toggle + range selector */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        {/* Person pills */}
+        <div style={{ display: "flex", gap: 6 }}>
+          {["HEATHER", "JASON", "TOTAL"].map(p => (
+            <button key={p} onClick={() => setPerson(p)}
+              style={{
+                padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", border: "1px solid var(--border)",
+                background: person === p ? "var(--accent)" : "var(--bg2)",
+                color: person === p ? "#fff" : "var(--text2)",
+              }}>
+              {p}
+            </button>
+          ))}
+        </div>
+
+        {/* Range pills */}
+        <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+          {RANGE_OPTIONS.map(({ label, value }) => (
+            <button key={label} onClick={() => setLimit(value)}
+              style={{
+                padding: "5px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", border: "1px solid var(--border)",
+                background: limit === value ? "var(--bg3)" : "var(--bg2)",
+                color: limit === value ? "var(--text)" : "var(--text2)",
+                outline: limit === value ? "1px solid var(--text2)" : "none",
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {data && (
+          <div style={{ fontSize: 11, color: "var(--text2)", whiteSpace: "nowrap" }}>
+            {data.months.length} of {data.total_months} months
+          </div>
+        )}
       </div>
 
+      {loading && <div style={{ color: "var(--text2)", padding: "20px 0", textAlign: "center" }}>Loading…</div>}
+      {error && <div style={{ color: "var(--red)", padding: "20px 0", textAlign: "center" }}>Failed to load: {error}</div>}
+
+      {!loading && !error && categories.length === 0 && (
+        <div style={{ color: "var(--text2)", padding: "20px 0", textAlign: "center" }}>No data found in sheet.</div>
+      )}
+
       {/* Column headers */}
-      <div style={{
+      {!loading && categories.length > 0 && <div style={{
         display: "grid", gridTemplateColumns: gridCols,
         gap: 4, padding: "6px 12px",
         background: "var(--bg3)", borderRadius: 8, marginBottom: 4,
@@ -293,10 +330,10 @@ function SheetView() {
             color: m === currentMonth ? "var(--accent)" : "var(--text2)",
           }}>{m}</div>
         ))}
-      </div>
+      </div>}
 
       {/* Category rows */}
-      {categories.map((cat, ci) => {
+      {!loading && categories.map((cat, ci) => {
         // Pick the highlighted person's overall balance for emphasis
         const overallVal = cat[person.toLowerCase()];
 
@@ -349,9 +386,11 @@ function SheetView() {
         );
       })}
 
-      <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 12, textAlign: "right" }}>
-        Read-only · Source: Google Sheets · Current month: <strong>{currentMonth}</strong>
-      </div>
+      {!loading && currentMonth && (
+        <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 12, textAlign: "right" }}>
+          Read-only · Source: Google Sheets · Current month: <strong>{currentMonth}</strong>
+        </div>
+      )}
     </div>
   );
 }
