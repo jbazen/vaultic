@@ -1,7 +1,8 @@
 # systemd service for the Vaultic FastAPI backend + Litestream replication.
 #
-# Litestream wraps uvicorn so replication starts before the app and stops
-# cleanly after the app exits. All WAL changes are streamed to Cloudflare R2.
+# start.sh loads Litestream credentials from .env and wraps uvicorn with
+# `litestream replicate -exec`, so replication starts before the app and
+# stops cleanly when the app exits.
 #
 # One-time setup on server:
 #   sudo cp deploy/vaultic-api.service /etc/systemd/system/vaultic-api.service
@@ -11,7 +12,7 @@
 #
 # NOTE: EnvironmentFile is intentionally omitted — systemd mangles multi-line
 # PEM keys (Coinbase EC private key). load_dotenv() in api/main.py handles
-# .env loading. Litestream reads its credentials via the ExecStartPre env export.
+# .env loading for the app. Litestream credentials are loaded by start.sh.
 
 [Unit]
 Description=Vaultic FastAPI Backend + Litestream Replication
@@ -20,21 +21,7 @@ After=network.target
 [Service]
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vaultic
-
-# Export Litestream credentials from .env before starting.
-# We source .env and extract only the two Litestream vars to avoid the
-# multi-line PEM issue that breaks EnvironmentFile.
-ExecStartPre=/bin/bash -c '\
-  export $(grep -E "^LITESTREAM_" /home/ubuntu/vaultic/.env | xargs) && \
-  echo "LITESTREAM_ACCESS_KEY_ID=$LITESTREAM_ACCESS_KEY_ID" > /run/litestream.env && \
-  echo "LITESTREAM_SECRET_ACCESS_KEY=$LITESTREAM_SECRET_ACCESS_KEY" >> /run/litestream.env'
-
-EnvironmentFile=/run/litestream.env
-
-ExecStart=/usr/local/bin/litestream replicate \
-  -config /home/ubuntu/vaultic/deploy/litestream.yml \
-  -exec "/home/ubuntu/vaultic/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000"
-
+ExecStart=/bin/bash /home/ubuntu/vaultic/deploy/start.sh
 Restart=always
 RestartSec=5
 

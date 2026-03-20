@@ -19,7 +19,8 @@ Vaultic is a self-hosted personal finance dashboard that aggregates all your acc
 9. [Local Development Setup](#local-development-setup)
 10. [Environment Variables](#environment-variables)
 11. [Deployment](#deployment)
-12. [CI/CD Pipeline](#cicd-pipeline)
+12. [Backups & Disaster Recovery](#backups--disaster-recovery)
+13. [CI/CD Pipeline](#cicd-pipeline)
 13. [Running Tests](#running-tests)
 14. [Test Coverage](#test-coverage)
 15. [Costs](#costs)
@@ -61,6 +62,7 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 | **2FA** | TOTP via pyotp + QR code via qrcode |
 | **Encryption** | Fernet symmetric encryption (cryptography library) for Plaid tokens at rest |
 | **Scheduling** | APScheduler (daily 2am sync) |
+| **Backup** | Litestream → Cloudflare R2 (continuous WAL replication, 7-day retention) |
 | **Hosting** | Oracle Cloud A1 (always-free ARM instance) |
 | **CI/CD** | GitHub Actions → SSH deploy |
 
