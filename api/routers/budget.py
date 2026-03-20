@@ -519,25 +519,35 @@ async def unassign_all(month: str, _user: str = Depends(get_current_user)):
 
 @router.post("/auto-assign/{month}")
 async def auto_assign_from_history(month: str, _user: str = Depends(get_current_user)):
-    """Auto-assign unassigned Plaid transactions using dollar-amount matching
-    against budget_history rows imported from the external budget app.
+    """Auto-assign unassigned Plaid transactions to budget items using a two-pass strategy.
 
-    Strategy:
-      For each unassigned Plaid transaction, find a budget_history entry for
-      the same month with the same dollar amount. Create the assignment only
-      when the match is unambiguous — exactly one Plaid transaction has that
-      amount AND exactly one history entry has that amount for the month.
-      Duplicate amounts on either side are skipped to avoid mismatches.
+    Pass 1 — merchant + amount match against budget_history:
+      Match each Plaid transaction to a history entry by (merchant, amount).
+      This resolves the common case where the same dollar amount appears for
+      different merchants (e.g. $5.46 from OpenAI vs Anthropic vs Amazon).
+      Only assigns when exactly one Plaid transaction has that (merchant, amount)
+      pair AND exactly one distinct budget item is mapped to it in history.
+
+    Pass 2 — merchant-only match via budget_auto_rules:
+      For any transaction still unassigned after Pass 1, look up the merchant
+      in budget_auto_rules (seeded from CSV import). Assigns only when exactly
+      one rule matches (highest match_count wins when there are multiple rules
+      for the same merchant pointing to different items).
 
     Returns the count of transactions assigned and skipped.
     """
     _validate_month(month)
 
+    def normalize_merchant(name: str) -> str:
+        """Lowercase and strip punctuation for fuzzy merchant comparison."""
+        return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
     with get_db() as conn:
-        # All unassigned (or un-categorized) Plaid transactions for the month.
-        # Plaid amounts: positive = outflow (expense), negative = inflow (income).
+        # ── Load all unassigned Plaid transactions for the month ──────────────
         unassigned = conn.execute("""
-            SELECT t.transaction_id, ABS(t.amount) AS amount
+            SELECT t.transaction_id,
+                   ROUND(ABS(t.amount), 2) AS amount,
+                   COALESCE(t.merchant_name, t.name, '') AS merchant
             FROM transactions t
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             WHERE strftime('%Y-%m', t.date) = ?
@@ -548,62 +558,89 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
         if not unassigned:
             return {"assigned": 0, "skipped": 0, "message": "No unassigned transactions"}
 
-        # All budget_history entries for the month that are linked to a budget item.
-        # These were imported from the external budget app and represent the
-        # "correct" assignment for each historical transaction.
+        # ── Load budget_history entries for the month ─────────────────────────
         history = conn.execute("""
-            SELECT ROUND(amount, 2) AS amount, item_id
+            SELECT ROUND(amount, 2) AS amount,
+                   COALESCE(merchant, '') AS merchant,
+                   item_id
             FROM budget_history
             WHERE month = ? AND item_id IS NOT NULL
         """, (month,)).fetchall()
 
-        # Build a map: dollar_amount → list of item_ids from history.
-        # If an amount maps to multiple history entries we can't safely pick one.
-        history_by_amount: dict[float, list[int]] = defaultdict(list)
+        # Build maps keyed by (normalized_merchant, amount) → set of item_ids.
+        # Also keep an amount-only map as a secondary lookup.
+        history_by_merchant_amount: dict[tuple, set] = defaultdict(set)
+        history_by_amount: dict[float, set] = defaultdict(set)
         for row in history:
-            history_by_amount[row["amount"]].append(row["item_id"])
+            key = (normalize_merchant(row["merchant"]), row["amount"])
+            history_by_merchant_amount[key].add(row["item_id"])
+            history_by_amount[row["amount"]].add(row["item_id"])
 
-        # Count how many unassigned Plaid transactions share each dollar amount.
-        # If two transactions have the same amount we can't tell which is which.
-        txn_amount_counts: dict[float, int] = defaultdict(int)
+        # Count how many unassigned transactions share the same (merchant, amount)
+        # — if two identical charges exist we still can't tell them apart.
+        txn_merchant_amount_counts: dict[tuple, int] = defaultdict(int)
         for txn in unassigned:
-            txn_amount_counts[round(txn["amount"], 2)] += 1
+            key = (normalize_merchant(txn["merchant"]), txn["amount"])
+            txn_merchant_amount_counts[key] += 1
+
+        # ── Load budget_auto_rules for Pass 2 ────────────────────────────────
+        # Map: normalized_merchant → best item_id (highest match_count, unique)
+        auto_rules_rows = conn.execute("""
+            SELECT COALESCE(bi.is_deleted, 0) AS is_deleted,
+                   LOWER(ar.merchant) AS merchant, ar.item_id, ar.match_count
+            FROM budget_auto_rules ar
+            JOIN budget_items bi ON bi.id = ar.item_id
+            WHERE bi.is_deleted = 0
+        """).fetchall()
+
+        # For each normalized merchant keep only the top-scoring item_id.
+        # If two rules tie for the same merchant, skip (ambiguous).
+        auto_rules: dict[str, int | None] = {}
+        auto_rule_counts: dict[str, dict[int, int]] = defaultdict(dict)
+        for row in auto_rules_rows:
+            nm = normalize_merchant(row["merchant"])
+            auto_rule_counts[nm][row["item_id"]] = row["match_count"]
+        for nm, item_scores in auto_rule_counts.items():
+            best_count = max(item_scores.values())
+            top_items = [iid for iid, cnt in item_scores.items() if cnt == best_count]
+            auto_rules[nm] = top_items[0] if len(top_items) == 1 else None
 
         assigned = 0
         skipped = 0
 
         for txn in unassigned:
-            amt = round(txn["amount"], 2)
+            amt = txn["amount"]
+            nm = normalize_merchant(txn["merchant"])
+            merchant_amt_key = (nm, amt)
 
-            # Skip if multiple Plaid transactions share this amount (ambiguous).
-            if txn_amount_counts[amt] > 1:
-                skipped += 1
+            # ── Pass 1: merchant + amount match ──────────────────────────────
+            if txn_merchant_amount_counts[merchant_amt_key] == 1:
+                items = history_by_merchant_amount.get(merchant_amt_key, set())
+                if len(items) == 1:
+                    item_id = next(iter(items))
+                    conn.execute("""
+                        INSERT OR IGNORE INTO transaction_assignments
+                            (transaction_id, item_id, status)
+                        VALUES (?, ?, 'auto')
+                    """, (txn["transaction_id"], item_id))
+                    assigned += 1
+                    continue
+                # No merchant+amount history match → fall through to Pass 2
+
+            # ── Pass 2: merchant-only match via auto_rules ───────────────────
+            item_id = auto_rules.get(nm)
+            if item_id is not None:
+                conn.execute("""
+                    INSERT OR IGNORE INTO transaction_assignments
+                        (transaction_id, item_id, status)
+                    VALUES (?, ?, 'auto')
+                """, (txn["transaction_id"], item_id))
+                assigned += 1
                 continue
 
-            # Deduplicate history matches by item_id — multiple budget_history rows
-            # can share the same dollar amount if the same charge appeared across
-            # different months' imports. What matters is whether they all point to
-            # the same item. If they do, the match is still unambiguous.
-            raw_matches = history_by_amount.get(amt, [])
-            unique_items = list(set(raw_matches))
+            skipped += 1
 
-            if len(unique_items) != 1:
-                # Zero matches = no history entry for this amount.
-                # 2+ distinct items = genuinely ambiguous, can't pick safely.
-                skipped += 1
-                continue
-
-            item_id = unique_items[0]
-            conn.execute("""
-                INSERT OR IGNORE INTO transaction_assignments (transaction_id, item_id, status)
-                VALUES (?, ?, 'auto')
-            """, (txn["transaction_id"], item_id))
-            assigned += 1
-
-    return {
-        "assigned": assigned,
-        "skipped": skipped,
-    }
+    return {"assigned": assigned, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -612,17 +649,24 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
 
 @router.get("/auto-assign/{month}/debug")
 async def auto_assign_debug(month: str, _user: str = Depends(get_current_user)):
-    """Return skip reasons for every unassigned transaction so we can diagnose misses.
+    """Return the predicted outcome for every unassigned transaction using the
+    same two-pass logic as POST /auto-assign/{month}.
 
-    Each row includes: amount, merchant, reason (no_history_match /
-    duplicate_plaid_amount / ambiguous_history / would_assign), and the
-    budget_history entries that matched (if any).
+    Each row includes: amount, merchant, and one of:
+      pass1_match      — would be assigned via merchant+amount history match
+      pass2_auto_rule  — would be assigned via budget_auto_rules merchant match
+      duplicate_pair   — same (merchant, amount) on 2+ Plaid transactions
+      no_match         — no history and no auto_rule; needs manual assignment
     """
     _validate_month(month)
 
+    def normalize_merchant(name: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
     with get_db() as conn:
         unassigned = conn.execute("""
-            SELECT t.transaction_id, t.merchant_name, t.name,
+            SELECT t.transaction_id,
+                   COALESCE(t.merchant_name, t.name, '') AS merchant,
                    ROUND(ABS(t.amount), 2) AS amount
             FROM transactions t
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
@@ -632,42 +676,69 @@ async def auto_assign_debug(month: str, _user: str = Depends(get_current_user)):
         """, (month,)).fetchall()
 
         history = conn.execute("""
-            SELECT ROUND(amount, 2) AS amount, item_id,
-                   (SELECT name FROM budget_items WHERE id = bh.item_id) AS item_name
+            SELECT ROUND(amount, 2) AS amount,
+                   COALESCE(merchant, '') AS merchant,
+                   bh.item_id,
+                   bi.name AS item_name
             FROM budget_history bh
-            WHERE month = ? AND item_id IS NOT NULL
+            JOIN budget_items bi ON bi.id = bh.item_id
+            WHERE bh.month = ? AND bh.item_id IS NOT NULL
         """, (month,)).fetchall()
 
-    history_by_amount: dict[float, list] = defaultdict(list)
-    for row in history:
-        history_by_amount[row["amount"]].append(
-            {"item_id": row["item_id"], "item_name": row["item_name"]}
-        )
+        auto_rules_rows = conn.execute("""
+            SELECT LOWER(ar.merchant) AS merchant, ar.item_id,
+                   bi.name AS item_name, ar.match_count
+            FROM budget_auto_rules ar
+            JOIN budget_items bi ON bi.id = ar.item_id
+            WHERE bi.is_deleted = 0
+        """).fetchall()
 
-    txn_amount_counts: dict[float, int] = defaultdict(int)
+    # Build history map: (norm_merchant, amount) → set of {item_id, item_name}
+    history_by_ma: dict[tuple, dict] = defaultdict(dict)
+    for row in history:
+        key = (normalize_merchant(row["merchant"]), row["amount"])
+        history_by_ma[key][row["item_id"]] = row["item_name"]
+
+    # Build auto_rules map: norm_merchant → best item_id (highest match_count, unique)
+    auto_rule_counts: dict[str, dict] = defaultdict(dict)
+    for row in auto_rules_rows:
+        nm = normalize_merchant(row["merchant"])
+        auto_rule_counts[nm][row["item_id"]] = (row["match_count"], row["item_name"])
+    auto_rules: dict[str, tuple | None] = {}
+    for nm, scores in auto_rule_counts.items():
+        best = max(scores.values(), key=lambda x: x[0])[0]
+        top = [(iid, meta) for iid, meta in scores.items() if meta[0] == best]
+        auto_rules[nm] = (top[0][0], top[0][1][1]) if len(top) == 1 else None
+
+    # Count (merchant, amount) pairs across unassigned transactions
+    ma_counts: dict[tuple, int] = defaultdict(int)
     for txn in unassigned:
-        txn_amount_counts[txn["amount"]] += 1
+        ma_counts[(normalize_merchant(txn["merchant"]), txn["amount"])] += 1
 
     results = []
     for txn in unassigned:
         amt = txn["amount"]
-        raw_matches = history_by_amount.get(amt, [])
-        unique_items = list({m["item_id"]: m for m in raw_matches}.values())
+        nm = normalize_merchant(txn["merchant"])
+        ma_key = (nm, amt)
 
-        if txn_amount_counts[amt] > 1:
-            reason = "duplicate_plaid_amount"
-        elif len(unique_items) == 0:
-            reason = "no_history_match"
-        elif len(unique_items) > 1:
-            reason = "ambiguous_history"
+        if ma_counts[ma_key] > 1:
+            reason = "duplicate_pair"
+            item_name = None
+        elif len(history_by_ma.get(ma_key, {})) == 1:
+            item_id, item_name = next(iter(history_by_ma[ma_key].items()))
+            reason = "pass1_match"
+        elif auto_rules.get(nm) is not None:
+            _, item_name = auto_rules[nm]
+            reason = "pass2_auto_rule"
         else:
-            reason = "would_assign"
+            reason = "no_match"
+            item_name = None
 
         results.append({
+            "merchant": txn["merchant"],
             "amount": amt,
-            "merchant": txn["merchant_name"] or txn["name"],
             "reason": reason,
-            "history_matches": unique_items,
+            "would_assign_to": item_name,
         })
 
     return sorted(results, key=lambda r: r["reason"])
