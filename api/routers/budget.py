@@ -531,10 +531,99 @@ async def get_assigned(month: str, _user: str = Depends(get_current_user)):
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND ta.item_id IS NOT NULL
+              AND ta.status != 'pending_review'
             ORDER BY t.date DESC
         """, (month,)).fetchall()
 
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /pending-review/{month} — Sage-suggested assignments awaiting approval
+# ---------------------------------------------------------------------------
+
+@router.get("/pending-review/{month}")
+async def get_pending_review(month: str, _user: str = Depends(get_current_user)):
+    """Return transactions that Sage auto-categorized during sync but that
+    the user has not yet approved or corrected.
+
+    These are stored in transaction_assignments with status='pending_review'.
+    They DO count toward spending totals — the user can always move them.
+    """
+    _validate_month(month)
+
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
+                   ta.item_id        AS suggested_item_id,
+                   bi.name           AS suggested_item_name,
+                   bg.name           AS suggested_group_name,
+                   ta.confidence     AS confidence,
+                   COALESCE(a.display_name, a.name) AS account_name,
+                   a.mask            AS account_mask
+            FROM transaction_assignments ta
+            JOIN transactions t ON t.transaction_id = ta.transaction_id
+            JOIN budget_items bi ON bi.id = ta.item_id
+            JOIN budget_groups bg ON bg.id = bi.group_id
+            LEFT JOIN accounts a ON a.id = t.account_id
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+              AND ta.status = 'pending_review'
+            ORDER BY t.date DESC
+        """, (month,)).fetchall()
+
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# POST /assign/approve — approve or correct a pending_review assignment
+# ---------------------------------------------------------------------------
+
+class ApproveBody(BaseModel):
+    transaction_id: str
+    item_id: int  # the item to confirm (same as suggested = approve; different = correct)
+
+
+@router.post("/assign/approve")
+async def approve_assignment(body: ApproveBody, _user: str = Depends(get_current_user)):
+    """Confirm or correct a Sage-suggested transaction assignment.
+
+    Approve: pass the same item_id that Sage suggested — status → 'approved'.
+    Correct: pass a different item_id — re-assigns and sets status → 'approved'.
+    In both cases, updates budget_auto_rules so the merchant→item mapping is
+    reinforced (approve) or corrected (correction raises match_count for new item).
+    """
+    with get_db() as conn:
+        txn = conn.execute(
+            "SELECT COALESCE(merchant_name, name, '') AS merchant"
+            " FROM transactions WHERE transaction_id = ?",
+            (body.transaction_id,)
+        ).fetchone()
+        if not txn:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        merchant = txn["merchant"]
+
+        # Upsert assignment with approved status
+        conn.execute("""
+            INSERT INTO transaction_assignments (transaction_id, item_id, status)
+            VALUES (?, ?, 'approved')
+            ON CONFLICT(transaction_id) DO UPDATE SET
+                item_id = excluded.item_id,
+                status  = 'approved'
+        """, (body.transaction_id, body.item_id))
+
+        # Reinforce or correct the auto-rule for this merchant
+        if merchant:
+            conn.execute("""
+                INSERT INTO budget_auto_rules (merchant, item_id, match_count)
+                VALUES (?, ?, 1)
+                ON CONFLICT(merchant, item_id)
+                DO UPDATE SET match_count = match_count + 1,
+                              updated_at  = CURRENT_TIMESTAMP
+            """, (merchant, body.item_id))
+
+    return {"status": "approved"}
 
 
 # ---------------------------------------------------------------------------

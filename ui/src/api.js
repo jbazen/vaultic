@@ -448,6 +448,22 @@ export async function autoAssignDebug(month) {
   const res = await apiFetch(`/api/budget/auto-assign/${month}/debug`);
   return res.json();
 }
+/** Fetch transactions Sage auto-categorized during sync that need approval. */
+export async function getPendingReviewTransactions(month) {
+  const res = await apiFetch(`/api/budget/pending-review/${month}`);
+  return res.json();
+}
+
+/** Approve or correct a Sage-suggested assignment.
+ *  itemId = same as suggestion → approve; different → correct + learn. */
+export async function approveTransaction(transactionId, itemId) {
+  const res = await apiFetch("/api/budget/assign/approve", {
+    method: "POST",
+    body: JSON.stringify({ transaction_id: transactionId, item_id: itemId }),
+  });
+  return res.json();
+}
+
 export async function getItemDetail(itemId, month) {
   const res = await apiFetch(`/api/budget/items/${itemId}/detail?month=${month}`);
   return res.json();

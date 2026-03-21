@@ -326,6 +326,10 @@ MIGRATIONS = [
     # budget_history and auto-rule data remain intact for Sage queries.
     "ALTER TABLE budget_groups ADD COLUMN is_deleted INTEGER DEFAULT 0",
     "ALTER TABLE budget_items ADD COLUMN is_deleted INTEGER DEFAULT 0",
+    # Confidence score (0-100) for auto-categorized assignments. Set by the sync
+    # pipeline based on how many times we've seen this merchant→item pairing.
+    # NULL = manually assigned (no confidence concept applies).
+    "ALTER TABLE transaction_assignments ADD COLUMN confidence INTEGER DEFAULT NULL",
 ]
 
 

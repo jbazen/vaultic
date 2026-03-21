@@ -15,6 +15,72 @@ from api.database import get_db
 from api.encryption import decrypt
 from api import security_log
 
+
+def _auto_categorize_new(conn, transaction_ids: list[str]):
+    """Match newly synced transactions against budget_auto_rules and insert
+    pending_review assignments.
+
+    Uses match_count to derive a confidence score:
+      ≥ 10 matches → 95%  (very reliable, seen many times)
+      5–9 matches  → 85%  (reliable)
+      2–4 matches  → 70%  (seen a few times)
+      1 match      → 55%  (seen once — low confidence)
+
+    Only transactions with no existing assignment are processed. Skipped
+    transactions remain unassigned and appear in the New tab.
+    """
+    if not transaction_ids:
+        return
+
+    # Load all auto-rules ordered by match_count desc so the highest-confidence
+    # rule for each merchant wins in the event of multiple rules per merchant.
+    rules: dict[str, tuple[int, int]] = {}  # merchant → (item_id, match_count)
+    for row in conn.execute(
+        "SELECT merchant, item_id, match_count FROM budget_auto_rules"
+        " WHERE item_id IS NOT NULL ORDER BY match_count DESC"
+    ).fetchall():
+        if row["merchant"] not in rules:
+            rules[row["merchant"]] = (row["item_id"], row["match_count"])
+
+    for txn_id in transaction_ids:
+        # Skip if already assigned
+        existing = conn.execute(
+            "SELECT 1 FROM transaction_assignments WHERE transaction_id = ?", (txn_id,)
+        ).fetchone()
+        if existing:
+            continue
+
+        txn = conn.execute(
+            "SELECT COALESCE(merchant_name, name, '') AS merchant"
+            " FROM transactions WHERE transaction_id = ?",
+            (txn_id,)
+        ).fetchone()
+        if not txn:
+            continue
+
+        merchant = txn["merchant"].strip()
+        if merchant not in rules:
+            continue
+
+        item_id, match_count = rules[merchant]
+
+        # Confidence score based on how many times we've seen this merchant→item pair
+        if match_count >= 10:
+            confidence = 95
+        elif match_count >= 5:
+            confidence = 85
+        elif match_count >= 2:
+            confidence = 70
+        else:
+            confidence = 55
+
+        conn.execute(
+            "INSERT OR IGNORE INTO transaction_assignments"
+            " (transaction_id, item_id, status, confidence)"
+            " VALUES (?, ?, 'pending_review', ?)",
+            (txn_id, item_id, confidence)
+        )
+
 logger = logging.getLogger("vaultic.sync")
 
 
@@ -211,6 +277,14 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
             conn.execute(
                 "DELETE FROM transactions WHERE transaction_id = ?", (txn.transaction_id,)
             )
+
+        # Auto-categorize newly added transactions using learned merchant rules.
+        # Matched transactions get status='pending_review' so the user can approve
+        # or correct them in the Pending tab — they count toward spending totals
+        # immediately but are visually distinct until confirmed.
+        new_ids = [t.transaction_id for t in added if not int(getattr(t, "pending", 0))]
+        if new_ids:
+            _auto_categorize_new(conn, new_ids)
 
 
 def _sync_investments(item_db_id: int, access_token: str, today: str):

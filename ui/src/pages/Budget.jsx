@@ -24,6 +24,7 @@ import {
   assignTransaction, unassignTransaction, autoAssignFromHistory, unassignAll,
   autoAssignDebug, getItemDetail, reorderGroups, reorderItems,
   getTransaction, saveTransactionSplits,
+  getPendingReviewTransactions, approveTransaction,
 } from "../api.js";
 
 // ── Color palette — one color per expense group (income is always green) ──────
@@ -362,9 +363,10 @@ function SummaryPanel({ groups, summary }) {
 
 // ── Transactions panel (right side) ───────────────────────────────────────────
 function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
-  const [tab, setTab] = useState("new"); // new | tracked
+  const [tab, setTab] = useState("pending"); // pending | new | tracked
   const [unassigned, setUnassigned] = useState([]);
   const [assigned, setAssigned] = useState([]);
+  const [pending, setPending] = useState([]);   // Sage-suggested, awaiting review
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
@@ -375,11 +377,16 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
     await Promise.all([
       getUnassignedTransactions(month).then(setUnassigned),
       getAssignedTransactions(month).then(setAssigned),
+      getPendingReviewTransactions(month).then(setPending),
     ]);
     setLoading(false);
   }
 
-  useEffect(() => { loadAll(); setAutoResult(null); }, [month]);
+  // Switch to Pending tab automatically when there are items waiting
+  useEffect(() => {
+    loadAll();
+    setAutoResult(null);
+  }, [month]);
 
   async function handleAssign(txnId, itemId) {
     if (!itemId) return;
@@ -402,6 +409,24 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
     onBudgetUpdate?.();
   }
 
+  // Approve Sage's suggestion (or correct it to a different item).
+  // Both paths call the same endpoint — different item_id = correction.
+  async function handleApprove(txnId, itemId) {
+    await approveTransaction(txnId, itemId);
+    await loadAll();
+    onBudgetUpdate?.();
+  }
+
+  // Approve all pending transactions that meet a minimum confidence threshold.
+  async function handleApproveAll(minConfidence = 0) {
+    const eligible = pending.filter(t => (t.confidence ?? 0) >= minConfidence);
+    await Promise.all(
+      eligible.map(t => approveTransaction(t.transaction_id, t.suggested_item_id))
+    );
+    await loadAll();
+    onBudgetUpdate?.();
+  }
+
   async function handleAutoAssign() {
     setAutoAssigning(true);
     setAutoResult(null);
@@ -417,7 +442,7 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
     }
   }
 
-  const txns = (tab === "new" ? unassigned : assigned).filter(t => {
+  const txns = (tab === "pending" ? pending : tab === "new" ? unassigned : assigned).filter(t => {
     if (!search) return true;
     const q = search.toLowerCase();
     return (t.merchant_name || t.name || "").toLowerCase().includes(q);
@@ -440,8 +465,9 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
 
   return (
     <div>
-      {/* Sub-tabs */}
+      {/* Sub-tabs — Pending shows Sage suggestions; New = unassigned; Tracked = confirmed */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 10 }}>
+        {tabBtn("pending", "⚡ Pending", pending.length)}
         {tabBtn("new", "New", unassigned.length)}
         {tabBtn("tracked", "Tracked", assigned.length)}
       </div>
@@ -467,6 +493,34 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
               color: "var(--red)", cursor: "pointer",
             }}>
             ✕ Unassign all ({assigned.length})
+          </button>
+        </div>
+      )}
+
+      {/* Pending tab: bulk approve buttons */}
+      {tab === "pending" && pending.length > 0 && (
+        <div style={{ marginBottom: 8, display: "flex", gap: 6 }}>
+          <button
+            onClick={() => handleApproveAll(85)}
+            style={{
+              flex: 1, padding: "6px 0", borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: "rgba(34,197,94,0.12)", border: "1px solid rgba(34,197,94,0.3)",
+              color: "#22c55e", cursor: "pointer",
+            }}
+            title="Approve all suggestions with ≥85% confidence"
+          >
+            ✓ Approve high-confidence (≥85%)
+          </button>
+          <button
+            onClick={() => handleApproveAll(0)}
+            style={{
+              padding: "6px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: "var(--bg3)", border: "1px solid var(--border)",
+              color: "var(--text2)", cursor: "pointer",
+            }}
+            title="Approve all pending suggestions"
+          >
+            All
           </button>
         </div>
       )}
@@ -540,6 +594,31 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                   )}
                 </div>
 
+                {/* Pending tab: Sage's suggestion with confidence badge */}
+                {tab === "pending" && t.suggested_item_name && (
+                  <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, color: "var(--accent)",
+                      background: "color-mix(in srgb, var(--accent) 15%, transparent)",
+                      borderRadius: 4, padding: "1px 6px",
+                    }}>
+                      {t.suggested_group_name} › {t.suggested_item_name}
+                    </span>
+                    {t.confidence != null && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 700,
+                        color: t.confidence >= 85 ? "#22c55e" : t.confidence >= 70 ? "#f59e0b" : "var(--text2)",
+                        background: t.confidence >= 85
+                          ? "rgba(34,197,94,0.12)"
+                          : t.confidence >= 70 ? "rgba(245,158,11,0.12)" : "var(--bg3)",
+                        borderRadius: 4, padding: "1px 5px",
+                      }}>
+                        {t.confidence}% confidence
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* One-click category suggestion badge (New tab only) */}
                 {tab === "new" && t.suggested_item_name && (
                   <button onClick={() => handleAssign(t.transaction_id, t.suggested_item_id)}
@@ -565,6 +644,17 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                 <div style={{ fontSize: 12, fontWeight: 700, color: isDebit ? "var(--red)" : "var(--green)" }}>
                   {isDebit ? "-" : "+"}{fmt(Math.abs(t.amount))}
                 </div>
+                {tab === "pending" && (
+                  <button
+                    onClick={() => handleApprove(t.transaction_id, t.suggested_item_id)}
+                    title="Approve Sage's suggestion"
+                    style={{
+                      marginTop: 4, padding: "3px 10px", borderRadius: 5, fontSize: 10, fontWeight: 700,
+                      background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.35)",
+                      color: "#22c55e", cursor: "pointer",
+                    }}
+                  >✓ Approve</button>
+                )}
                 {tab === "tracked" && (
                   <button onClick={() => handleUnassign(t.transaction_id)}
                     style={{ fontSize: 10, color: "var(--text2)", background: "none",
@@ -574,6 +664,30 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                 )}
               </div>
             </div>
+
+            {/* Correct dropdown (Pending tab) — approve with a different item */}
+            {tab === "pending" && (
+              <select key={"p-" + t.transaction_id} defaultValue=""
+                onChange={e => e.target.value && handleApprove(t.transaction_id, parseInt(e.target.value))}
+                style={{
+                  marginTop: 6, width: "100%",
+                  background: "var(--bg3)", border: "1px solid var(--border)",
+                  borderRadius: 6, color: "var(--text)", fontSize: 11, padding: "4px 8px",
+                }}>
+                <option value="" disabled>Correct to different item…</option>
+                {allGroups.map(g => {
+                  const activeItems = g.items.filter(i => i.planned > 0 || i.spent > 0);
+                  if (activeItems.length === 0) return null;
+                  return (
+                    <optgroup key={g.id} label={g.name}>
+                      {activeItems.map(i => (
+                        <option key={i.id} value={i.id}>{i.name}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+            )}
 
             {/* Assign dropdown (New tab) */}
             {tab === "new" && (
@@ -586,9 +700,6 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                 }}>
                 <option value="" disabled>Assign to budget item…</option>
                 {allGroups.map(g => {
-                  // Mirror the auto-hide logic: only show items active this month.
-                  // Items with $0 planned and $0 spent are hidden from the budget
-                  // view and shouldn't clutter the assignment dropdown either.
                   const activeItems = g.items.filter(i => i.planned > 0 || i.spent > 0);
                   if (activeItems.length === 0) return null;
                   return (
