@@ -846,11 +846,13 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 540, maxHeight: "90vh", overflowY: "auto",
+          width: 540, maxHeight: "90vh",
+          overflowY: "auto", overflowX: "hidden",
           background: "var(--bg2)", borderRadius: 12,
           border: "1px solid var(--border)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
           padding: "20px 24px",
+          boxSizing: "border-box",
         }}
       >
         {/* ── Header: title + Expense/Income toggle + close ── */}
@@ -919,9 +921,8 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                     background: "transparent", border: "none",
                     borderBottom: `2px solid ${amountColor}`,
                     outline: "none",
-                    width: Math.max(80, (editAmount.length || 4) * 20 + 10) + "px",
+                    width: Math.max(80, Math.min((editAmount.length || 4) * 22 + 10, 300)) + "px",
                     textAlign: "center", padding: "0 4px",
-                    // Hide browser number spinner (Chrome, Firefox, Safari)
                     MozAppearance: "textfield", appearance: "textfield",
                   }}
                 />
@@ -962,14 +963,21 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
 
             {/* ── Raw Plaid transaction description (e.g. "EBAY O*21-14309-16607") ── */}
             {txn.description && (
-              <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 3, letterSpacing: "0.2px" }}>
+              <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6, letterSpacing: "0.2px" }}>
                 {txn.description}
               </div>
             )}
 
-            {/* ── Account label (e.g. "CREDIT CARD *1941") ── */}
-            <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 18 }}>
-              {accountLabel(txn)}
+            {/* ── Account label (e.g. "CREDIT CARD *1941") — large, badge-style ── */}
+            <div style={{ marginBottom: 20 }}>
+              <span style={{
+                display: "inline-block",
+                fontSize: 14, fontWeight: 600, color: "var(--text2)",
+                background: "var(--bg3)", border: "1px solid var(--border)",
+                borderRadius: 6, padding: "5px 12px", letterSpacing: "0.5px",
+              }}>
+                {accountLabel(txn)}
+              </span>
             </div>
 
             {/* ── Split assignment rows ── */}
@@ -1152,14 +1160,15 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                 >Cancel</button>
 
                 <button
-                  onClick={handleSave}
-                  disabled={!canSave || saving}
+                  onClick={canSave && !saving ? handleSave : undefined}
                   style={{
                     padding: "8px 18px", borderRadius: 6, border: "none",
                     background: canSave && !saving ? accentBg : "var(--bg3)",
                     color: canSave && !saving ? "#fff" : "var(--text2)",
                     cursor: canSave && !saving ? "pointer" : "not-allowed",
                     fontSize: 13, fontWeight: 600,
+                    opacity: canSave && !saving ? 1 : 0.45,
+                    pointerEvents: saving ? "none" : "auto",
                   }}
                 >
                   {saving ? "Saving…" : (isIncome ? "Track Income" : "Track Expense")}
@@ -1628,7 +1637,8 @@ function GroupTotalsRow({ group, showSpent }) {
 // ── Budget group section ──────────────────────────────────────────────────────
 function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
                         dragHandleProps, isDragOver,
-                        onDragStart, onDragOver, onDrop, onDragEnd }) {
+                        onDragStart, onDragOver, onDrop, onDragEnd,
+                        groupDragActive }) {
   const [collapsed, setCollapsed] = useState(false);
   const [showSpent, setShowSpent] = useState(false);  // toggles Remaining ↔ Spent column
   const [editingName, setEditingName] = useState(false);
@@ -1673,11 +1683,12 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
   }
 
   function handleItemDragOver(e, itemId) {
+    // When a GROUP is being dragged (groupDragActive=true), do NOT call
+    // e.preventDefault() here — this prevents item rows from becoming valid
+    // drop targets, so the drop event fires directly on the GroupSection outer
+    // div where handleGroupDrop is registered.
+    if (groupDragActive) return;
     e.preventDefault();
-    // Only stop propagation when an item is being dragged. When a GROUP is being
-    // dragged (dragItemId is null), we must let the event bubble up so the parent
-    // GroupSection div and the Budget-level handleGroupDragOver can fire.
-    if (!dragItemId) return;
     e.stopPropagation();
     if (dragItemId !== itemId) setDragOverItemId(itemId);
   }
@@ -2061,6 +2072,7 @@ export default function Budget() {
                 onOpenItem={setActiveItem}
                 isDragOver={dragOverGroupId === g.id && dragGroupId !== g.id}
                 dragHandleProps={{ onMouseDown: () => {} }}
+                groupDragActive={!!dragGroupId}
                 onDragStart={e => handleGroupDragStart(e, g.id)}
                 onDragOver={e => handleGroupDragOver(e, g.id)}
                 onDrop={e => handleGroupDrop(e, g.id)}
