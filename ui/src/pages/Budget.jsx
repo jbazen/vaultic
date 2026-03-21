@@ -846,12 +846,12 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 620, maxHeight: "90vh",
+          width: 660, maxHeight: "90vh",
           overflowY: "auto", overflowX: "hidden",
           background: "var(--bg2)", borderRadius: 12,
           border: "1px solid var(--border)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
-          padding: "20px 28px",
+          padding: "20px 40px 24px 32px",
           boxSizing: "border-box",
         }}
       >
@@ -1638,7 +1638,7 @@ function GroupTotalsRow({ group, showSpent }) {
 function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
                         dragHandleProps, isDragOver,
                         onDragStart, onDragOver, onDrop, onDragEnd,
-                        groupDragActive }) {
+                        groupDragActive, dragGroupRef }) {
   const [collapsed, setCollapsed] = useState(false);
   const [showSpent, setShowSpent] = useState(false);  // toggles Remaining ↔ Spent column
   const [editingName, setEditingName] = useState(false);
@@ -1683,18 +1683,18 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
   }
 
   function handleItemDragOver(e, itemId) {
-    // If a GROUP is being dragged, do not make item rows valid drop targets.
-    // dataTransfer.types is available synchronously — no React state timing issue.
-    if (e.dataTransfer.types.includes("application/vaultic-group")) return;
+    // Use the ref (synchronous) to detect group drags — don't make item rows
+    // valid drop targets during a group drag so the drop lands on the group div.
+    if (dragGroupRef?.current) return;
     e.preventDefault();
     e.stopPropagation();
     if (dragItemId !== itemId) setDragOverItemId(itemId);
   }
 
   async function handleItemDrop(e, targetItemId) {
-    // When a GROUP is being dragged (dragItemId is null), let the event bubble
-    // up so the parent GroupSection's onDrop (handleGroupDrop) can fire.
-    if (!dragItemId) return;
+    // When a GROUP is being dragged, do not handle the drop here — let it
+    // bubble up to the GroupSection outer div where handleGroupDrop is registered.
+    if (dragGroupRef?.current || !dragItemId) return;
     e.preventDefault();
     e.stopPropagation();
     if (dragItemId === targetItemId) {
@@ -1894,8 +1894,11 @@ export default function Budget() {
 
   // ── Drag-and-drop state ──────────────────────────────────────────────────
   // Groups and items use separate drag state so they don't interfere.
-  const [dragGroupId, setDragGroupId]         = useState(null); // group being dragged
+  const [dragGroupId, setDragGroupId]         = useState(null); // group being dragged (for visual highlight)
   const [dragOverGroupId, setDragOverGroupId] = useState(null); // group being hovered over
+  // Ref mirrors dragGroupId but is synchronously readable — useState setter is
+  // async so child dragover handlers can't rely on state being updated in time.
+  const dragGroupRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1944,33 +1947,29 @@ export default function Budget() {
   visibleGroups.forEach(g => { if (g.type !== "income") groupColorIdx[g.id] = expIdx++; });
 
   // ── Group drag handlers ────────────────────────────────────────────────────
-  // We store the dragged group ID in dataTransfer rather than relying on React
-  // state: setState is async, so state may not be updated before the first
-  // dragover event fires in a child component. dataTransfer is synchronous.
-  const GROUP_DRAG_TYPE = "application/vaultic-group";
 
   function handleGroupDragStart(e, groupId) {
-    setDragGroupId(groupId);
+    // Write to ref immediately (synchronous) so child dragover handlers can
+    // read it without waiting for a React re-render of their groupDragActive prop.
+    dragGroupRef.current = groupId;
+    setDragGroupId(groupId); // async — only used for visual highlight via isDragOver
     e.dataTransfer.effectAllowed = "move";
-    // Store group ID synchronously so child dragover handlers can detect it
-    // without waiting for a React re-render.
-    e.dataTransfer.setData(GROUP_DRAG_TYPE, String(groupId));
   }
 
   function handleGroupDragOver(e, groupId) {
-    // Only accept if a group drag is in progress (dataTransfer is synchronous)
-    if (!e.dataTransfer.types.includes(GROUP_DRAG_TYPE)) return;
+    // Use the ref — guaranteed to be set even before React re-renders.
+    if (!dragGroupRef.current) return;
     e.preventDefault();
-    setDragOverGroupId(groupId);
+    if (dragGroupRef.current !== groupId) setDragOverGroupId(groupId);
   }
 
   async function handleGroupDrop(e, targetGroupId) {
-    // Read the dragged group ID from dataTransfer — does not depend on React state timing
-    const draggedId = parseInt(e.dataTransfer.getData(GROUP_DRAG_TYPE), 10);
+    e.preventDefault();
+    const draggedId = dragGroupRef.current;
+    dragGroupRef.current = null;
     if (!draggedId || draggedId === targetGroupId) {
       setDragGroupId(null); setDragOverGroupId(null); return;
     }
-    e.preventDefault();
     // Use ALL groups (not just visibleGroups) so hidden groups keep their
     // relative order and are not overwritten with stale display_order values.
     const ids = groups.map(g => g.id);
@@ -1984,6 +1983,7 @@ export default function Budget() {
   }
 
   function handleGroupDragEnd() {
+    dragGroupRef.current = null;
     setDragGroupId(null); setDragOverGroupId(null);
   }
 
@@ -2083,6 +2083,7 @@ export default function Budget() {
                 isDragOver={dragOverGroupId === g.id && dragGroupId !== g.id}
                 dragHandleProps={{ onMouseDown: () => {} }}
                 groupDragActive={!!dragGroupId}
+                dragGroupRef={dragGroupRef}
                 onDragStart={e => handleGroupDragStart(e, g.id)}
                 onDragOver={e => handleGroupDragOver(e, g.id)}
                 onDrop={e => handleGroupDrop(e, g.id)}
