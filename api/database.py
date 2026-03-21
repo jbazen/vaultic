@@ -338,6 +338,19 @@ MIGRATIONS = [
         notes          TEXT,
         updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+    # ── Web Push subscriptions ─────────────────────────────────────────────────
+    # Stores browser PushSubscription objects so the server can send encrypted
+    # Web Push notifications (RFC 8291 / VAPID) to subscribed devices.
+    # Soft-delete (is_active=0) rather than hard-delete so expired subscriptions
+    # can be audited and don't re-appear if re-added with the same endpoint.
+    """CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        endpoint   TEXT NOT NULL UNIQUE,
+        p256dh     TEXT NOT NULL,
+        auth       TEXT NOT NULL,
+        is_active  INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 

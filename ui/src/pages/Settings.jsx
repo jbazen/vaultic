@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   getMe, getUsers, createUser, deleteUser, changePassword,
   totpSetup, totpConfirm, disable2FA, getSecurityLog,
+  subscribePush, unsubscribePush, getPushSubscription,
 } from "../api.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -374,6 +375,137 @@ function SecurityLog() {
 
 // ── Main Settings page ────────────────────────────────────────────────────────
 
+// ── Push Notifications ────────────────────────────────────────────────────────
+
+/**
+ * Lets the user enable or disable Web Push notifications on this device.
+ *
+ * Flow:
+ *   1. On mount, check if the browser is already subscribed via PushManager
+ *   2. "Enable" button: requests OS permission then POSTs subscription to server
+ *   3. "Disable" button: calls PushManager.unsubscribe() + notifies server
+ *
+ * Notifications are sent by the server after each Plaid sync when new
+ * transactions are auto-categorized and waiting for approval.
+ */
+function PushNotifications() {
+  const [supported,   setSupported]   = useState(false);
+  const [subscribed,  setSubscribed]  = useState(false);
+  const [permission,  setPermission]  = useState("default");
+  const [loading,     setLoading]     = useState(true);
+  const [msg,         setMsg]         = useState(null);
+
+  useEffect(() => {
+    // Push requires service workers, PushManager, and Notification API
+    const ok = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+    setSupported(ok);
+    setPermission(ok ? Notification.permission : "unsupported");
+
+    if (ok) {
+      getPushSubscription()
+        .then(sub => setSubscribed(!!sub))
+        .catch(() => setSubscribed(false))
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  async function handleEnable() {
+    setLoading(true);
+    setMsg(null);
+    try {
+      await subscribePush();
+      setSubscribed(true);
+      setPermission(Notification.permission);
+      setMsg({ text: "Notifications enabled on this device.", type: "ok" });
+    } catch (err) {
+      setMsg({ text: err.message || "Failed to enable notifications.", type: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDisable() {
+    setLoading(true);
+    setMsg(null);
+    try {
+      await unsubscribePush();
+      setSubscribed(false);
+      setMsg({ text: "Notifications disabled on this device.", type: "ok" });
+    } catch (err) {
+      setMsg({ text: err.message || "Failed to disable notifications.", type: "error" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!supported) {
+    return (
+      <p style={{ fontSize: 13, color: "var(--text2)" }}>
+        Push notifications are not supported in this browser.
+        Try Chrome or Edge on Android, or Safari 16.4+ on iOS.
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 16 }}>
+        Get notified on this device when transactions are synced and ready for
+        your review. Notifications are sent once per sync — no spam.
+      </p>
+
+      {/* Status badge */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <div style={{
+          width: 10, height: 10, borderRadius: "50%",
+          background: subscribed ? "var(--green)" : "var(--text2)",
+          flexShrink: 0,
+        }} />
+        <span style={{ fontSize: 13, fontWeight: 600 }}>
+          {loading      ? "Checking…"
+           : subscribed ? "Enabled on this device"
+                        : "Disabled on this device"}
+        </span>
+      </div>
+
+      {/* OS permission warning */}
+      {permission === "denied" && (
+        <p style={{ fontSize: 12, color: "var(--red)", marginBottom: 12 }}>
+          Notifications are blocked in your browser settings. Open browser
+          Settings → Site Permissions → Notifications and allow vaulticsage.com,
+          then try again.
+        </p>
+      )}
+
+      {/* Action button */}
+      {subscribed ? (
+        <button
+          className="btn btn-secondary"
+          onClick={handleDisable}
+          disabled={loading}
+          style={{ fontSize: 13 }}
+        >
+          Disable Notifications
+        </button>
+      ) : (
+        <button
+          className="btn btn-primary"
+          onClick={handleEnable}
+          disabled={loading || permission === "denied"}
+          style={{ fontSize: 13 }}
+        >
+          Enable Notifications
+        </button>
+      )}
+
+      <StatusMsg msg={msg?.text} type={msg?.type === "error" ? "error" : "success"} />
+    </div>
+  );
+}
+
+
 export default function Settings() {
   const [me, setMe] = useState(null);
 
@@ -404,6 +536,10 @@ export default function Settings() {
 
       <Section title="Security Log">
         <SecurityLog />
+      </Section>
+
+      <Section title="Push Notifications">
+        <PushNotifications />
       </Section>
 
       <Section title="App Running Costs">

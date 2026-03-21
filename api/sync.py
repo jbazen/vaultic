@@ -284,7 +284,26 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
         # immediately but are visually distinct until confirmed.
         new_ids = [t.transaction_id for t in added if not int(getattr(t, "pending", 0))]
         if new_ids:
+            before_count = conn.execute(
+                "SELECT COUNT(*) FROM transaction_assignments WHERE status='pending_review'"
+            ).fetchone()[0]
+
             _auto_categorize_new(conn, new_ids)
+
+            after_count = conn.execute(
+                "SELECT COUNT(*) FROM transaction_assignments WHERE status='pending_review'"
+            ).fetchone()[0]
+
+            # Send push notification if new pending_review assignments were created.
+            # Imported here to avoid circular imports at module load time.
+            newly_pending = after_count - before_count
+            if newly_pending > 0:
+                try:
+                    from api.push import notify_pending_review
+                    notify_pending_review(newly_pending)
+                except Exception as push_err:
+                    # Never let push failures interrupt the sync pipeline
+                    logger.warning(f"Push notification failed (non-fatal): {push_err}")
 
 
 def _sync_investments(item_db_id: int, access_token: str, today: str):

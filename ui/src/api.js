@@ -542,3 +542,86 @@ export async function saveTransactionSplits(transactionId, splits, meta = {}) {
   );
   return res.json();
 }
+
+// ── Web Push / PWA ────────────────────────────────────────────────────────────
+
+/** Fetch the server's VAPID public key (no auth required). */
+export async function getPushVapidKey() {
+  const res = await fetch("/api/push/vapid-public-key");
+  if (!res.ok) throw new Error("Push not configured on server");
+  const data = await res.json();
+  return data.publicKey;
+}
+
+/**
+ * Convert a base64url string to a Uint8Array.
+ * Required to pass the VAPID public key as applicationServerKey to
+ * PushManager.subscribe(), which expects a BufferSource, not a string.
+ */
+export function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64  = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw     = atob(base64);
+  return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+}
+
+/**
+ * Subscribe this browser to Web Push and register the subscription with
+ * the Vaultic server. Returns the PushSubscription object on success.
+ *
+ * Flow:
+ *   1. Fetch VAPID public key from server
+ *   2. Request notification permission from the user
+ *   3. Call PushManager.subscribe() with the VAPID key
+ *   4. POST the subscription to /api/push/subscribe
+ */
+export async function subscribePush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    throw new Error("Push notifications are not supported in this browser");
+  }
+
+  const vapidKey = await getPushVapidKey();
+  const reg      = await navigator.serviceWorker.ready;
+
+  const subscription = await reg.pushManager.subscribe({
+    userVisibleOnly:      true,
+    applicationServerKey: urlBase64ToUint8Array(vapidKey),
+  });
+
+  const json = subscription.toJSON();
+  await apiFetch("/api/push/subscribe", {
+    method: "POST",
+    body: JSON.stringify({
+      endpoint: json.endpoint,
+      p256dh:   json.keys.p256dh,
+      auth:     json.keys.auth,
+    }),
+  });
+
+  return subscription;
+}
+
+/** Unsubscribe from Web Push and notify the server to deactivate the record. */
+export async function unsubscribePush() {
+  if (!("serviceWorker" in navigator)) return;
+
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return;
+
+  const endpoint = sub.endpoint;
+  await sub.unsubscribe();
+
+  await apiFetch("/api/push/unsubscribe", {
+    method: "POST",
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
+/** Return the current PushSubscription, or null if not subscribed. */
+export async function getPushSubscription() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
