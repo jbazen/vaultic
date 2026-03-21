@@ -111,6 +111,8 @@ class SplitItem(BaseModel):
 class SplitsBody(BaseModel):
     """Request body for PUT /transactions/{id}/splits."""
     splits: List[SplitItem]
+    check_number: str | None = None  # user-entered check number (optional)
+    notes: str | None = None         # free-form note on the transaction (optional)
 
 
 # ---------------------------------------------------------------------------
@@ -1054,6 +1056,7 @@ async def get_transaction_detail(
         txn = conn.execute("""
             SELECT t.transaction_id, t.date, t.name, t.merchant_name,
                    ABS(t.amount) AS amount,
+                   t.amount AS raw_amount,
                    a.name AS account_name, a.mask AS account_mask,
                    a.subtype AS account_subtype
             FROM transactions t
@@ -1083,6 +1086,12 @@ async def get_transaction_detail(
             ORDER BY ts.id
         """, (transaction_id,)).fetchall()
 
+        # User-entered check number and notes (if any)
+        meta = conn.execute(
+            "SELECT check_number, notes FROM transaction_metadata WHERE transaction_id = ?",
+            (transaction_id,)
+        ).fetchone()
+
     # Build current splits list for the form
     if split_rows:
         current_splits = [
@@ -1105,14 +1114,23 @@ async def get_transaction_detail(
     else:
         current_splits = []
 
+    merchant = txn["merchant_name"] or txn["name"] or "Unknown"
+    # description = raw Plaid name (e.g. "EBAY O*21-14309-16607"); shown separately from the
+    # cleaned merchant_name. Only include if it differs from the resolved merchant string.
+    description = txn["name"] or ""
+
     return {
         "transaction_id": txn["transaction_id"],
         "date": txn["date"],
-        "merchant": txn["merchant_name"] or txn["name"] or "Unknown",
+        "merchant": merchant,
+        "description": description,
         "amount": float(txn["amount"]),
+        "is_income": float(txn["raw_amount"]) < 0,  # negative Plaid amount = inflow
         "account_name": txn["account_name"],
         "account_mask": txn["account_mask"],
         "account_subtype": txn["account_subtype"],
+        "check_number": meta["check_number"] if meta else None,
+        "notes": meta["notes"] if meta else None,
         "splits": current_splits,
     }
 
@@ -1180,6 +1198,18 @@ async def save_transaction_splits(
                     " VALUES (?, ?, ?)",
                     (transaction_id, split.item_id, round(split.amount, 2))
                 )
+
+        # Persist user-entered metadata (check number and notes) if provided.
+        # UPSERT so repeated saves update in place rather than creating duplicates.
+        if body.check_number is not None or body.notes is not None:
+            conn.execute("""
+                INSERT INTO transaction_metadata (transaction_id, check_number, notes, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(transaction_id) DO UPDATE SET
+                    check_number = excluded.check_number,
+                    notes        = excluded.notes,
+                    updated_at   = CURRENT_TIMESTAMP
+            """, (transaction_id, body.check_number, body.notes))
 
     return {"status": "saved", "splits": len(body.splits)}
 

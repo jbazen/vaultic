@@ -721,21 +721,39 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
 
 // ── Edit Expense modal ─────────────────────────────────────────────────────────
 // Opens when the user clicks a transaction row inside ItemDetailModal.
-// Lets the user assign the transaction to one budget item, or split it across
-// multiple items with custom amounts that must sum to the full transaction total.
+// Redesigned to match the EveryDollar Edit Expense/Income modal layout:
+//   • Expense / Income toggle at top (switches labels and button color)
+//   • Editable dollar amount displayed large at top
+//   • Editable date and merchant (larger text)
+//   • Raw transaction description (Plaid name) and account label shown below
+//   • Split rows with red − remove buttons; "Add a Split" dropdown (active items only)
+//   • Check # text field and Notes text area below the splits
 function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
-  const [txn, setTxn] = useState(null);
-  const [splits, setSplits] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
+  const [txn, setTxn]             = useState(null);
+  const [splits, setSplits]       = useState([]);
+  const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState(null);
+  // Editable transaction fields
+  const [editDate, setEditDate]       = useState("");
+  const [editMerchant, setEditMerchant] = useState("");
+  const [editAmount, setEditAmount]   = useState("");
+  const [checkNumber, setCheckNumber] = useState("");
+  const [notes, setNotes]             = useState("");
+  // Expense vs Income toggle — seeded from the raw Plaid amount sign on load
+  const [txnType, setTxnType] = useState("expense"); // "expense" | "income"
 
-  // Load transaction details and pre-populate splits from current assignment
+  // Load transaction and pre-populate all editable fields
   useEffect(() => {
     if (!txnId) return;
-    setTxn(null);
-    setError(null);
+    setTxn(null); setError(null);
     getTransaction(txnId).then(data => {
       setTxn(data);
+      setEditDate(data.date);
+      setEditMerchant(data.merchant);
+      setEditAmount(data.amount.toFixed(2));
+      setCheckNumber(data.check_number || "");
+      setNotes(data.notes || "");
+      setTxnType(data.is_income ? "income" : "expense");
       setSplits(
         data.splits.length > 0
           ? data.splits.map(s => ({ item_id: s.item_id, amount: String(s.amount.toFixed(2)) }))
@@ -744,18 +762,19 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
     }).catch(() => setError("Failed to load transaction"));
   }, [txnId]);
 
-  // Close on Escape
+  // Close on Escape key
   useEffect(() => {
     function onKey(e) { if (e.key === "Escape") onClose(); }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Add a new split row for a specific item, auto-filling the remaining unallocated amount
+  // Add a split row for the selected item, pre-filling the remaining unallocated amount
   function addSplit(itemId) {
+    const effective = parseFloat(editAmount) || 0;
     setSplits(prev => {
-      const currentTotal = prev.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
-      const remainder = txn ? Math.max(0, txn.amount - currentTotal) : 0;
+      const allocated = prev.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+      const remainder = Math.max(0, effective - allocated);
       return [...prev, { item_id: parseInt(itemId), amount: remainder.toFixed(2) }];
     });
   }
@@ -768,21 +787,26 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
     setSplits(prev => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s));
   }
 
-  const splitTotal = splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
-  const totalMatch = txn && Math.abs(splitTotal - txn.amount) < 0.02;
-  const canSave = txn && splits.length > 0
+  const effectiveAmount = parseFloat(editAmount) || 0;
+  const splitTotal      = splits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+  const totalMatch      = effectiveAmount > 0 && Math.abs(splitTotal - effectiveAmount) < 0.02;
+  const amountValid     = effectiveAmount > 0;
+  const canSave = txn && amountValid && splits.length > 0
     && splits.every(s => s.item_id != null && parseFloat(s.amount) > 0)
     && totalMatch;
 
   async function handleSave() {
     if (!canSave) return;
-    setSaving(true);
-    setError(null);
+    setSaving(true); setError(null);
     try {
-      await saveTransactionSplits(txnId, splits.map(s => ({
-        item_id: parseInt(s.item_id),
-        amount: parseFloat(parseFloat(s.amount).toFixed(2)),
-      })));
+      await saveTransactionSplits(
+        txnId,
+        splits.map(s => ({
+          item_id: parseInt(s.item_id),
+          amount:  parseFloat(parseFloat(s.amount).toFixed(2)),
+        })),
+        { check_number: checkNumber || null, notes: notes || null }
+      );
       onSaved?.();
       onClose();
     } catch (e) {
@@ -798,13 +822,17 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
     onClose();
   }
 
-  // Account display string: "CREDIT CARD *1941" style
+  // "CREDIT CARD *1941" — built from account subtype + mask
   function accountLabel(txnData) {
     if (!txnData) return "";
     const subtype = (txnData.account_subtype || "").replace(/_/g, " ").toUpperCase();
-    const mask = txnData.account_mask ? ` *${txnData.account_mask}` : "";
+    const mask    = txnData.account_mask ? ` *${txnData.account_mask}` : "";
     return (subtype || txnData.account_name || "ACCOUNT") + mask;
   }
+
+  const isIncome    = txnType === "income";
+  const amountColor = isIncome ? "var(--green)" : "var(--red)";
+  const accentBg    = isIncome ? "var(--green)" : "var(--accent)";
 
   return (
     <div
@@ -818,30 +846,53 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 440, maxHeight: "85vh", overflowY: "auto",
+          width: 540, maxHeight: "90vh", overflowY: "auto",
           background: "var(--bg2)", borderRadius: 12,
           border: "1px solid var(--border)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
           padding: "20px 24px",
         }}
       >
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", marginBottom: 20 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", flex: 1 }}>
-            Edit Expense
+        {/* ── Header: title + Expense/Income toggle + close ── */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)", flex: 1 }}>
+            {isIncome ? "Edit Income" : "Edit Expense"}
           </div>
+
+          {/* Expense / Income pill toggle */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 2,
+            background: "var(--bg3)", borderRadius: 20, padding: "3px 4px",
+          }}>
+            {["expense", "income"].map(t => (
+              <button
+                key={t}
+                onClick={() => setTxnType(t)}
+                style={{
+                  padding: "4px 12px", borderRadius: 16, border: "none",
+                  cursor: "pointer", fontSize: 12, fontWeight: 600,
+                  background: txnType === t ? (t === "income" ? "var(--green)" : "var(--accent)") : "transparent",
+                  color: txnType === t ? "#fff" : "var(--text2)",
+                  transition: "all 0.15s",
+                }}
+              >
+                {t === "expense" ? "Expense" : "Income"}
+              </button>
+            ))}
+          </div>
+
           <button
             onClick={onClose}
-            style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 18, cursor: "pointer", lineHeight: 1 }}
+            style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 18, cursor: "pointer", lineHeight: 1, marginLeft: 4 }}
           >✕</button>
         </div>
 
+        {/* Loading / error states */}
         {!txn && !error && (
           <div style={{ padding: "32px 0", textAlign: "center", color: "var(--text2)", fontSize: 13 }}>
             Loading…
           </div>
         )}
-
         {error && (
           <div style={{ padding: "16px 0", textAlign: "center", color: "var(--red)", fontSize: 13 }}>
             {error}
@@ -850,20 +901,78 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
 
         {txn && (
           <>
-            {/* Transaction info */}
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)", marginBottom: 3 }}>
-                {txn.merchant}
+            {/* ── Editable dollar amount — large, centered, colored ── */}
+            <div style={{ textAlign: "center", marginBottom: 18 }}>
+              <div style={{ display: "inline-flex", alignItems: "baseline", gap: 2 }}>
+                <span style={{ fontSize: 28, fontWeight: 800, color: amountColor }}>$</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={editAmount}
+                  onChange={e => setEditAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                  onBlur={e => {
+                    const n = parseFloat(e.target.value);
+                    if (!isNaN(n) && n > 0) setEditAmount(n.toFixed(2));
+                  }}
+                  style={{
+                    fontSize: 32, fontWeight: 800, color: amountColor,
+                    background: "transparent", border: "none",
+                    borderBottom: `2px solid ${amountColor}`,
+                    outline: "none",
+                    width: Math.max(80, (editAmount.length || 4) * 20 + 10) + "px",
+                    textAlign: "center", padding: "0 4px",
+                    // Hide browser number spinner (Chrome, Firefox, Safari)
+                    MozAppearance: "textfield", appearance: "textfield",
+                  }}
+                />
               </div>
-              <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>
-                {txn.date} · {accountLabel(txn)}
-              </div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: "var(--red)" }}>
-                -{fmt(txn.amount)}
-              </div>
+              {!amountValid && editAmount !== "" && (
+                <div style={{ color: "var(--red)", fontSize: 11, marginTop: 4 }}>
+                  Enter a valid amount greater than $0
+                </div>
+              )}
             </div>
 
-            {/* Split assignment rows */}
+            {/* ── Editable date + merchant row ── */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "stretch" }}>
+              <input
+                type="date"
+                value={editDate}
+                onChange={e => setEditDate(e.target.value)}
+                style={{
+                  flexShrink: 0, background: "var(--bg3)",
+                  border: "1px solid var(--border)", borderRadius: 6,
+                  color: "var(--text)", fontSize: 14, fontWeight: 600,
+                  padding: "8px 10px",
+                }}
+              />
+              <input
+                type="text"
+                value={editMerchant}
+                onChange={e => setEditMerchant(e.target.value)}
+                placeholder="Merchant"
+                style={{
+                  flex: 1, background: "var(--bg3)",
+                  border: "1px solid var(--border)", borderRadius: 6,
+                  color: "var(--text)", fontSize: 16, fontWeight: 700,
+                  padding: "8px 10px",
+                }}
+              />
+            </div>
+
+            {/* ── Raw Plaid transaction description (e.g. "EBAY O*21-14309-16607") ── */}
+            {txn.description && (
+              <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 3, letterSpacing: "0.2px" }}>
+                {txn.description}
+              </div>
+            )}
+
+            {/* ── Account label (e.g. "CREDIT CARD *1941") ── */}
+            <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 18 }}>
+              {accountLabel(txn)}
+            </div>
+
+            {/* ── Split assignment rows ── */}
             <div style={{ marginBottom: 4 }}>
               <div style={{
                 fontSize: 11, fontWeight: 700, color: "var(--text2)",
@@ -874,7 +983,7 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
 
               {splits.map((split, idx) => (
                 <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-                  {/* Remove button — only shown when there's more than one split */}
+                  {/* Red − remove button — only when more than one split */}
                   {splits.length > 1 ? (
                     <button
                       onClick={() => removeSplit(idx)}
@@ -887,11 +996,10 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                       }}
                     >−</button>
                   ) : (
-                    // Spacer so the dropdown stays aligned when there's only one split
                     <div style={{ width: 22, flexShrink: 0 }} />
                   )}
 
-                  {/* Budget item dropdown */}
+                  {/* Budget item dropdown — allGroups already has only active (non-deleted) items */}
                   <select
                     value={split.item_id ?? ""}
                     onChange={e => updateSplit(idx, "item_id", e.target.value ? parseInt(e.target.value) : null)}
@@ -911,35 +1019,32 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                     ))}
                   </select>
 
-                  {/* Amount input */}
+                  {/* Split amount — text input (no spinner) */}
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
+                    type="text"
+                    inputMode="decimal"
                     value={split.amount}
-                    onChange={e => updateSplit(idx, "amount", e.target.value)}
+                    onChange={e => updateSplit(idx, "amount", e.target.value.replace(/[^0-9.]/g, ""))}
+                    onBlur={e => {
+                      const n = parseFloat(e.target.value);
+                      if (!isNaN(n)) updateSplit(idx, "amount", n.toFixed(2));
+                    }}
                     style={{
                       width: 84, background: "var(--bg3)",
                       border: "1px solid var(--border)",
-                      borderRadius: 6, color: "var(--text)", fontSize: 13, padding: "7px 8px",
-                      textAlign: "right",
+                      borderRadius: 6, color: "var(--text)", fontSize: 13,
+                      padding: "7px 8px", textAlign: "right",
                     }}
                   />
                 </div>
               ))}
             </div>
 
-            {/* Add a Split — dropdown of items not yet assigned in this split.
-                Selecting an item adds it as a new split row with the remaining
-                unallocated amount pre-filled so splits always start balanced. */}
+            {/* ── Add a Split dropdown — only shows active items not yet in the split ── */}
             {(() => {
               const usedIds = new Set(splits.map(s => s.item_id).filter(Boolean));
-              const available = allGroups.flatMap(g =>
-                (g.items || [])
-                  .filter(item => !usedIds.has(item.id))
-                  .map(item => ({ id: item.id, name: item.name, group: g.name }))
-              );
-              if (available.length === 0) return null;
+              const hasMore = allGroups.some(g => (g.items || []).some(item => !usedIds.has(item.id)));
+              if (!hasMore) return null;
               return (
                 <select
                   value=""
@@ -947,7 +1052,7 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                   style={{
                     background: "var(--bg3)", border: "1px solid var(--border)",
                     borderRadius: 6, color: "var(--accent)", fontSize: 13,
-                    padding: "6px 10px", cursor: "pointer", marginBottom: 12,
+                    padding: "6px 10px", cursor: "pointer", marginBottom: 8,
                     fontWeight: 600,
                   }}
                 >
@@ -963,17 +1068,64 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
               );
             })()}
 
-            {/* Running total vs transaction amount */}
-            <div style={{
-              fontSize: 12, marginBottom: 16, textAlign: "right",
-              color: totalMatch ? "var(--text2)" : "var(--red)",
-            }}>
-              {splits.length > 1 ? (
-                <>Split total: {fmt(splitTotal)} / {fmt(txn.amount)}{!totalMatch && " — must equal transaction amount"}</>
-              ) : null}
+            {/* Split total balance indicator — only visible when multiple splits */}
+            {splits.length > 1 && (
+              <div style={{
+                fontSize: 12, marginBottom: 12, textAlign: "right",
+                color: totalMatch ? "var(--text2)" : "var(--red)",
+              }}>
+                Split total: {fmt(splitTotal)} / {fmt(effectiveAmount)}
+                {!totalMatch && " — must equal transaction amount"}
+              </div>
+            )}
+
+            {/* ── Check # ── */}
+            <div style={{ marginBottom: 10 }}>
+              <label style={{
+                fontSize: 11, fontWeight: 700, color: "var(--text2)",
+                textTransform: "uppercase", letterSpacing: "0.5px",
+                display: "block", marginBottom: 4,
+              }}>
+                Check #
+              </label>
+              <input
+                type="text"
+                value={checkNumber}
+                onChange={e => setCheckNumber(e.target.value)}
+                placeholder="Optional check number"
+                style={{
+                  width: "100%", boxSizing: "border-box",
+                  background: "var(--bg3)", border: "1px solid var(--border)",
+                  borderRadius: 6, color: "var(--text)", fontSize: 13,
+                  padding: "7px 10px",
+                }}
+              />
             </div>
 
-            {/* Action buttons */}
+            {/* ── Notes ── */}
+            <div style={{ marginBottom: 18 }}>
+              <label style={{
+                fontSize: 11, fontWeight: 700, color: "var(--text2)",
+                textTransform: "uppercase", letterSpacing: "0.5px",
+                display: "block", marginBottom: 4,
+              }}>
+                Notes
+              </label>
+              <textarea
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+                placeholder="Add a note…"
+                rows={3}
+                style={{
+                  width: "100%", boxSizing: "border-box",
+                  background: "var(--bg3)", border: "1px solid var(--border)",
+                  borderRadius: 6, color: "var(--text)", fontSize: 13,
+                  padding: "7px 10px", resize: "vertical", fontFamily: "inherit",
+                }}
+              />
+            </div>
+
+            {/* ── Action buttons ── */}
             <div style={{
               display: "flex", justifyContent: "space-between", alignItems: "center",
               borderTop: "1px solid var(--border)", paddingTop: 16, gap: 8,
@@ -1004,13 +1156,13 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                   disabled={!canSave || saving}
                   style={{
                     padding: "8px 18px", borderRadius: 6, border: "none",
-                    background: canSave && !saving ? "var(--accent)" : "var(--bg3)",
+                    background: canSave && !saving ? accentBg : "var(--bg3)",
                     color: canSave && !saving ? "#fff" : "var(--text2)",
                     cursor: canSave && !saving ? "pointer" : "not-allowed",
                     fontSize: 13, fontWeight: 600,
                   }}
                 >
-                  {saving ? "Saving…" : "Track Expense"}
+                  {saving ? "Saving…" : (isIncome ? "Track Income" : "Track Expense")}
                 </button>
               </div>
             </div>
@@ -1531,9 +1683,12 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
   }
 
   async function handleItemDrop(e, targetItemId) {
+    // When a GROUP is being dragged (dragItemId is null), let the event bubble
+    // up so the parent GroupSection's onDrop (handleGroupDrop) can fire.
+    if (!dragItemId) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!dragItemId || dragItemId === targetItemId) {
+    if (dragItemId === targetItemId) {
       setDragItemId(null); setDragOverItemId(null); return;
     }
     const visibleItems = group.items.filter(i => i.planned > 0 || i.spent > 0);
@@ -1795,8 +1950,9 @@ export default function Budget() {
     if (!dragGroupId || dragGroupId === targetGroupId) {
       setDragGroupId(null); setDragOverGroupId(null); return;
     }
-    // Reorder: move dragGroupId to the position of targetGroupId
-    const ids = visibleGroups.map(g => g.id);
+    // Use ALL groups (not just visibleGroups) so hidden groups keep their
+    // relative order and aren't accidentally overwritten with stale display_order values.
+    const ids = groups.map(g => g.id);
     const fromIdx = ids.indexOf(dragGroupId);
     const toIdx   = ids.indexOf(targetGroupId);
     ids.splice(fromIdx, 1);

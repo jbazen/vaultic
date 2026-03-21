@@ -533,11 +533,12 @@ export async function getTransaction(transactionId) {
 
 /** Save assignment or split for a transaction.
  *  splits: [{item_id, amount}, ...] — amounts must sum to the transaction total.
+ *  meta: optional {check_number, notes} stored in transaction_metadata.
  */
-export async function saveTransactionSplits(transactionId, splits) {
+export async function saveTransactionSplits(transactionId, splits, meta = {}) {
   const res = await apiFetch(
     `/api/budget/transactions/${encodeURIComponent(transactionId)}/splits`,
-    { method: "PUT", body: JSON.stringify({ splits }) }
+    { method: "PUT", body: JSON.stringify({ splits, ...meta }) }
   );
   return res.json();
 }

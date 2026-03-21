@@ -330,6 +330,14 @@ MIGRATIONS = [
     # pipeline based on how many times we've seen this merchant→item pairing.
     # NULL = manually assigned (no confidence concept applies).
     "ALTER TABLE transaction_assignments ADD COLUMN confidence INTEGER DEFAULT NULL",
+    # User-entered metadata for transactions — check number and free-form notes.
+    # Keyed by transaction_id so it survives reassignments/splits.
+    """CREATE TABLE IF NOT EXISTS transaction_metadata (
+        transaction_id TEXT PRIMARY KEY,
+        check_number   TEXT,
+        notes          TEXT,
+        updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 
