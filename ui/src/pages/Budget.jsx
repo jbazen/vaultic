@@ -2079,19 +2079,38 @@ export default function Budget() {
           {/* LEFT — budget groups list (only groups with activity this month) */}
           <div style={{ flex: 1, minWidth: 0 }}>
             {visibleGroups.map(g => (
-              <GroupSection key={g.id} group={g} month={month}
-                colorIndex={groupColorIdx[g.id] ?? 0}
-                onUpdate={silentLoad}
-                onOpenItem={setActiveItem}
-                isDragOver={dragOverGroupId === g.id && dragGroupId !== g.id}
-                dragHandleProps={{ onMouseDown: () => {} }}
-                groupDragActive={!!dragGroupId}
-                dragGroupRef={dragGroupRef}
-                onDragStart={e => handleGroupDragStart(e, g.id)}
-                onDragOver={e => handleGroupDragOver(e, g.id)}
-                onDrop={e => handleGroupDrop(e, g.id)}
-                onDragEnd={handleGroupDragEnd}
-              />
+              /* Relative wrapper lets us overlay a transparent drop-zone div on top
+                 of the entire group when a group drag is in progress. This overlay
+                 sits at z-index 10, above all inner content, so dragover/drop events
+                 fire directly on it — no bubbling through items, no interference. */
+              <div key={g.id} style={{ position: "relative" }}>
+                <GroupSection group={g} month={month}
+                  colorIndex={groupColorIdx[g.id] ?? 0}
+                  onUpdate={silentLoad}
+                  onOpenItem={setActiveItem}
+                  isDragOver={dragOverGroupId === g.id && dragGroupId !== g.id}
+                  dragHandleProps={{ onMouseDown: () => {} }}
+                  groupDragActive={!!dragGroupId}
+                  dragGroupRef={dragGroupRef}
+                  onDragStart={e => handleGroupDragStart(e, g.id)}
+                  onDragOver={e => handleGroupDragOver(e, g.id)}
+                  onDrop={e => handleGroupDrop(e, g.id)}
+                  onDragEnd={handleGroupDragEnd}
+                />
+                {/* Drop overlay — only rendered while a group is being dragged.
+                    Covers the entire group card so drops register here directly,
+                    bypassing any nested draggable item rows. */}
+                {dragGroupId && dragGroupId !== g.id && (
+                  <div
+                    onDragOver={e => { e.preventDefault(); setDragOverGroupId(g.id); }}
+                    onDrop={e => handleGroupDrop(e, g.id)}
+                    style={{
+                      position: "absolute", inset: 0, zIndex: 10,
+                      background: "transparent", cursor: "move",
+                    }}
+                  />
+                )}
+              </div>
             ))}
 
             {/* Add group */}
