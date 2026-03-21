@@ -45,10 +45,18 @@ def _b64d(s: str) -> bytes:
 
 
 def _load_private_key():
-    """Load the VAPID EC private key from VAPID_PRIVATE_KEY_PEM env var."""
+    """Load the VAPID EC private key from VAPID_PRIVATE_KEY_PEM env var.
+
+    The .env file stores the PEM as a single line with literal \\n separating
+    the header, base64 body, and footer.  We decode those back to real newlines
+    before handing the bytes to load_pem_private_key(), which requires a
+    properly formatted PEM with actual line breaks.
+    """
     pem = os.environ.get("VAPID_PRIVATE_KEY_PEM", "")
     if not pem:
         raise RuntimeError("VAPID_PRIVATE_KEY_PEM not configured — run scripts/generate_vapid_keys.py")
+    # Decode literal \n (stored that way in .env) to real newlines
+    pem = pem.replace("\\n", "\n")
     return load_pem_private_key(pem.encode(), password=None)
 
 
@@ -77,12 +85,12 @@ def _create_vapid_jwt(endpoint: str) -> str:
     """
     parsed = urlparse(endpoint)
     audience = f"{parsed.scheme}://{parsed.netloc}"
-    email = os.environ.get("VAPID_EMAIL", "mailto:admin@vaulticsage.com")
+    email = os.environ.get("VAPID_EMAIL", "mailto:jason.bazen@yahoo.com")
 
     claims = {
         "aud": audience,
         "exp": int(time.time()) + 43_200,  # 12 hours
-        "sub": email,
+        "sub": email,  # mailto:jason.bazen@yahoo.com (set via VAPID_EMAIL in .env)
     }
 
     private_key = _load_private_key()
