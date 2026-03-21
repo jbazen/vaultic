@@ -3,6 +3,7 @@ import sqlite3
 from contextlib import contextmanager
 
 # Set test env vars BEFORE importing api modules
+os.environ.setdefault("TESTING", "1")  # disables APScheduler in main.py (prevents 3-hour test hangs)
 os.environ.setdefault("AUTH_USERNAME", "testuser")
 os.environ.setdefault(
     "AUTH_PASSWORD_HASH",

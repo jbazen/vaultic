@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
@@ -34,15 +35,19 @@ async def lifespan(app: FastAPI):
     from api.auth import seed_user_from_env
     seed_user_from_env()
 
-    from api.sync import sync_all
-    # Sync at 02:00 daily — quiet time, avoids Plaid rate-limit windows during peak hours
-    scheduler.add_job(sync_all, "cron", hour=2, minute=0, id="daily_sync")
-    scheduler.start()
-    security_log.log_server_event("Scheduler started — daily sync at 02:00")
+    # Skip scheduler entirely in test environments — APScheduler's asyncio scheduler
+    # hangs the event loop at teardown, adding 2-3 hours to every test run.
+    if not os.environ.get("TESTING"):
+        from api.sync import sync_all
+        # Sync at 02:00 daily — quiet time, avoids Plaid rate-limit windows during peak hours
+        scheduler.add_job(sync_all, "cron", hour=2, minute=0, id="daily_sync")
+        scheduler.start()
+        security_log.log_server_event("Scheduler started — daily sync at 02:00")
 
     yield
 
-    scheduler.shutdown()
+    if not os.environ.get("TESTING"):
+        scheduler.shutdown()
     security_log.log_server_event("Vaultic API stopped")
 
 
