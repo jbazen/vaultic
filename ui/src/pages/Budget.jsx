@@ -846,12 +846,12 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 540, maxHeight: "90vh",
+          width: 620, maxHeight: "90vh",
           overflowY: "auto", overflowX: "hidden",
           background: "var(--bg2)", borderRadius: 12,
           border: "1px solid var(--border)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
-          padding: "20px 24px",
+          padding: "20px 28px",
           boxSizing: "border-box",
         }}
       >
@@ -1027,7 +1027,7 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                     ))}
                   </select>
 
-                  {/* Split amount — text input (no spinner) */}
+                  {/* Split amount — text input, never shrinks so value is always visible */}
                   <input
                     type="text"
                     inputMode="decimal"
@@ -1038,7 +1038,7 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                       if (!isNaN(n)) updateSplit(idx, "amount", n.toFixed(2));
                     }}
                     style={{
-                      width: 84, background: "var(--bg3)",
+                      width: 96, flexShrink: 0, background: "var(--bg3)",
                       border: "1px solid var(--border)",
                       borderRadius: 6, color: "var(--text)", fontSize: 13,
                       padding: "7px 8px", textAlign: "right",
@@ -1683,11 +1683,9 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
   }
 
   function handleItemDragOver(e, itemId) {
-    // When a GROUP is being dragged (groupDragActive=true), do NOT call
-    // e.preventDefault() here — this prevents item rows from becoming valid
-    // drop targets, so the drop event fires directly on the GroupSection outer
-    // div where handleGroupDrop is registered.
-    if (groupDragActive) return;
+    // If a GROUP is being dragged, do not make item rows valid drop targets.
+    // dataTransfer.types is available synchronously — no React state timing issue.
+    if (e.dataTransfer.types.includes("application/vaultic-group")) return;
     e.preventDefault();
     e.stopPropagation();
     if (dragItemId !== itemId) setDragOverItemId(itemId);
@@ -1946,28 +1944,40 @@ export default function Budget() {
   visibleGroups.forEach(g => { if (g.type !== "income") groupColorIdx[g.id] = expIdx++; });
 
   // ── Group drag handlers ────────────────────────────────────────────────────
+  // We store the dragged group ID in dataTransfer rather than relying on React
+  // state: setState is async, so state may not be updated before the first
+  // dragover event fires in a child component. dataTransfer is synchronous.
+  const GROUP_DRAG_TYPE = "application/vaultic-group";
+
   function handleGroupDragStart(e, groupId) {
     setDragGroupId(groupId);
     e.dataTransfer.effectAllowed = "move";
+    // Store group ID synchronously so child dragover handlers can detect it
+    // without waiting for a React re-render.
+    e.dataTransfer.setData(GROUP_DRAG_TYPE, String(groupId));
   }
 
   function handleGroupDragOver(e, groupId) {
+    // Only accept if a group drag is in progress (dataTransfer is synchronous)
+    if (!e.dataTransfer.types.includes(GROUP_DRAG_TYPE)) return;
     e.preventDefault();
-    if (dragGroupId && dragGroupId !== groupId) setDragOverGroupId(groupId);
+    setDragOverGroupId(groupId);
   }
 
   async function handleGroupDrop(e, targetGroupId) {
-    e.preventDefault();
-    if (!dragGroupId || dragGroupId === targetGroupId) {
+    // Read the dragged group ID from dataTransfer — does not depend on React state timing
+    const draggedId = parseInt(e.dataTransfer.getData(GROUP_DRAG_TYPE), 10);
+    if (!draggedId || draggedId === targetGroupId) {
       setDragGroupId(null); setDragOverGroupId(null); return;
     }
+    e.preventDefault();
     // Use ALL groups (not just visibleGroups) so hidden groups keep their
-    // relative order and aren't accidentally overwritten with stale display_order values.
+    // relative order and are not overwritten with stale display_order values.
     const ids = groups.map(g => g.id);
-    const fromIdx = ids.indexOf(dragGroupId);
+    const fromIdx = ids.indexOf(draggedId);
     const toIdx   = ids.indexOf(targetGroupId);
     ids.splice(fromIdx, 1);
-    ids.splice(toIdx, 0, dragGroupId);
+    ids.splice(toIdx, 0, draggedId);
     setDragGroupId(null); setDragOverGroupId(null);
     await reorderGroups(ids);
     silentLoad();
