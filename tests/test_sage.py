@@ -97,10 +97,17 @@ class TestSageChat:
         assert "300,000" in res.json()["response"]
 
     def test_chat_whitespace_message_handled(self, client, auth_headers):
-        # Pydantic accepts empty strings (no min_length constraint) — backend decides behaviour
-        res = client.post("/api/sage/chat", headers=auth_headers,
-                          json={"message": "   ", "history": []})
-        assert res.status_code in (200, 400, 422, 500)  # Anthropic rejects whitespace-only
+        # Pydantic accepts empty strings — backend passes them to Anthropic which rejects them.
+        # Mock the client so we don't make a real API call (which would hang in CI).
+        mock_resp = _make_mock_response("Sorry, I need a real message.")
+        with patch("api.sage.anthropic.Anthropic") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.messages.create.return_value = mock_resp
+
+            res = client.post("/api/sage/chat", headers=auth_headers,
+                              json={"message": "   ", "history": []})
+        assert res.status_code in (200, 400, 422, 500)
 
 
 class TestSageSpeak:
