@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from api.database import get_db
 from api.dependencies import get_current_user
-from api.push import get_vapid_public_key, is_configured
+from api.push import get_vapid_public_key, is_configured, send_push_notification
 
 router = APIRouter(prefix="/api/push", tags=["push"])
 
@@ -99,3 +99,53 @@ async def unsubscribe(body: UnsubscribeBody, _user: str = Depends(get_current_us
             (body.endpoint,),
         )
     return {"status": "unsubscribed"}
+
+
+@router.post("/test")
+async def send_test_notification(_user: str = Depends(get_current_user)):
+    """Send a test push notification to all active subscriptions for this user.
+
+    Fires a sample notification so the user can verify their device is set up
+    correctly without waiting for a real sync to produce pending transactions.
+    """
+    if not is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Push notifications not configured on this server"
+        )
+
+    with get_db() as conn:
+        subs = conn.execute(
+            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE is_active = 1"
+        ).fetchall()
+
+    if not subs:
+        raise HTTPException(status_code=404, detail="No active push subscriptions found")
+
+    expired_ids = []
+    sent = 0
+    for sub in subs:
+        subscription = {
+            "endpoint": sub["endpoint"],
+            "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
+        }
+        ok = send_push_notification(
+            subscription,
+            title="Vaultic — Test Notification",
+            body="Push notifications are working correctly.",
+            url="/review",
+        )
+        if ok:
+            sent += 1
+        else:
+            expired_ids.append(sub["id"])
+
+    # Deactivate any subscriptions that returned 410 Gone
+    if expired_ids:
+        with get_db() as conn:
+            for sid in expired_ids:
+                conn.execute(
+                    "UPDATE push_subscriptions SET is_active = 0 WHERE id = ?", (sid,)
+                )
+
+    return {"sent": sent, "expired": len(expired_ids)}

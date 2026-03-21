@@ -632,3 +632,8 @@ export async function getPushSubscription() {
   return reg.pushManager.getSubscription();
 }
 
+/** Fire a test push notification to all active subscriptions. */
+export async function sendTestPush() {
+  return apiFetch("/api/push/test", { method: "POST" });
+}
+

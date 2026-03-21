@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import {
   getMe, getUsers, createUser, deleteUser, changePassword,
   totpSetup, totpConfirm, disable2FA, getSecurityLog,
-  subscribePush, unsubscribePush, getPushSubscription,
+  subscribePush, unsubscribePush, getPushSubscription, sendTestPush,
 } from "../api.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -479,26 +479,51 @@ function PushNotifications() {
         </p>
       )}
 
-      {/* Action button */}
-      {subscribed ? (
-        <button
-          className="btn btn-secondary"
-          onClick={handleDisable}
-          disabled={loading}
-          style={{ fontSize: 13 }}
-        >
-          Disable Notifications
-        </button>
-      ) : (
-        <button
-          className="btn btn-primary"
-          onClick={handleEnable}
-          disabled={loading || permission === "denied"}
-          style={{ fontSize: 13 }}
-        >
-          Enable Notifications
-        </button>
-      )}
+      {/* Action buttons */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {subscribed ? (
+          <button
+            className="btn btn-secondary"
+            onClick={handleDisable}
+            disabled={loading}
+            style={{ fontSize: 13 }}
+          >
+            Disable Notifications
+          </button>
+        ) : (
+          <button
+            className="btn btn-primary"
+            onClick={handleEnable}
+            disabled={loading || permission === "denied"}
+            style={{ fontSize: 13 }}
+          >
+            Enable Notifications
+          </button>
+        )}
+
+        {/* Test button — only shown when subscribed so there's something to send to */}
+        {subscribed && (
+          <button
+            className="btn btn-secondary"
+            disabled={loading}
+            style={{ fontSize: 13 }}
+            onClick={async () => {
+              setLoading(true);
+              setMsg(null);
+              try {
+                const res = await sendTestPush();
+                setMsg({ text: `Test sent to ${res.sent} device(s).`, type: "ok" });
+              } catch (err) {
+                setMsg({ text: err.message || "Test failed.", type: "error" });
+              } finally {
+                setLoading(false);
+              }
+            }}
+          >
+            Send Test
+          </button>
+        )}
+      </div>
 
       <StatusMsg msg={msg?.text} type={msg?.type === "error" ? "error" : "success"} />
     </div>

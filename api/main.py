@@ -39,10 +39,12 @@ async def lifespan(app: FastAPI):
     # hangs the event loop at teardown, adding 2-3 hours to every test run.
     if not os.environ.get("TESTING"):
         from api.sync import sync_all
-        # Sync at 02:00 daily — quiet time, avoids Plaid rate-limit windows during peak hours
-        scheduler.add_job(sync_all, "cron", hour=2, minute=0, id="daily_sync")
+        # Sync 4× daily: 02:00, 08:00, 14:00, 20:00 UTC
+        # Spread evenly every 6 hours to catch morning, midday, evening, and overnight transactions.
+        for hour, job_id in [(2, "sync_02"), (8, "sync_08"), (14, "sync_14"), (20, "sync_20")]:
+            scheduler.add_job(sync_all, "cron", hour=hour, minute=0, id=job_id)
         scheduler.start()
-        security_log.log_server_event("Scheduler started — daily sync at 02:00")
+        security_log.log_server_event("Scheduler started — syncs at 02:00, 08:00, 14:00, 20:00 UTC")
 
     yield
 
