@@ -179,7 +179,7 @@ def _encrypt_payload(subscription: dict, plaintext: str) -> bytes:
 # ── Public send function ──────────────────────────────────────────────────────
 
 def send_push_notification(subscription: dict, title: str, body: str,
-                           url: str = "/budget") -> bool:
+                           url: str = "/review") -> bool:
     """Send one encrypted Web Push notification to a subscribed browser.
 
     Uses synchronous httpx so this can be called from the APScheduler sync
@@ -270,7 +270,7 @@ def notify_pending_review(count: int) -> None:
             "endpoint": sub["endpoint"],
             "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
         }
-        ok = send_push_notification(subscription, title, body, url="/budget")
+        ok = send_push_notification(subscription, title, body, url="/review")
         if not ok:
             expired_ids.append(sub["id"])
 

@@ -454,6 +454,13 @@ export async function getPendingReviewTransactions(month) {
   return res.json();
 }
 
+/** Fetch ALL pending_review transactions across every month — used by the
+ *  mobile Review Queue page (/review) so nothing is missed. */
+export async function getAllPendingReview() {
+  const res = await apiFetch("/api/budget/pending-review");
+  return res.json();
+}
+
 /** Approve or correct a Sage-suggested assignment.
  *  itemId = same as suggestion → approve; different → correct + learn. */
 export async function approveTransaction(transactionId, itemId) {
