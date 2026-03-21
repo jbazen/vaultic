@@ -299,8 +299,10 @@ export default function Review() {
 
   return (
     <div style={{
-      minHeight: "100dvh", background: "var(--bg)",
+      position: "fixed", inset: 0, zIndex: 50,
+      background: "var(--bg)",
       display: "flex", flexDirection: "column",
+      overflowY: "auto",
     }}>
       {/* ── Header ── */}
       <div style={{
