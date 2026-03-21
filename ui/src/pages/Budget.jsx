@@ -1638,7 +1638,7 @@ function GroupTotalsRow({ group, showSpent }) {
 function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
                         dragHandleProps, isDragOver,
                         onDragStart, onDragOver, onDrop, onDragEnd,
-                        groupDragActive, dragGroupRef }) {
+                        dragGroupRef }) {
   const [collapsed, setCollapsed] = useState(false);
   const [showSpent, setShowSpent] = useState(false);  // toggles Remaining ↔ Spent column
   const [editingName, setEditingName] = useState(false);
@@ -1894,11 +1894,15 @@ export default function Budget() {
 
   // ── Drag-and-drop state ──────────────────────────────────────────────────
   // Groups and items use separate drag state so they don't interfere.
-  const [dragGroupId, setDragGroupId]         = useState(null); // group being dragged (for visual highlight)
+  // NOTE: dragGroupId (React state) is intentionally NOT used for group dragging.
+  // Calling setState during dragstart triggers a re-render that adds overlay divs
+  // mid-drag, which causes browsers to cancel the operation and snap groups back.
+  // Instead we use:
+  //   • dragGroupRef — synchronous ref, readable in all event handlers
+  //   • document.body CSS class — toggled without React re-render to enable overlays
+  //   • dragOverGroupId — only set in dragover/drop (after drag is already live)
   const [dragOverGroupId, setDragOverGroupId] = useState(null); // group being hovered over
-  // Ref mirrors dragGroupId but is synchronously readable — useState setter is
-  // async so child dragover handlers can't rely on state being updated in time.
-  const dragGroupRef = useRef(null);
+  const dragGroupRef = useRef(null); // which group is currently being dragged
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1947,19 +1951,20 @@ export default function Budget() {
   visibleGroups.forEach(g => { if (g.type !== "income") groupColorIdx[g.id] = expIdx++; });
 
   // ── Group drag handlers ────────────────────────────────────────────────────
+  // IMPORTANT: handleGroupDragStart must NOT call any setState. Calling setState
+  // during dragstart triggers an immediate React re-render that mutates the DOM
+  // (adds overlay divs), which causes the browser to cancel the drag and snap the
+  // group back to its original position. We use only:
+  //   • dragGroupRef.current — synchronous ref, no re-render
+  //   • document.body class  — CSS-only toggle, no re-render
 
   function handleGroupDragStart(e, groupId) {
-    // Write to ref immediately (synchronous) so child dragover handlers can
-    // read it without waiting for a React re-render of their groupDragActive prop.
     dragGroupRef.current = groupId;
-    setDragGroupId(groupId); // async — only used for visual highlight via isDragOver
     e.dataTransfer.effectAllowed = "move";
+    document.body.classList.add("group-drag-active");
   }
 
   function handleGroupDragOver(e, groupId) {
-    // Always call e.preventDefault() so every group is a valid drop target.
-    // The actual reorder only runs in handleGroupDrop when dragGroupRef.current
-    // is set, so false-positive drops (e.g. item drags) are silently ignored.
     e.preventDefault();
     if (dragGroupRef.current && dragGroupRef.current !== groupId) {
       setDragOverGroupId(groupId);
@@ -1970,24 +1975,24 @@ export default function Budget() {
     e.preventDefault();
     const draggedId = dragGroupRef.current;
     dragGroupRef.current = null;
+    document.body.classList.remove("group-drag-active");
     if (!draggedId || draggedId === targetGroupId) {
-      setDragGroupId(null); setDragOverGroupId(null); return;
+      setDragOverGroupId(null); return;
     }
-    // Use ALL groups (not just visibleGroups) so hidden groups keep their
-    // relative order and are not overwritten with stale display_order values.
     const ids = groups.map(g => g.id);
     const fromIdx = ids.indexOf(draggedId);
     const toIdx   = ids.indexOf(targetGroupId);
     ids.splice(fromIdx, 1);
     ids.splice(toIdx, 0, draggedId);
-    setDragGroupId(null); setDragOverGroupId(null);
+    setDragOverGroupId(null);
     await reorderGroups(ids);
     silentLoad();
   }
 
   function handleGroupDragEnd() {
     dragGroupRef.current = null;
-    setDragGroupId(null); setDragOverGroupId(null);
+    document.body.classList.remove("group-drag-active");
+    setDragOverGroupId(null);
   }
 
   return (
@@ -2079,37 +2084,34 @@ export default function Budget() {
           {/* LEFT — budget groups list (only groups with activity this month) */}
           <div style={{ flex: 1, minWidth: 0 }}>
             {visibleGroups.map(g => (
-              /* Relative wrapper lets us overlay a transparent drop-zone div on top
-                 of the entire group when a group drag is in progress. This overlay
-                 sits at z-index 10, above all inner content, so dragover/drop events
-                 fire directly on it — no bubbling through items, no interference. */
+              /* Relative wrapper lets the .group-drop-overlay sit above all inner
+                 content. The overlay is ALWAYS in the DOM (never conditionally
+                 rendered) so the DOM doesn't change when a drag starts — that
+                 stability is what prevents the browser from cancelling the drag.
+                 Its pointer-events are toggled via the body.group-drag-active CSS
+                 class instead of React state. */
               <div key={g.id} style={{ position: "relative" }}>
                 <GroupSection group={g} month={month}
                   colorIndex={groupColorIdx[g.id] ?? 0}
                   onUpdate={silentLoad}
                   onOpenItem={setActiveItem}
-                  isDragOver={dragOverGroupId === g.id && dragGroupId !== g.id}
+                  isDragOver={dragOverGroupId === g.id && dragGroupRef.current !== g.id}
                   dragHandleProps={{ onMouseDown: () => {} }}
-                  groupDragActive={!!dragGroupId}
                   dragGroupRef={dragGroupRef}
                   onDragStart={e => handleGroupDragStart(e, g.id)}
                   onDragOver={e => handleGroupDragOver(e, g.id)}
                   onDrop={e => handleGroupDrop(e, g.id)}
                   onDragEnd={handleGroupDragEnd}
                 />
-                {/* Drop overlay — only rendered while a group is being dragged.
-                    Covers the entire group card so drops register here directly,
-                    bypassing any nested draggable item rows. */}
-                {dragGroupId && dragGroupId !== g.id && (
-                  <div
-                    onDragOver={e => { e.preventDefault(); setDragOverGroupId(g.id); }}
-                    onDrop={e => handleGroupDrop(e, g.id)}
-                    style={{
-                      position: "absolute", inset: 0, zIndex: 10,
-                      background: "transparent", cursor: "move",
-                    }}
-                  />
-                )}
+                {/* Drop overlay — always present, pointer-events controlled via CSS.
+                    When body.group-drag-active is set, this intercepts all drag events
+                    above the nested item rows without needing a React re-render. */}
+                <div
+                  className="group-drop-overlay"
+                  onDragOver={e => { e.preventDefault(); if (dragGroupRef.current !== g.id) setDragOverGroupId(g.id); }}
+                  onDrop={e => handleGroupDrop(e, g.id)}
+                  style={{ position: "absolute", inset: 0, zIndex: 10, background: "transparent", cursor: "grab" }}
+                />
               </div>
             ))}
 

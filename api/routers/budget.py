@@ -272,6 +272,55 @@ async def create_group(body: GroupCreate, _user: str = Depends(get_current_user)
 
 
 # ---------------------------------------------------------------------------
+# PATCH /groups/reorder — save new display_order for all groups
+# IMPORTANT: must be defined BEFORE /groups/{group_id} so FastAPI doesn't
+# match the literal path segment "reorder" as a group_id integer, which
+# would cause a 422 Unprocessable Content error on every reorder request.
+# ---------------------------------------------------------------------------
+
+@router.patch("/groups/reorder")
+async def reorder_groups(body: dict, _user: str = Depends(get_current_user)):
+    """Accept an ordered list of group IDs and write their display_order values.
+
+    Body: {"ids": [3, 1, 4, 2]}  — position in list = new display_order (0-based).
+    """
+    ids = body.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids list is required")
+    with get_db() as conn:
+        for order, gid in enumerate(ids):
+            conn.execute(
+                "UPDATE budget_groups SET display_order = ? WHERE id = ?",
+                (order, gid)
+            )
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /items/reorder — save new display_order for items within a group
+# IMPORTANT: must be defined BEFORE /items/{item_id} for the same reason.
+# ---------------------------------------------------------------------------
+
+@router.patch("/items/reorder")
+async def reorder_items(body: dict, _user: str = Depends(get_current_user)):
+    """Accept an ordered list of item IDs (all from the same group) and write
+    their display_order values.
+
+    Body: {"ids": [7, 5, 9]}  — position in list = new display_order (0-based).
+    """
+    ids = body.get("ids", [])
+    if not ids:
+        raise HTTPException(status_code=400, detail="ids list is required")
+    with get_db() as conn:
+        for order, iid in enumerate(ids):
+            conn.execute(
+                "UPDATE budget_items SET display_order = ? WHERE id = ?",
+                (order, iid)
+            )
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # PATCH /groups/{group_id} — rename or change type of a group
 # ---------------------------------------------------------------------------
 
@@ -321,51 +370,6 @@ async def delete_group(group_id: int, _user: str = Depends(get_current_user)):
             "UPDATE budget_groups SET is_deleted = 1 WHERE id = ?", (group_id,)
         )
     return {"status": "deleted"}
-
-
-# ---------------------------------------------------------------------------
-# PATCH /groups/reorder — save new display_order for all groups
-# ---------------------------------------------------------------------------
-
-@router.patch("/groups/reorder")
-async def reorder_groups(body: dict, _user: str = Depends(get_current_user)):
-    """Accept an ordered list of group IDs and write their display_order values.
-
-    Body: {"ids": [3, 1, 4, 2]}  — position in list = new display_order (0-based).
-    """
-    ids = body.get("ids", [])
-    if not ids:
-        raise HTTPException(status_code=400, detail="ids list is required")
-    with get_db() as conn:
-        for order, gid in enumerate(ids):
-            conn.execute(
-                "UPDATE budget_groups SET display_order = ? WHERE id = ?",
-                (order, gid)
-            )
-    return {"ok": True}
-
-
-# ---------------------------------------------------------------------------
-# PATCH /items/reorder — save new display_order for items within a group
-# ---------------------------------------------------------------------------
-
-@router.patch("/items/reorder")
-async def reorder_items(body: dict, _user: str = Depends(get_current_user)):
-    """Accept an ordered list of item IDs (all from the same group) and write
-    their display_order values.
-
-    Body: {"ids": [7, 5, 9]}  — position in list = new display_order (0-based).
-    """
-    ids = body.get("ids", [])
-    if not ids:
-        raise HTTPException(status_code=400, detail="ids list is required")
-    with get_db() as conn:
-        for order, iid in enumerate(ids):
-            conn.execute(
-                "UPDATE budget_items SET display_order = ? WHERE id = ?",
-                (order, iid)
-            )
-    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

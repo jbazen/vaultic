@@ -30,3 +30,13 @@ body {
 .drag-over-item {
   border-top: 2px solid var(--accent) !important;
 }
+
+/* Group-drag overlays sit above item rows but are non-interactive by default.
+   The body class is added by handleGroupDragStart (no React re-render) so the
+   overlays are live the instant the drag begins — before any dragover fires. */
+.group-drop-overlay {
+  pointer-events: none;
+}
+body.group-drag-active .group-drop-overlay {
+  pointer-events: all;
+}
