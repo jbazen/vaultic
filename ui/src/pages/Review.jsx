@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { getAllPendingReview, approveTransaction, getBudget, isAuthed, deviceAuth } from "../api.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -228,6 +229,7 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
 // ── Main Review page ──────────────────────────────────────────────────────────
 
 export default function Review() {
+  const navigate = useNavigate();
   const [txns,        setTxns]        = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [authFailed,  setAuthFailed]  = useState(false);   // true if device token missing/invalid
@@ -355,6 +357,16 @@ export default function Review() {
         padding: "14px 16px 12px",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={() => navigate("/")}
+            style={{
+              background: "none", border: "none", color: "var(--accent)",
+              fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
+            }}
+            title="Back to Vaultic"
+          >
+            ←
+          </button>
           <span style={{ fontWeight: 800, fontSize: 20, flex: 1 }}>
             Review Queue
           </span>
