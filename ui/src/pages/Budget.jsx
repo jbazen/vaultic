@@ -2084,35 +2084,24 @@ export default function Budget() {
           {/* LEFT — budget groups list (only groups with activity this month) */}
           <div style={{ flex: 1, minWidth: 0 }}>
             {visibleGroups.map(g => (
-              /* Relative wrapper lets the .group-drop-overlay sit above all inner
-                 content. The overlay is ALWAYS in the DOM (never conditionally
-                 rendered) so the DOM doesn't change when a drag starts — that
-                 stability is what prevents the browser from cancelling the drag.
-                 Its pointer-events are toggled via the body.group-drag-active CSS
-                 class instead of React state. */
-              <div key={g.id} style={{ position: "relative" }}>
-                <GroupSection group={g} month={month}
-                  colorIndex={groupColorIdx[g.id] ?? 0}
-                  onUpdate={silentLoad}
-                  onOpenItem={setActiveItem}
-                  isDragOver={dragOverGroupId === g.id && dragGroupRef.current !== g.id}
-                  dragHandleProps={{ onMouseDown: () => {} }}
-                  dragGroupRef={dragGroupRef}
-                  onDragStart={e => handleGroupDragStart(e, g.id)}
-                  onDragOver={e => handleGroupDragOver(e, g.id)}
-                  onDrop={e => handleGroupDrop(e, g.id)}
-                  onDragEnd={handleGroupDragEnd}
-                />
-                {/* Drop overlay — always present, pointer-events controlled via CSS.
-                    When body.group-drag-active is set, this intercepts all drag events
-                    above the nested item rows without needing a React re-render. */}
-                <div
-                  className="group-drop-overlay"
-                  onDragOver={e => { e.preventDefault(); if (dragGroupRef.current !== g.id) setDragOverGroupId(g.id); }}
-                  onDrop={e => handleGroupDrop(e, g.id)}
-                  style={{ position: "absolute", inset: 0, zIndex: 10, background: "transparent", cursor: "grab" }}
-                />
-              </div>
+              /* GroupSection is draggable. Item rows inside it are also draggable,
+                 but their drag handlers return early (without stopPropagation) when
+                 dragGroupRef.current is set, so group-drag events bubble up to the
+                 GroupSection outer div and fire its onDragOver / onDrop handlers.
+                 No overlay div is needed — the real bug was the backend 422 from
+                 route ordering, not a missing capture layer. */
+              <GroupSection key={g.id} group={g} month={month}
+                colorIndex={groupColorIdx[g.id] ?? 0}
+                onUpdate={silentLoad}
+                onOpenItem={setActiveItem}
+                isDragOver={dragOverGroupId === g.id && dragGroupRef.current !== g.id}
+                dragHandleProps={{ onMouseDown: () => {} }}
+                dragGroupRef={dragGroupRef}
+                onDragStart={e => handleGroupDragStart(e, g.id)}
+                onDragOver={e => handleGroupDragOver(e, g.id)}
+                onDrop={e => handleGroupDrop(e, g.id)}
+                onDragEnd={handleGroupDragEnd}
+              />
             ))}
 
             {/* Add group */}
