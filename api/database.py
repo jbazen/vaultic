@@ -344,13 +344,16 @@ MIGRATIONS = [
     # Soft-delete (is_active=0) rather than hard-delete so expired subscriptions
     # can be audited and don't re-appear if re-added with the same endpoint.
     """CREATE TABLE IF NOT EXISTS push_subscriptions (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        endpoint   TEXT NOT NULL UNIQUE,
-        p256dh     TEXT NOT NULL,
-        auth       TEXT NOT NULL,
-        is_active  INTEGER DEFAULT 1,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        endpoint     TEXT NOT NULL UNIQUE,
+        p256dh       TEXT NOT NULL,
+        auth         TEXT NOT NULL,
+        device_token TEXT,
+        is_active    INTEGER DEFAULT 1,
+        created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+    # Add device_token to existing push_subscriptions rows (migration for existing installs)
+    "ALTER TABLE push_subscriptions ADD COLUMN device_token TEXT",
 ]
 
 

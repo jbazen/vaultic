@@ -15,7 +15,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { getAllPendingReview, approveTransaction, getBudget } from "../api.js";
+import { getAllPendingReview, approveTransaction, getBudget, isAuthed, deviceAuth } from "../api.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -230,6 +230,7 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
 export default function Review() {
   const [txns,        setTxns]        = useState([]);
   const [loading,     setLoading]     = useState(true);
+  const [authFailed,  setAuthFailed]  = useState(false);   // true if device token missing/invalid
   const [busyIds,     setBusyIds]     = useState(new Set());
   const [doneIds,     setDoneIds]     = useState(new Set());   // approved — fade out
   const [reassigning, setReassigning] = useState(null);        // txn being reassigned
@@ -239,11 +240,33 @@ export default function Review() {
     try {
       const data = await getAllPendingReview();
       setTxns(data);
-    } catch {}
-    finally { setLoading(false); }
+    } catch {
+      // If API returns 401 the apiFetch handler fires auth:logout and throws —
+      // treat as auth failure rather than empty queue
+      setAuthFailed(true);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    // If the normal JWT is missing or expired, try to silently re-authenticate
+    // using the device_token stored in localStorage when push was subscribed.
+    // This lets the Review page work after a notification tap without the user
+    // ever needing to open the full app and log in manually.
+    async function init() {
+      if (!isAuthed()) {
+        const ok = await deviceAuth();
+        if (!ok) {
+          setAuthFailed(true);
+          setLoading(false);
+          return;
+        }
+      }
+      load();
+    }
+    init();
+  }, [load]);
 
   // Approve a single transaction (or reassign to a different item)
   async function approve(transactionId, itemId) {
@@ -286,6 +309,27 @@ export default function Review() {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
+
+  // Device token missing or rejected — user needs to log in once from the full app
+  if (authFailed) {
+    return (
+      <div style={{
+        position: "fixed", inset: 0, zIndex: 50,
+        background: "var(--bg)", display: "flex", flexDirection: "column",
+        alignItems: "center", justifyContent: "center",
+        gap: 12, padding: 32, textAlign: "center",
+      }}>
+        <div style={{ fontSize: 48 }}>🔒</div>
+        <div style={{ fontWeight: 800, fontSize: 20, color: "var(--text)" }}>
+          Sign in required
+        </div>
+        <div style={{ fontSize: 14, color: "var(--text2)", maxWidth: 280 }}>
+          Open Vaultic, sign in, then go to Settings → Push Notifications
+          and tap <strong>Disable</strong> then <strong>Enable</strong> to link this device.
+        </div>
+      </div>
+    );
+  }
 
   if (reassigning) {
     return (
