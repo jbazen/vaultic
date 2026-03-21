@@ -155,6 +155,40 @@ TOOLS = [
         },
     },
     {
+        "name": "get_unassigned_transactions",
+        "description": "Get transactions that have not yet been assigned to a budget item for a given month. Use this to see what needs to be categorized, then call assign_transaction for each one.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "month": {"type": "string", "description": "Month in YYYY-MM format (e.g. '2026-03'). Defaults to current month."}
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "assign_transaction",
+        "description": "Assign a single Plaid transaction to a budget line item. Use this to categorize transactions. Get item IDs from get_budget. Get transaction IDs from get_unassigned_transactions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "transaction_id": {"type": "string", "description": "The transaction_id from get_unassigned_transactions"},
+                "item_id": {"type": "integer", "description": "The budget item id from get_budget to assign this transaction to"}
+            },
+            "required": ["transaction_id", "item_id"],
+        },
+    },
+    {
+        "name": "auto_assign_month",
+        "description": "Run automatic categorization on all unassigned transactions for a month using learned merchant→budget-item rules from historical data. This is the fastest way to bulk-assign transactions. After running, check remaining unassigned with get_unassigned_transactions.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "month": {"type": "string", "description": "Month in YYYY-MM format (e.g. '2026-03'). Defaults to current month."}
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "search_budget_history",
         "description": "Search budget history for specific transactions by merchant name and/or amount. Use this when the user asks about a specific charge — e.g. 'which budget item did Amazon $8.47 go to in April 2022?' Returns individual matching rows with the merchant, amount, date, and which budget item it was assigned to. Much more efficient than get_budget_history for targeted lookups.",
         "input_schema": {
@@ -334,6 +368,131 @@ def _call_tool(name: str, inputs: dict) -> str:
                 f"{len(rows)} category-months):\n"
                 + str([dict(r) for r in rows])
             )
+
+        elif name == "get_unassigned_transactions":
+            from datetime import date as _date
+            month = inputs.get("month") or _date.today().strftime("%Y-%m")
+            with get_db() as conn:
+                rows = conn.execute("""
+                    SELECT t.transaction_id, t.date, t.name, t.merchant_name,
+                           ROUND(ABS(t.amount), 2) AS amount,
+                           a.name AS account_name
+                    FROM transactions t
+                    LEFT JOIN accounts a ON a.id = t.account_id
+                    LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+                    LEFT JOIN transaction_splits ts ON ts.transaction_id = t.transaction_id
+                    WHERE strftime('%Y-%m', t.date) = ?
+                      AND t.pending = 0
+                      AND ta.transaction_id IS NULL
+                      AND ts.transaction_id IS NULL
+                    ORDER BY t.date DESC
+                """, (month,)).fetchall()
+            if not rows:
+                return f"No unassigned transactions for {month}."
+            return (
+                f"Unassigned transactions for {month} ({len(rows)} total):\n"
+                + str([dict(r) for r in rows])
+            )
+
+        elif name == "assign_transaction":
+            txn_id = inputs.get("transaction_id", "").strip()
+            item_id = inputs.get("item_id")
+            if not txn_id or not item_id:
+                return "Error: transaction_id and item_id are required."
+            with get_db() as conn:
+                # Verify transaction exists
+                txn = conn.execute(
+                    "SELECT transaction_id FROM transactions WHERE transaction_id = ?",
+                    (txn_id,)
+                ).fetchone()
+                if not txn:
+                    return f"Transaction {txn_id} not found."
+                # Verify item exists
+                item = conn.execute(
+                    "SELECT id, name FROM budget_items WHERE id = ? AND is_deleted = 0",
+                    (item_id,)
+                ).fetchone()
+                if not item:
+                    return f"Budget item {item_id} not found."
+                # Assign (upsert — replaces any prior assignment)
+                conn.execute(
+                    "DELETE FROM transaction_assignments WHERE transaction_id = ?",
+                    (txn_id,)
+                )
+                conn.execute(
+                    "INSERT INTO transaction_assignments (transaction_id, item_id, status)"
+                    " VALUES (?, ?, 'auto')",
+                    (txn_id, item_id)
+                )
+                # Update or insert auto-rule so this merchant→item mapping is learned
+                merchant = conn.execute(
+                    "SELECT COALESCE(merchant_name, name, '') AS m FROM transactions WHERE transaction_id = ?",
+                    (txn_id,)
+                ).fetchone()["m"]
+                if merchant:
+                    conn.execute("""
+                        INSERT INTO budget_auto_rules (merchant, item_id, match_count)
+                        VALUES (?, ?, 1)
+                        ON CONFLICT(merchant, item_id)
+                        DO UPDATE SET match_count = match_count + 1, updated_at = CURRENT_TIMESTAMP
+                    """, (merchant, item_id))
+            return f"Assigned transaction {txn_id} to budget item '{item['name']}'."
+
+        elif name == "auto_assign_month":
+            from datetime import date as _date
+            import httpx as _httpx
+            month = inputs.get("month") or _date.today().strftime("%Y-%m")
+            # Call the internal auto-assign endpoint via HTTP (reuses the full algorithm)
+            # This is intentionally a local call — no auth needed within the same process.
+            try:
+                with get_db() as conn:
+                    # Run auto-assign logic directly (inline to avoid circular imports)
+                    unassigned = conn.execute("""
+                        SELECT t.transaction_id, COALESCE(t.merchant_name, t.name, '') AS merchant,
+                               ROUND(ABS(t.amount), 2) AS amount
+                        FROM transactions t
+                        LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+                        LEFT JOIN transaction_splits ts ON ts.transaction_id = t.transaction_id
+                        WHERE strftime('%Y-%m', t.date) = ?
+                          AND t.pending = 0
+                          AND ta.transaction_id IS NULL
+                          AND ts.transaction_id IS NULL
+                    """, (month,)).fetchall()
+                    if not unassigned:
+                        return f"No unassigned transactions for {month}."
+
+                    # Load auto-rules: merchant → highest-match-count item_id
+                    auto_rules = {}
+                    rule_rows = conn.execute("""
+                        SELECT merchant, item_id FROM budget_auto_rules
+                        WHERE item_id IS NOT NULL
+                        ORDER BY match_count DESC
+                    """).fetchall()
+                    for r in rule_rows:
+                        if r["merchant"] not in auto_rules:
+                            auto_rules[r["merchant"]] = r["item_id"]
+
+                    assigned = 0
+                    skipped = 0
+                    for txn in unassigned:
+                        nm = txn["merchant"].strip()
+                        item_id = auto_rules.get(nm)
+                        if item_id:
+                            conn.execute("""
+                                INSERT OR IGNORE INTO transaction_assignments
+                                    (transaction_id, item_id, status)
+                                VALUES (?, ?, 'auto')
+                            """, (txn["transaction_id"], item_id))
+                            assigned += 1
+                        else:
+                            skipped += 1
+                return (
+                    f"Auto-assigned {assigned} of {len(unassigned)} transactions for {month}. "
+                    f"{skipped} could not be matched (no rule for their merchant). "
+                    f"Use get_unassigned_transactions to see what's left."
+                )
+            except Exception as e:
+                return f"Auto-assign failed: {e}"
 
         elif name == "search_budget_history":
             # Targeted transaction search — for specific merchant/amount questions.

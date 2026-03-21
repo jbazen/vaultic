@@ -640,8 +640,13 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  function addSplit() {
-    setSplits(prev => [...prev, { item_id: null, amount: "0.00" }]);
+  // Add a new split row for a specific item, auto-filling the remaining unallocated amount
+  function addSplit(itemId) {
+    setSplits(prev => {
+      const currentTotal = prev.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+      const remainder = txn ? Math.max(0, txn.amount - currentTotal) : 0;
+      return [...prev, { item_id: parseInt(itemId), amount: remainder.toFixed(2) }];
+    });
   }
 
   function removeSplit(idx) {
@@ -813,17 +818,39 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
               ))}
             </div>
 
-            {/* Add a Split button */}
-            <button
-              onClick={addSplit}
-              style={{
-                background: "none", border: "none", color: "var(--accent)",
-                cursor: "pointer", fontSize: 13, fontWeight: 600,
-                padding: "4px 0", marginBottom: 12,
-              }}
-            >
-              + Add a Split
-            </button>
+            {/* Add a Split — dropdown of items not yet assigned in this split.
+                Selecting an item adds it as a new split row with the remaining
+                unallocated amount pre-filled so splits always start balanced. */}
+            {(() => {
+              const usedIds = new Set(splits.map(s => s.item_id).filter(Boolean));
+              const available = allGroups.flatMap(g =>
+                (g.items || [])
+                  .filter(item => !usedIds.has(item.id))
+                  .map(item => ({ id: item.id, name: item.name, group: g.name }))
+              );
+              if (available.length === 0) return null;
+              return (
+                <select
+                  value=""
+                  onChange={e => { if (e.target.value) addSplit(e.target.value); }}
+                  style={{
+                    background: "var(--bg3)", border: "1px solid var(--border)",
+                    borderRadius: 6, color: "var(--accent)", fontSize: 13,
+                    padding: "6px 10px", cursor: "pointer", marginBottom: 12,
+                    fontWeight: 600,
+                  }}
+                >
+                  <option value="">+ Add a Split…</option>
+                  {allGroups.map(g => (
+                    <optgroup key={g.id} label={g.name}>
+                      {(g.items || []).filter(item => !usedIds.has(item.id)).map(item => (
+                        <option key={item.id} value={item.id}>{item.name}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              );
+            })()}
 
             {/* Running total vs transaction amount */}
             <div style={{
@@ -1384,8 +1411,12 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
 
   function handleItemDragOver(e, itemId) {
     e.preventDefault();
+    // Only stop propagation when an item is being dragged. When a GROUP is being
+    // dragged (dragItemId is null), we must let the event bubble up so the parent
+    // GroupSection div and the Budget-level handleGroupDragOver can fire.
+    if (!dragItemId) return;
     e.stopPropagation();
-    if (dragItemId && dragItemId !== itemId) setDragOverItemId(itemId);
+    if (dragItemId !== itemId) setDragOverItemId(itemId);
   }
 
   async function handleItemDrop(e, targetItemId) {
@@ -1661,7 +1692,7 @@ export default function Budget() {
     ids.splice(toIdx, 0, dragGroupId);
     setDragGroupId(null); setDragOverGroupId(null);
     await reorderGroups(ids);
-    await load();
+    silentLoad();
   }
 
   function handleGroupDragEnd() {
@@ -1759,7 +1790,7 @@ export default function Budget() {
             {visibleGroups.map(g => (
               <GroupSection key={g.id} group={g} month={month}
                 colorIndex={groupColorIdx[g.id] ?? 0}
-                onUpdate={load}
+                onUpdate={silentLoad}
                 onOpenItem={setActiveItem}
                 isDragOver={dragOverGroupId === g.id && dragGroupId !== g.id}
                 dragHandleProps={{ onMouseDown: () => {} }}
