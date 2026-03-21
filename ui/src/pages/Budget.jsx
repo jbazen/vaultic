@@ -846,12 +846,12 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 660, maxHeight: "90vh",
+          width: 700, maxWidth: "95vw", maxHeight: "90vh",
           overflowY: "auto", overflowX: "hidden",
           background: "var(--bg2)", borderRadius: 12,
           border: "1px solid var(--border)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
-          padding: "20px 40px 24px 32px",
+          padding: "20px 48px 24px 36px",
           boxSizing: "border-box",
         }}
       >
@@ -1957,10 +1957,13 @@ export default function Budget() {
   }
 
   function handleGroupDragOver(e, groupId) {
-    // Use the ref — guaranteed to be set even before React re-renders.
-    if (!dragGroupRef.current) return;
+    // Always call e.preventDefault() so every group is a valid drop target.
+    // The actual reorder only runs in handleGroupDrop when dragGroupRef.current
+    // is set, so false-positive drops (e.g. item drags) are silently ignored.
     e.preventDefault();
-    if (dragGroupRef.current !== groupId) setDragOverGroupId(groupId);
+    if (dragGroupRef.current && dragGroupRef.current !== groupId) {
+      setDragOverGroupId(groupId);
+    }
   }
 
   async function handleGroupDrop(e, targetGroupId) {
