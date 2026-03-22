@@ -70,21 +70,22 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification.data?.url || "/budget";
+  const targetUrl = event.notification.data?.url || "/review";
 
   event.waitUntil(
     self.clients
       .matchAll({ type: "window", includeUncontrolled: true })
       .then((clients) => {
-        // Focus an existing Vaultic tab if one is open
-        for (const client of clients) {
-          const clientPath = new URL(client.url).pathname;
-          if (clientPath.startsWith("/") && "focus" in client) {
-            client.navigate(targetUrl);
-            return client.focus();
-          }
+        if (clients.length > 0) {
+          // PWA is already open — tell it to navigate via postMessage, then focus.
+          // We use postMessage instead of client.navigate() because navigate() is
+          // NOT supported on iOS Safari PWAs and silently fails, leaving the app
+          // at whatever URL it was at (often causing a blank screen).
+          const client = clients[0];
+          client.postMessage({ type: "NAVIGATE", url: targetUrl });
+          return client.focus();
         }
-        // No existing tab — open a new one
+        // PWA is not open — open it at the target URL directly.
         return self.clients.openWindow(targetUrl);
       })
   );
