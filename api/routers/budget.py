@@ -193,6 +193,56 @@ async def get_pending_review(month: str, _user: str = Depends(get_current_user))
 
 
 # ---------------------------------------------------------------------------
+# GET /unassigned — all unassigned transactions across recent months
+# Powers the Review Queue so the user can assign new transactions alongside
+# the pending-review ones in one place.
+#
+# ROUTE ORDER NOTE: Must be defined BEFORE /{month} for the same reason as
+# /pending-review above — "unassigned" would otherwise be treated as a month.
+# ---------------------------------------------------------------------------
+
+@router.get("/unassigned")
+async def get_all_unassigned(_user: str = Depends(get_current_user)):
+    """Return unassigned transactions for the current month only.
+
+    Powers the Review Queue's "New — Assign Now" section so the user can
+    assign this month's unmatched transactions alongside the pending-review ones.
+    Older unassigned transactions are handled via the Budget page's Unassigned tab.
+    Includes the best auto-rule suggestion (highest match_count) per merchant
+    so the Review Queue can offer a one-tap assign for known merchants.
+    """
+    from datetime import date
+    current_month = date.today().strftime("%Y-%m")
+
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
+                   best.item_id  AS suggested_item_id,
+                   bi.name       AS suggested_item_name,
+                   bg.name       AS suggested_group_name,
+                   COALESCE(a.display_name, a.name) AS account_name,
+                   a.mask        AS account_mask
+            FROM transactions t
+            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+            -- Best auto-rule: pick the rule with the highest match_count for this merchant
+            LEFT JOIN (
+                SELECT merchant, item_id, MAX(match_count) AS match_count
+                FROM budget_auto_rules
+                GROUP BY merchant
+            ) best ON best.merchant = COALESCE(t.merchant_name, t.name)
+            LEFT JOIN budget_items  bi ON bi.id  = best.item_id  AND bi.is_deleted = 0
+            LEFT JOIN budget_groups bg ON bg.id  = bi.group_id   AND bg.is_deleted = 0
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+              AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+            ORDER BY t.date DESC
+        """, (current_month,)).fetchall()
+
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # GET /{month} — full budget for a given month
 # ---------------------------------------------------------------------------
 

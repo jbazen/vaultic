@@ -424,6 +424,11 @@ export async function getUnassignedTransactions(month) {
   const res = await apiFetch(`/api/budget/unassigned/${month}`);
   return res.json();
 }
+// All unassigned transactions across recent months — used by the Review Queue.
+export async function getAllUnassignedTransactions() {
+  const res = await apiFetch("/api/budget/unassigned");
+  return res.json();
+}
 export async function getAssignedTransactions(month) {
   const res = await apiFetch(`/api/budget/assigned/${month}`);
   return res.json();

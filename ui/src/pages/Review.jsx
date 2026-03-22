@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { getAllPendingReview, approveTransaction, getBudget, isAuthed, deviceAuth } from "../api.js";
+import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, getBudget, isAuthed, deviceAuth } from "../api.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -148,16 +148,21 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
 // ── Transaction card ──────────────────────────────────────────────────────────
 
 /**
- * One full-width card representing a single pending transaction.
- * Shows merchant, amount, date, account, and suggested category.
- * Approve collapses the card with a green flash; Reassign opens the picker.
+ * One full-width card for a transaction that needs action.
+ *
+ * mode="pending"  — Sage already suggested a category; user approves or picks
+ *                   a different one.  Shows confidence badge.
+ * mode="new"      — Unassigned; no Sage suggestion yet (or one from auto-rules
+ *                   without a confidence score).  If a suggestion exists the user
+ *                   can one-tap assign it; otherwise they must open the picker.
  */
-function TxnCard({ txn, onApprove, onReassign, busy }) {
-  const conf  = confidenceInfo(txn.confidence);
+function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
+  const conf  = mode === "pending" ? confidenceInfo(txn.confidence) : null;
   const label = txn.merchant_name || txn.name || "Unknown";
   const acct  = txn.account_name
     ? `${txn.account_name}${txn.account_mask ? ` *${txn.account_mask}` : ""}`
     : null;
+  const hasSuggestion = !!txn.suggested_item_id;
 
   return (
     <div style={{
@@ -195,50 +200,72 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
         )}
       </div>
 
-      {/* Row 3: suggested category + confidence */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
-        padding: "8px 12px", background: "var(--bg3, #1e2336)", borderRadius: 8,
-      }}>
-        <span style={{ fontSize: 12, color: "var(--text2, #8b90a7)" }}>Suggested</span>
-        <span style={{
-          flex: 1, fontWeight: 700, fontSize: 14, color: "var(--text, #e8eaf0)",
+      {/* Row 3: suggested category row — shown when there is a suggestion */}
+      {hasSuggestion && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
+          padding: "8px 12px", background: "var(--bg3, #1e2336)", borderRadius: 8,
         }}>
-          {txn.suggested_group_name} › {txn.suggested_item_name}
-        </span>
-        <span style={{
-          fontSize: 11, fontWeight: 700, color: conf.color,
-          background: "var(--bg, #0f1117)", borderRadius: 4, padding: "2px 7px",
-        }}>
-          {conf.label}
-        </span>
-      </div>
+          <span style={{ fontSize: 12, color: "var(--text2, #8b90a7)" }}>Suggested</span>
+          <span style={{
+            flex: 1, fontWeight: 700, fontSize: 14, color: "var(--text, #e8eaf0)",
+          }}>
+            {txn.suggested_group_name} › {txn.suggested_item_name}
+          </span>
+          {/* Confidence badge: colored % for pending, grey N/A for unassigned */}
+          <span style={{
+            fontSize: 11, fontWeight: 700,
+            color:      conf ? conf.color : "#6b7280",
+            background: "var(--bg, #0f1117)", borderRadius: 4, padding: "2px 7px",
+          }}>
+            {conf ? conf.label : "N/A"}
+          </span>
+        </div>
+      )}
 
       {/* Row 4: action buttons */}
       <div style={{ display: "flex", gap: 10 }}>
-        <button
-          onClick={() => onApprove(txn.transaction_id, txn.suggested_item_id)}
-          disabled={busy}
-          style={{
-            flex: 2, padding: "13px 0",
-            background: "var(--green, #34d399)", border: "none", borderRadius: 10,
-            color: "#fff", fontWeight: 800, fontSize: 16, cursor: busy ? "default" : "pointer",
-            opacity: busy ? 0.6 : 1,
-          }}>
-          ✓ Approve
-        </button>
-        <button
-          onClick={() => onReassign(txn)}
-          disabled={busy}
-          style={{
-            flex: 1, padding: "13px 0",
-            background: "var(--bg3, #1e2336)", border: "1px solid var(--border, #2a2f45)",
-            borderRadius: 10, color: "var(--text, #e8eaf0)", fontWeight: 700,
-            fontSize: 15, cursor: busy ? "default" : "pointer",
-            opacity: busy ? 0.6 : 1,
-          }}>
-          Reassign
-        </button>
+        {hasSuggestion ? (
+          <>
+            {/* Primary: approve/assign the suggestion */}
+            <button
+              onClick={() => onApprove(txn.transaction_id, txn.suggested_item_id)}
+              disabled={busy}
+              style={{
+                flex: 2, padding: "13px 0",
+                background: "var(--green, #34d399)", border: "none", borderRadius: 10,
+                color: "#fff", fontWeight: 800, fontSize: 16,
+                cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+              }}>
+              {mode === "pending" ? "✓ Approve" : "✓ Assign"}
+            </button>
+            {/* Secondary: open category picker to choose a different item */}
+            <button
+              onClick={() => onReassign(txn)}
+              disabled={busy}
+              style={{
+                flex: 1, padding: "13px 0",
+                background: "var(--bg3, #1e2336)", border: "1px solid var(--border, #2a2f45)",
+                borderRadius: 10, color: "var(--text, #e8eaf0)", fontWeight: 700,
+                fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+              }}>
+              {mode === "pending" ? "Reassign" : "Pick other"}
+            </button>
+          </>
+        ) : (
+          /* No suggestion — only option is to open the picker */
+          <button
+            onClick={() => onReassign(txn)}
+            disabled={busy}
+            style={{
+              flex: 1, padding: "13px 0",
+              background: "var(--bg3, #1e2336)", border: "1px solid var(--border, #2a2f45)",
+              borderRadius: 10, color: "var(--text, #e8eaf0)", fontWeight: 700,
+              fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+            }}>
+            Choose Category →
+          </button>
+        )}
       </div>
     </div>
   );
@@ -249,25 +276,29 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
 
 export default function Review() {
   const navigate = useNavigate();
+  // pending = Sage auto-assigned, awaiting user approval
   const [txns,        setTxns]        = useState([]);
+  // newTxns = unassigned this month — no Sage match yet
+  const [newTxns,     setNewTxns]     = useState([]);
   const [loading,     setLoading]     = useState(true);
-  const [authFailed,  setAuthFailed]  = useState(false);   // true if device token missing/invalid
+  const [authFailed,  setAuthFailed]  = useState(false);
   const [busyIds,     setBusyIds]     = useState(new Set());
-  const [doneIds,     setDoneIds]     = useState(new Set());   // approved — fade out
-  const [reassigning, setReassigning] = useState(null);        // txn being reassigned
+  const [doneIds,     setDoneIds]     = useState(new Set());     // pending: fading out
+  const [newDoneIds,  setNewDoneIds]  = useState(new Set());     // new: fading out
+  // reassigning carries the txn + which list it came from so the right API is called
+  const [reassigning, setReassigning] = useState(null);          // { txn, mode: "pending"|"new" }
   const [bulkBusy,    setBulkBusy]    = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const data = await getAllPendingReview();
-      // Guard: API should return an array; a non-array response (e.g. a FastAPI
-      // error dict from a 422/500 status that apiFetch didn't throw on) would
-      // crash the render at txns.filter().  Treat non-arrays as an empty queue.
-      setTxns(Array.isArray(data) ? data : []);
+      // Fetch both lists in parallel
+      const [pending, unassigned] = await Promise.all([
+        getAllPendingReview(),
+        getAllUnassignedTransactions(),
+      ]);
+      setTxns(Array.isArray(pending) ? pending : []);
+      setNewTxns(Array.isArray(unassigned) ? unassigned : []);
     } catch (err) {
-      // apiFetch throws on 401 (fires auth:logout first) — show lock screen.
-      // Any other network / parse error also ends up here; log it so we can
-      // see what went wrong via the window.onerror overlay in production.
       console.error("[Review] load failed:", err);
       setAuthFailed(true);
     } finally {
@@ -276,72 +307,72 @@ export default function Review() {
   }, []);
 
   useEffect(() => {
-    // If the normal JWT is missing or expired, try to silently re-authenticate
-    // using the device_token stored in localStorage when push was subscribed.
-    // This lets the Review page work after a notification tap without the user
-    // ever needing to open the full app and log in manually.
     async function init() {
       const hasDeviceToken = !!localStorage.getItem("vaultic_device_token");
       if (hasDeviceToken) {
-        // Always refresh JWT via device token — ensures it's never expired when load() fires
         const ok = await deviceAuth();
-        if (!ok) {
-          setAuthFailed(true);
-          setLoading(false);
-          return;
-        }
+        if (!ok) { setAuthFailed(true); setLoading(false); return; }
       } else if (!isAuthed()) {
-        setAuthFailed(true);
-        setLoading(false);
-        return;
+        setAuthFailed(true); setLoading(false); return;
       }
       load();
     }
     init();
   }, [load]);
 
-  // Approve a single transaction (or reassign to a different item)
+  // Approve a pending_review transaction (POST /assign/approve)
   async function approve(transactionId, itemId) {
     setBusyIds(prev => new Set([...prev, transactionId]));
     try {
       await approveTransaction(transactionId, itemId);
       setDoneIds(prev => new Set([...prev, transactionId]));
-      // Remove from list after brief green flash
       setTimeout(() => {
         setTxns(prev => prev.filter(t => t.transaction_id !== transactionId));
         setDoneIds(prev => { const s = new Set(prev); s.delete(transactionId); return s; });
       }, 400);
     } catch {}
-    finally {
-      setBusyIds(prev => { const s = new Set(prev); s.delete(transactionId); return s; });
-    }
+    finally { setBusyIds(prev => { const s = new Set(prev); s.delete(transactionId); return s; }); }
   }
 
-  // Bulk-approve all transactions with confidence ≥ 85
+  // Assign an unassigned transaction for the first time (POST /assign)
+  async function assign(transactionId, itemId) {
+    setBusyIds(prev => new Set([...prev, transactionId]));
+    try {
+      await assignTransaction(transactionId, itemId);
+      setNewDoneIds(prev => new Set([...prev, transactionId]));
+      setTimeout(() => {
+        setNewTxns(prev => prev.filter(t => t.transaction_id !== transactionId));
+        setNewDoneIds(prev => { const s = new Set(prev); s.delete(transactionId); return s; });
+      }, 400);
+    } catch {}
+    finally { setBusyIds(prev => { const s = new Set(prev); s.delete(transactionId); return s; }); }
+  }
+
+  // Bulk-approve all pending_review with confidence ≥ 85
   async function approveAllHighConf() {
     const highConf = (Array.isArray(txns) ? txns : []).filter(t => t != null && (t.confidence ?? 0) >= 85);
     if (!highConf.length) return;
     setBulkBusy(true);
-    for (const t of highConf) {
-      await approve(t.transaction_id, t.suggested_item_id);
-    }
+    for (const t of highConf) await approve(t.transaction_id, t.suggested_item_id);
     setBulkBusy(false);
   }
 
-  // Pending (not yet animated away) transactions.
-  // Defensive guards: ensure txns is an array and each element is non-null,
-  // and that doneIds is a Set before calling .has() — prevents render crashes
-  // if state ever contains an unexpected value (e.g. from a malformed API response).
-  const safeTxns = Array.isArray(txns) ? txns : [];
-  const visible = safeTxns.filter(t => t != null && (doneIds instanceof Set ? !doneIds.has(t.transaction_id) : true));
+  // Visible (not yet faded out) items for each list
+  const safeTxns   = Array.isArray(txns)    ? txns    : [];
+  const safeNewTxns = Array.isArray(newTxns) ? newTxns : [];
+  const visible    = safeTxns.filter(t   => t != null && (doneIds    instanceof Set ? !doneIds.has(t.transaction_id)    : true));
+  const visibleNew = safeNewTxns.filter(t => t != null && (newDoneIds instanceof Set ? !newDoneIds.has(t.transaction_id) : true));
   const highConfCount = visible.filter(t => (t.confidence ?? 0) >= 85).length;
+  const totalCount = visible.length + visibleNew.length;
 
-  // ── Reassign picker handler ──────────────────────────────────────────────
-  function handleReassignSelect(itemId, itemName, groupName) {
+  // ── Reassign / assign picker handler ─────────────────────────────────────
+  // Calls the right API depending on which list the transaction came from.
+  function handleReassignSelect(itemId) {
     if (!reassigning) return;
-    const txn = reassigning;
+    const { txn, mode } = reassigning;
     setReassigning(null);
-    approve(txn.transaction_id, itemId);
+    if (mode === "new") assign(txn.transaction_id, itemId);
+    else                approve(txn.transaction_id, itemId);
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -370,7 +401,7 @@ export default function Review() {
   if (reassigning) {
     return (
       <CategoryPicker
-        currentItemId={reassigning.suggested_item_id}
+        currentItemId={reassigning.txn.suggested_item_id}
         onSelect={handleReassignSelect}
         onCancel={() => setReassigning(null)}
       />
@@ -404,13 +435,13 @@ export default function Review() {
           <span style={{ fontWeight: 800, fontSize: 20, flex: 1 }}>
             Review Queue
           </span>
-          {visible.length > 0 && (
+          {totalCount > 0 && (
             <span style={{
               background: "var(--accent, #4f8ef7)", color: "#fff",
               borderRadius: 12, padding: "2px 10px",
               fontSize: 13, fontWeight: 700,
             }}>
-              {visible.length}
+              {totalCount}
             </span>
           )}
           <button
@@ -424,7 +455,7 @@ export default function Review() {
           </button>
         </div>
 
-        {/* Bulk approve button — shown whenever there's at least one high-confidence item */}
+        {/* Bulk approve — only for pending_review items with high confidence */}
         {highConfCount > 0 && (
           <button
             onClick={approveAllHighConf}
@@ -436,9 +467,7 @@ export default function Review() {
               fontWeight: 700, fontSize: 14, cursor: bulkBusy ? "default" : "pointer",
               opacity: bulkBusy ? 0.6 : 1,
             }}>
-            {bulkBusy
-              ? "Approving…"
-              : `✓ Approve all ${highConfCount} high-confidence`}
+            {bulkBusy ? "Approving…" : `✓ Approve all ${highConfCount} high-confidence`}
           </button>
         )}
       </div>
@@ -451,8 +480,8 @@ export default function Review() {
         }}>
           Loading…
         </div>
-      ) : visible.length === 0 ? (
-        /* All clear state */
+      ) : totalCount === 0 ? (
+        /* All clear — nothing pending AND nothing unassigned */
         <div style={{
           flex: 1, display: "flex", flexDirection: "column",
           alignItems: "center", justifyContent: "center",
@@ -468,25 +497,69 @@ export default function Review() {
           </div>
         </div>
       ) : (
-        /* Transaction cards */
         <div style={{ flex: 1 }}>
-          {visible.map(txn => (
-            <div
-              key={txn.transaction_id}
-              style={{
-                transition: "opacity 0.3s, transform 0.3s",
-                opacity: doneIds.has(txn.transaction_id) ? 0 : 1,
-                transform: doneIds.has(txn.transaction_id) ? "translateX(60px)" : "none",
+
+          {/* ── Section 1: Pending Approval (Sage auto-assigned) ── */}
+          {visible.length > 0 && (
+            <>
+              <div style={{
+                padding: "10px 16px 8px",
+                fontSize: 11, fontWeight: 700, color: "var(--text2, #8b90a7)",
+                textTransform: "uppercase", letterSpacing: "0.8px",
+                background: "var(--bg3, #1e2336)",
+                borderBottom: "1px solid var(--border, #2a2f45)",
               }}>
-              <TxnCard
-                txn={txn}
-                onApprove={approve}
-                onReassign={setReassigning}
-                busy={busyIds.has(txn.transaction_id)}
-              />
-            </div>
-          ))}
-          {/* Bottom padding so last card isn't flush against safe area */}
+                Pending Approval · {visible.length}
+              </div>
+              {visible.map(txn => (
+                <div key={txn.transaction_id} style={{
+                  transition: "opacity 0.3s, transform 0.3s",
+                  opacity: doneIds.has(txn.transaction_id) ? 0 : 1,
+                  transform: doneIds.has(txn.transaction_id) ? "translateX(60px)" : "none",
+                }}>
+                  <TxnCard
+                    txn={txn}
+                    mode="pending"
+                    onApprove={approve}
+                    onReassign={txn => setReassigning({ txn, mode: "pending" })}
+                    busy={busyIds.has(txn.transaction_id)}
+                  />
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* ── Section 2: New — Unassigned this month ── */}
+          {visibleNew.length > 0 && (
+            <>
+              <div style={{
+                padding: "10px 16px 8px",
+                fontSize: 11, fontWeight: 700, color: "var(--text2, #8b90a7)",
+                textTransform: "uppercase", letterSpacing: "0.8px",
+                background: "var(--bg3, #1e2336)",
+                borderBottom: "1px solid var(--border, #2a2f45)",
+                borderTop: visible.length > 0 ? "3px solid var(--border, #2a2f45)" : undefined,
+              }}>
+                New — Unassigned · {visibleNew.length}
+              </div>
+              {visibleNew.map(txn => (
+                <div key={txn.transaction_id} style={{
+                  transition: "opacity 0.3s, transform 0.3s",
+                  opacity: newDoneIds.has(txn.transaction_id) ? 0 : 1,
+                  transform: newDoneIds.has(txn.transaction_id) ? "translateX(60px)" : "none",
+                }}>
+                  <TxnCard
+                    txn={txn}
+                    mode="new"
+                    onApprove={assign}
+                    onReassign={txn => setReassigning({ txn, mode: "new" })}
+                    busy={busyIds.has(txn.transaction_id)}
+                  />
+                </div>
+              ))}
+            </>
+          )}
+
           <div style={{ height: 32 }} />
         </div>
       )}
