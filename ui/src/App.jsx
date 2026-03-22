@@ -1,5 +1,20 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Component } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
+
+class ReviewErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(err) { return { error: err }; }
+  render() {
+    if (this.state.error) {
+      const e = this.state.error;
+      return <div style={{ position:"fixed", inset:0, background:"#0f1117", color:"#e8eaf0", padding:20, fontSize:13, overflow:"auto", zIndex:99 }}>
+        <div style={{ color:"#f87171", fontWeight:700, marginBottom:8, fontSize:16 }}>Review Error</div>
+        <pre style={{ whiteSpace:"pre-wrap", wordBreak:"break-all" }}>{e.stack || String(e)}</pre>
+      </div>;
+    }
+    return this.props.children;
+  }
+}
 import { isAuthed, logout } from "./api.js";
 import Review from "./pages/Review.jsx";
 import Login from "./pages/Login.jsx";
@@ -87,7 +102,7 @@ export default function App() {
   // Render the Review page completely outside the auth shell so push notification
   // taps always land on a working page — it handles its own auth via device token.
   if (location.pathname === "/review") {
-    return <Review />;
+    return <ReviewErrorBoundary><Review /></ReviewErrorBoundary>;
   }
 
   if (!authed) {
