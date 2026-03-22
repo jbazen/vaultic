@@ -87,7 +87,21 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
             Loading…
           </div>
         ) : (
-          groups.map(g => (
+          groups
+            // Only show groups/items that are part of the current active budget.
+            // "Active" = has a planned amount OR already has spending this month.
+            // This filters out the hundreds of historical items created by the CSV
+            // import that are technically not deleted but aren't in the current budget.
+            // The suggested item is always included even if it has no activity yet so
+            // the user can always re-approve the original suggestion.
+            .map(g => ({
+              ...g,
+              items: g.items.filter(item =>
+                item.planned > 0 || item.spent > 0 || item.id === currentItemId
+              ),
+            }))
+            .filter(g => g.items.length > 0)
+            .map(g => (
             <div key={g.id}>
               {/* Group header */}
               <div style={{
