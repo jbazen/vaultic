@@ -978,12 +978,14 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                     <div style={{ width: 22, flexShrink: 0 }} />
                   )}
 
-                  {/* Budget item dropdown — allGroups already has only active (non-deleted) items */}
+                  {/* Budget item dropdown — allGroups already has only active (non-deleted) items.
+                      minWidth:0 lets the select compress on narrow mobile screens so the
+                      amount input to its right doesn't get clipped. */}
                   <select
                     value={split.item_id ?? ""}
                     onChange={e => updateSplit(idx, "item_id", e.target.value ? parseInt(e.target.value) : null)}
                     style={{
-                      flex: 1, background: "var(--bg3)",
+                      flex: 1, minWidth: 0, background: "var(--bg3)",
                       border: `1px solid ${split.item_id ? "var(--border)" : "var(--accent)"}`,
                       borderRadius: 6, color: "var(--text)", fontSize: 13, padding: "7px 8px",
                     }}
@@ -1167,6 +1169,7 @@ function ItemDetailModal({ itemId, itemName, month, allGroups, onClose, onUpdate
     setLoading(true);
     getItemDetail(itemId, month)
       .then(setDetail)
+      .catch(() => {})   // detail stays null → shows "Failed to load" rather than crashing
       .finally(() => setLoading(false));
   }, [itemId, month]);
 
