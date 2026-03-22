@@ -20,12 +20,6 @@ import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmt(v) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(Math.abs(v ?? 0));
-}
 
 function fmtDate(s) {
   if (!s) return "";
@@ -33,17 +27,27 @@ function fmtDate(s) {
     .toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-/** Map 0–100 confidence to a percentage label and color.
- *  null  = Sage didn't auto-assign → red (needs manual assignment)
- *  <70   = Low confidence           → orange
- *  70–89 = Good confidence          → yellow
- *  ≥90   = High confidence          → green
+/** Map 0–100 Sage confidence score to a percentage label and color.
+ *  Only used for pending_review items — unassigned items have no score.
+ *  ≥90  = High  → green
+ *  70–89 = Good  → yellow
+ *  <70  = Low   → orange
  */
 function confidenceInfo(conf) {
-  if (conf == null) return { label: "—",        color: "#ef4444" };   // red — no suggestion
-  if (conf >= 90)   return { label: `${conf}%`, color: "#34d399" };   // green — high
-  if (conf >= 70)   return { label: `${conf}%`, color: "#f59e0b" };   // yellow — good
-  return              { label: `${conf}%`, color: "#f97316" };         // orange — low
+  if (conf >= 90) return { label: `${conf}%`, color: "#34d399" };   // green
+  if (conf >= 70) return { label: `${conf}%`, color: "#f59e0b" };   // yellow
+  return            { label: `${conf}%`, color: "#f97316" };         // orange
+}
+
+/** Format amount with sign and color: red "-$x" for debits, green "+$x" for credits.
+ *  Plaid convention: positive = money out (expense), negative = money in (income). */
+function fmtAmount(v) {
+  const abs = new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD",
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(Math.abs(v ?? 0));
+  const isDebit = (v ?? 0) >= 0;
+  return { text: (isDebit ? "-" : "+") + abs, color: isDebit ? "#f87171" : "#34d399" };
 }
 
 
@@ -150,28 +154,33 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
 /**
  * One full-width card for a transaction that needs action.
  *
- * mode="pending"  — Sage already suggested a category; user approves or picks
- *                   a different one.  Shows confidence badge.
- * mode="new"      — Unassigned; no Sage suggestion yet (or one from auto-rules
- *                   without a confidence score).  If a suggestion exists the user
- *                   can one-tap assign it; otherwise they must open the picker.
+ * mode="pending"  — Sage already suggested a category with a confidence score.
+ *                   Shows colored % badge.  Buttons: "✓ Approve" / "Reassign".
+ * mode="new"      — Unassigned this month; no Sage score.
+ *                   If an auto-rule suggestion exists: shows "From history" row
+ *                   with no badge, buttons "✓ Assign" / "Pick other".
+ *                   If no suggestion: no suggestion row, just "Choose Category →".
  */
 function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
-  const conf  = mode === "pending" ? confidenceInfo(txn.confidence) : null;
-  const label = txn.merchant_name || txn.name || "Unknown";
-  const acct  = txn.account_name
+  const label  = txn.merchant_name || txn.name || "Unknown";
+  const acct   = txn.account_name
     ? `${txn.account_name}${txn.account_mask ? ` *${txn.account_mask}` : ""}`
     : null;
+  const amount  = fmtAmount(txn.amount);
   const hasSuggestion = !!txn.suggested_item_id;
+  // Confidence badge only exists for pending_review items (always have a score)
+  const conf = mode === "pending" && txn.confidence != null
+    ? confidenceInfo(txn.confidence)
+    : null;
 
   return (
     <div style={{
       background: "var(--bg2, #171b27)",
-      borderBottom: "3px solid var(--border, #2a2f45)",
-      padding: "18px 16px 14px",
+      marginBottom: 3,                           // gap shows --bg behind, separating cards
+      padding: "18px 16px 16px",
     }}>
-      {/* Row 1: merchant + amount */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
+      {/* Row 1: merchant + colored amount */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 4 }}>
         <span style={{
           flex: 1, fontWeight: 800, fontSize: 20, color: "var(--text, #e8eaf0)",
           lineHeight: 1.2, wordBreak: "break-word",
@@ -179,16 +188,16 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
           {label}
         </span>
         <span style={{
-          fontWeight: 800, fontSize: 22, color: "var(--text, #e8eaf0)",
+          fontWeight: 800, fontSize: 22, color: amount.color,
           flexShrink: 0, paddingTop: 1,
         }}>
-          {fmt(txn.amount)}
+          {amount.text}
         </span>
       </div>
 
       {/* Row 2: date + account */}
       <div style={{
-        fontSize: 13, color: "var(--text2, #8b90a7)", marginBottom: 12,
+        fontSize: 13, color: "var(--text2, #8b90a7)", marginBottom: 14,
         display: "flex", alignItems: "center", gap: 8,
       }}>
         <span>{fmtDate(txn.date)}</span>
@@ -200,26 +209,33 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
         )}
       </div>
 
-      {/* Row 3: suggested category row — shown when there is a suggestion */}
+      {/* Row 3: category suggestion row
+          - pending: "Suggested" label + colored confidence % badge
+          - new with auto-rule: "From history" label, no badge
+          - new with no suggestion: omitted entirely */}
       {hasSuggestion && (
         <div style={{
           display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
-          padding: "8px 12px", background: "var(--bg3, #1e2336)", borderRadius: 8,
+          padding: "10px 12px", background: "var(--bg3, #1e2336)", borderRadius: 8,
         }}>
-          <span style={{ fontSize: 12, color: "var(--text2, #8b90a7)" }}>Suggested</span>
+          <span style={{ fontSize: 12, color: "var(--text2, #8b90a7)", flexShrink: 0 }}>
+            {mode === "pending" ? "Suggested" : "From history"}
+          </span>
           <span style={{
             flex: 1, fontWeight: 700, fontSize: 14, color: "var(--text, #e8eaf0)",
           }}>
             {txn.suggested_group_name} › {txn.suggested_item_name}
           </span>
-          {/* Confidence badge: colored % for pending, grey N/A for unassigned */}
-          <span style={{
-            fontSize: 11, fontWeight: 700,
-            color:      conf ? conf.color : "#6b7280",
-            background: "var(--bg, #0f1117)", borderRadius: 4, padding: "2px 7px",
-          }}>
-            {conf ? conf.label : "N/A"}
-          </span>
+          {/* Confidence badge — only for pending_review items that have a score */}
+          {conf && (
+            <span style={{
+              fontSize: 13, fontWeight: 800, color: conf.color,
+              background: "var(--bg, #0f1117)", borderRadius: 6,
+              padding: "3px 10px", flexShrink: 0,
+            }}>
+              {conf.label}
+            </span>
+          )}
         </div>
       )}
 
@@ -227,24 +243,22 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
       <div style={{ display: "flex", gap: 10 }}>
         {hasSuggestion ? (
           <>
-            {/* Primary: approve/assign the suggestion */}
             <button
               onClick={() => onApprove(txn.transaction_id, txn.suggested_item_id)}
               disabled={busy}
               style={{
-                flex: 2, padding: "13px 0",
-                background: "var(--green, #34d399)", border: "none", borderRadius: 10,
+                flex: 2, padding: "14px 0",
+                background: "#34d399", border: "none", borderRadius: 10,
                 color: "#fff", fontWeight: 800, fontSize: 16,
                 cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
               }}>
               {mode === "pending" ? "✓ Approve" : "✓ Assign"}
             </button>
-            {/* Secondary: open category picker to choose a different item */}
             <button
               onClick={() => onReassign(txn)}
               disabled={busy}
               style={{
-                flex: 1, padding: "13px 0",
+                flex: 1, padding: "14px 0",
                 background: "var(--bg3, #1e2336)", border: "1px solid var(--border, #2a2f45)",
                 borderRadius: 10, color: "var(--text, #e8eaf0)", fontWeight: 700,
                 fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
@@ -253,12 +267,11 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
             </button>
           </>
         ) : (
-          /* No suggestion — only option is to open the picker */
           <button
             onClick={() => onReassign(txn)}
             disabled={busy}
             style={{
-              flex: 1, padding: "13px 0",
+              flex: 1, padding: "14px 0",
               background: "var(--bg3, #1e2336)", border: "1px solid var(--border, #2a2f45)",
               borderRadius: 10, color: "var(--text, #e8eaf0)", fontWeight: 700,
               fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
