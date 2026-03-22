@@ -236,6 +236,13 @@ async def get_all_unassigned(_user: str = Depends(get_current_user)):
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+              -- Exclude transactions that have already been split across categories.
+              -- Split transactions live in transaction_splits, not transaction_assignments,
+              -- so the ta JOIN above sees NULL for them and incorrectly marks them unassigned.
+              AND NOT EXISTS (
+                  SELECT 1 FROM transaction_splits ts
+                  WHERE ts.transaction_id = t.transaction_id
+              )
             ORDER BY t.date DESC
         """, (current_month,)).fetchall()
 
@@ -629,6 +636,13 @@ async def get_unassigned(month: str, _user: str = Depends(get_current_user)):
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+              -- Exclude split transactions — they live in transaction_splits, not
+              -- transaction_assignments, so the ta JOIN above returns NULL for them
+              -- and would incorrectly treat them as unassigned.
+              AND NOT EXISTS (
+                  SELECT 1 FROM transaction_splits ts
+                  WHERE ts.transaction_id = t.transaction_id
+              )
             ORDER BY t.date DESC
         """, (month,)).fetchall()
 
