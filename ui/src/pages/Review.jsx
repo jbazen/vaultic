@@ -241,10 +241,15 @@ export default function Review() {
   const load = useCallback(async () => {
     try {
       const data = await getAllPendingReview();
-      setTxns(data);
-    } catch {
-      // If API returns 401 the apiFetch handler fires auth:logout and throws —
-      // treat as auth failure rather than empty queue
+      // Guard: API should return an array; a non-array response (e.g. a FastAPI
+      // error dict from a 422/500 status that apiFetch didn't throw on) would
+      // crash the render at txns.filter().  Treat non-arrays as an empty queue.
+      setTxns(Array.isArray(data) ? data : []);
+    } catch (err) {
+      // apiFetch throws on 401 (fires auth:logout first) — show lock screen.
+      // Any other network / parse error also ends up here; log it so we can
+      // see what went wrong via the window.onerror overlay in production.
+      console.error("[Review] load failed:", err);
       setAuthFailed(true);
     } finally {
       setLoading(false);
@@ -295,7 +300,7 @@ export default function Review() {
 
   // Bulk-approve all transactions with confidence ≥ 85
   async function approveAllHighConf() {
-    const highConf = txns.filter(t => (t.confidence ?? 0) >= 85);
+    const highConf = (Array.isArray(txns) ? txns : []).filter(t => t != null && (t.confidence ?? 0) >= 85);
     if (!highConf.length) return;
     setBulkBusy(true);
     for (const t of highConf) {
@@ -304,8 +309,12 @@ export default function Review() {
     setBulkBusy(false);
   }
 
-  // Pending (not yet animated away) transactions
-  const visible = txns.filter(t => !doneIds.has(t.transaction_id));
+  // Pending (not yet animated away) transactions.
+  // Defensive guards: ensure txns is an array and each element is non-null,
+  // and that doneIds is a Set before calling .has() — prevents render crashes
+  // if state ever contains an unexpected value (e.g. from a malformed API response).
+  const safeTxns = Array.isArray(txns) ? txns : [];
+  const visible = safeTxns.filter(t => t != null && (doneIds instanceof Set ? !doneIds.has(t.transaction_id) : true));
   const highConfCount = visible.filter(t => (t.confidence ?? 0) >= 85).length;
 
   // ── Reassign picker handler ──────────────────────────────────────────────

@@ -116,6 +116,83 @@ class SplitsBody(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# GET /pending-review — all pending_review transactions across all months
+# Used by the mobile Review Queue screen (/review) so the user sees every
+# transaction that needs action regardless of which month it belongs to.
+#
+# ROUTE ORDER NOTE: This route and /pending-review/{month} MUST be defined
+# BEFORE /{month} below, otherwise FastAPI matches "pending-review" as a
+# month parameter and returns a 422 validation error — the same class of bug
+# that previously broke group drag-and-drop (/groups/reorder vs /{group_id}).
+# ---------------------------------------------------------------------------
+
+@router.get("/pending-review")
+async def get_all_pending_review(_user: str = Depends(get_current_user)):
+    """Return ALL pending_review transactions across every month.
+
+    Powers the mobile Review Queue page where the user approves transactions
+    one by one.  Sorted newest-first so the most recent sync appears at top.
+    """
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
+                   ta.item_id        AS suggested_item_id,
+                   bi.name           AS suggested_item_name,
+                   bg.name           AS suggested_group_name,
+                   ta.confidence     AS confidence,
+                   COALESCE(a.display_name, a.name) AS account_name,
+                   a.mask            AS account_mask
+            FROM transaction_assignments ta
+            JOIN transactions t  ON t.transaction_id = ta.transaction_id
+            JOIN budget_items bi ON bi.id = ta.item_id
+            JOIN budget_groups bg ON bg.id = bi.group_id
+            LEFT JOIN accounts a ON a.id = t.account_id
+            WHERE t.pending = 0
+              AND ta.status = 'pending_review'
+            ORDER BY t.date DESC
+        """).fetchall()
+
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /pending-review/{month} — Sage-suggested assignments awaiting approval
+# ---------------------------------------------------------------------------
+
+@router.get("/pending-review/{month}")
+async def get_pending_review(month: str, _user: str = Depends(get_current_user)):
+    """Return transactions that Sage auto-categorized during sync but that
+    the user has not yet approved or corrected.
+
+    These are stored in transaction_assignments with status='pending_review'.
+    They DO count toward spending totals — the user can always move them.
+    """
+    _validate_month(month)
+
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
+                   ta.item_id        AS suggested_item_id,
+                   bi.name           AS suggested_item_name,
+                   bg.name           AS suggested_group_name,
+                   ta.confidence     AS confidence,
+                   COALESCE(a.display_name, a.name) AS account_name,
+                   a.mask            AS account_mask
+            FROM transaction_assignments ta
+            JOIN transactions t ON t.transaction_id = ta.transaction_id
+            JOIN budget_items bi ON bi.id = ta.item_id
+            JOIN budget_groups bg ON bg.id = bi.group_id
+            LEFT JOIN accounts a ON a.id = t.account_id
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.pending = 0
+              AND ta.status = 'pending_review'
+            ORDER BY t.date DESC
+        """, (month,)).fetchall()
+
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # GET /{month} — full budget for a given month
 # ---------------------------------------------------------------------------
 
@@ -538,80 +615,6 @@ async def get_assigned(month: str, _user: str = Depends(get_current_user)):
               AND t.pending = 0
               AND ta.item_id IS NOT NULL
               AND ta.status != 'pending_review'
-            ORDER BY t.date DESC
-        """, (month,)).fetchall()
-
-    return [dict(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
-# GET /pending-review — all pending_review transactions across all months
-# Used by the mobile Review Queue screen (/review) so the user sees every
-# transaction that needs action regardless of which month it belongs to.
-# IMPORTANT: must be defined BEFORE /pending-review/{month} so the literal
-# path "pending-review" isn't swallowed by the {month} wildcard.
-# ---------------------------------------------------------------------------
-
-@router.get("/pending-review")
-async def get_all_pending_review(_user: str = Depends(get_current_user)):
-    """Return ALL pending_review transactions across every month.
-
-    Powers the mobile Review Queue page where the user approves transactions
-    one by one.  Sorted newest-first so the most recent sync appears at top.
-    """
-    with get_db() as conn:
-        rows = conn.execute("""
-            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
-                   ta.item_id        AS suggested_item_id,
-                   bi.name           AS suggested_item_name,
-                   bg.name           AS suggested_group_name,
-                   ta.confidence     AS confidence,
-                   COALESCE(a.display_name, a.name) AS account_name,
-                   a.mask            AS account_mask
-            FROM transaction_assignments ta
-            JOIN transactions t  ON t.transaction_id = ta.transaction_id
-            JOIN budget_items bi ON bi.id = ta.item_id
-            JOIN budget_groups bg ON bg.id = bi.group_id
-            LEFT JOIN accounts a ON a.id = t.account_id
-            WHERE t.pending = 0
-              AND ta.status = 'pending_review'
-            ORDER BY t.date DESC
-        """).fetchall()
-
-    return [dict(r) for r in rows]
-
-
-# ---------------------------------------------------------------------------
-# GET /pending-review/{month} — Sage-suggested assignments awaiting approval
-# ---------------------------------------------------------------------------
-
-@router.get("/pending-review/{month}")
-async def get_pending_review(month: str, _user: str = Depends(get_current_user)):
-    """Return transactions that Sage auto-categorized during sync but that
-    the user has not yet approved or corrected.
-
-    These are stored in transaction_assignments with status='pending_review'.
-    They DO count toward spending totals — the user can always move them.
-    """
-    _validate_month(month)
-
-    with get_db() as conn:
-        rows = conn.execute("""
-            SELECT t.transaction_id, t.date, t.name, t.merchant_name, t.amount, t.category,
-                   ta.item_id        AS suggested_item_id,
-                   bi.name           AS suggested_item_name,
-                   bg.name           AS suggested_group_name,
-                   ta.confidence     AS confidence,
-                   COALESCE(a.display_name, a.name) AS account_name,
-                   a.mask            AS account_mask
-            FROM transaction_assignments ta
-            JOIN transactions t ON t.transaction_id = ta.transaction_id
-            JOIN budget_items bi ON bi.id = ta.item_id
-            JOIN budget_groups bg ON bg.id = bi.group_id
-            LEFT JOIN accounts a ON a.id = t.account_id
-            WHERE strftime('%Y-%m', t.date) = ?
-              AND t.pending = 0
-              AND ta.status = 'pending_review'
             ORDER BY t.date DESC
         """, (month,)).fetchall()
 
