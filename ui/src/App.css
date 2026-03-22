@@ -377,6 +377,8 @@
     text-decoration: none;
     transition: color 0.15s;
     padding: 8px 4px;
+    touch-action: manipulation;        /* eliminates iOS 300ms tap delay */
+    -webkit-tap-highlight-color: transparent;
   }
 
   .mobile-nav-item.active { color: var(--accent); }

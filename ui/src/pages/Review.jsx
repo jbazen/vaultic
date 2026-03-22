@@ -142,8 +142,8 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
                 const rem = item.remaining ?? 0;
                 const remColor = rem >= 0 ? "#34d399" : "#f87171";
                 const remText  = rem >= 0
-                  ? `$${rem.toFixed(2)} left`
-                  : `-$${Math.abs(rem).toFixed(2)} over`;
+                  ? `$${Number(rem).toFixed(2)}`
+                  : `-$${Math.abs(Number(rem)).toFixed(2)}`;
                 return (
                   <button key={item.id}
                     onClick={() => onSelect(item.id, item.name, g.name)}
@@ -339,10 +339,10 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                     }}>
                     <option value="">— Pick a category —</option>
                     {allItems.map(item => {
-                      const rem = item.remaining;
+                      const rem = item.remaining ?? 0;
                       const remStr = rem >= 0
-                        ? `$${rem.toFixed(2)} left`
-                        : `-$${Math.abs(rem).toFixed(2)} over`;
+                        ? `$${Number(rem).toFixed(2)}`
+                        : `-$${Math.abs(Number(rem)).toFixed(2)}`;
                       return (
                         <option key={item.id} value={item.id}>
                           {item.groupName} › {item.name} ({remStr})
