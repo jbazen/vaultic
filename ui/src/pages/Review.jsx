@@ -278,8 +278,8 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
             disabled={busy}
             style={{
               flex: 1, padding: "14px 0",
-              background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.5)",
-              borderRadius: 10, color: "#818cf8", fontWeight: 700,
+              background: "#4f46e5", border: "none",
+              borderRadius: 10, color: "#fff", fontWeight: 700,
               fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
             }}>
             Choose Category →
@@ -522,11 +522,12 @@ export default function Review() {
           {visible.length > 0 && (
             <>
               <div style={{
-                padding: "10px 16px 8px",
-                fontSize: 11, fontWeight: 700, color: "var(--text2, #8b90a7)",
-                textTransform: "uppercase", letterSpacing: "0.8px",
+                padding: "10px 16px 10px",
+                fontSize: 12, fontWeight: 800, color: "#818cf8",
+                textTransform: "uppercase", letterSpacing: "1px",
                 background: "var(--bg3, #1e2336)",
                 borderBottom: "1px solid var(--border, #2a2f45)",
+                borderLeft: "4px solid #6366f1",
               }}>
                 Pending Approval · {visible.length}
               </div>
@@ -552,12 +553,13 @@ export default function Review() {
           {visibleNew.length > 0 && (
             <>
               <div style={{
-                padding: "10px 16px 8px",
-                fontSize: 11, fontWeight: 700, color: "var(--text2, #8b90a7)",
-                textTransform: "uppercase", letterSpacing: "0.8px",
+                padding: "10px 16px 10px",
+                fontSize: 12, fontWeight: 800, color: "#fbbf24",
+                textTransform: "uppercase", letterSpacing: "1px",
                 background: "var(--bg3, #1e2336)",
                 borderBottom: "1px solid var(--border, #2a2f45)",
-                borderTop: visible.length > 0 ? "3px solid var(--border, #2a2f45)" : undefined,
+                borderLeft: "4px solid #f59e0b",
+                marginTop: visible.length > 0 ? 8 : 0,
               }}>
                 New — Unassigned · {visibleNew.length}
               </div>
