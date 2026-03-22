@@ -525,41 +525,11 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
         </div>
       )}
 
-      {/* Auto-assign + debug buttons — New tab only, when unassigned transactions exist */}
+      {/* Auto-assign + debug buttons hidden for now — useful for prior months
+          but clutters the current-month view. Re-enable if needed for debugging.
       {tab === "new" && unassigned.length > 0 && (
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={handleAutoAssign} disabled={autoAssigning}
-              style={{
-                flex: 1, padding: "6px 0", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)",
-                color: "#3b82f6", cursor: autoAssigning ? "default" : "pointer", opacity: autoAssigning ? 0.6 : 1,
-              }}>
-              {autoAssigning ? "Matching…" : "⚡ Auto-assign from budget history"}
-            </button>
-            {/* 🔍 debug button — logs skip reasons to browser console */}
-            <button
-              onClick={() => autoAssignDebug(month).then(data => {
-                console.table(data);
-                const counts = data.reduce((acc, r) => { acc[r.reason] = (acc[r.reason] || 0) + 1; return acc; }, {});
-                alert(`Skip reasons (see F12 console for detail):\n${Object.entries(counts).map(([k,v]) => `  ${k}: ${v}`).join("\n")}`);
-              })}
-              title="Debug: log skip reasons to console (F12)"
-              style={{
-                padding: "6px 10px", borderRadius: 6, fontSize: 13,
-                background: "var(--bg3)", border: "1px solid var(--border)",
-                color: "var(--text2)", cursor: "pointer", flexShrink: 0,
-              }}>
-              🔍
-            </button>
-          </div>
-          {autoResult && (
-            <div style={{ fontSize: 11, color: "var(--text2)", textAlign: "center", marginTop: 4 }}>
-              {autoResult.assigned} assigned, {autoResult.skipped} skipped
-            </div>
-          )}
-        </div>
-      )}
+        ...
+      )} */}
 
       {loading && (
         <div style={{ color: "var(--text2)", fontSize: 12, textAlign: "center", padding: "16px 0" }}>
