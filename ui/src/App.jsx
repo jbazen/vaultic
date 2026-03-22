@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
 import { isAuthed, logout } from "./api.js";
+import Review from "./pages/Review.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Accounts from "./pages/Accounts.jsx";
@@ -10,7 +11,6 @@ import Budget from "./pages/Budget.jsx";
 import FundFinancials from "./pages/FundFinancials.jsx";
 import Taxes from "./pages/Taxes.jsx";
 import Settings from "./pages/Settings.jsx";
-import Review from "./pages/Review.jsx";
 import SageChat from "./components/SageChat.jsx";
 import "./App.css";
 
@@ -74,7 +74,14 @@ function NavGroup({ item }) {
 
 // ── App shell ─────────────────────────────────────────────────────────────────
 export default function App() {
+  const location = useLocation();
   const [authed, setAuthed] = useState(isAuthed());
+
+  // Render the Review page completely outside the auth shell so push notification
+  // taps always land on a working page — it handles its own auth via device token.
+  if (location.pathname === "/review") {
+    return <Review />;
+  }
 
   useEffect(() => {
     const handler = () => setAuthed(false);
@@ -127,8 +134,6 @@ export default function App() {
           <Route path="/funds"        element={<FundFinancials />} />
           <Route path="/taxes"        element={<Taxes />} />
           <Route path="/settings"     element={<Settings />} />
-          {/* Mobile push notification review queue — opened by tapping a notification */}
-          <Route path="/review"       element={<Review />} />
           {/* Legacy redirects for any bookmarked or linked old routes */}
           <Route path="/manual"       element={<Navigate to="/import" replace />} />
           <Route path="/pdf"          element={<Navigate to="/import" replace />} />
