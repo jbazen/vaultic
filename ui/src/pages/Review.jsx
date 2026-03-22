@@ -33,12 +33,17 @@ function fmtDate(s) {
     .toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-/** Map 0–100 confidence to a label and color. */
+/** Map 0–100 confidence to a percentage label and color.
+ *  null  = Sage didn't auto-assign → red (needs manual assignment)
+ *  <70   = Low confidence           → orange
+ *  70–89 = Good confidence          → yellow
+ *  ≥90   = High confidence          → green
+ */
 function confidenceInfo(conf) {
-  if (conf == null) return { label: "—",    color: "var(--text2, #8b90a7)" };
-  if (conf >= 90)   return { label: "High", color: "var(--green, #34d399)" };
-  if (conf >= 70)   return { label: "Good", color: "#f59e0b" };
-  return              { label: "Low",  color: "var(--red, #f87171)" };
+  if (conf == null) return { label: "—",        color: "#ef4444" };   // red — no suggestion
+  if (conf >= 90)   return { label: `${conf}%`, color: "#34d399" };   // green — high
+  if (conf >= 70)   return { label: `${conf}%`, color: "#f59e0b" };   // yellow — good
+  return              { label: `${conf}%`, color: "#f97316" };         // orange — low
 }
 
 
@@ -419,8 +424,8 @@ export default function Review() {
           </button>
         </div>
 
-        {/* Bulk approve button — only shown when there are high-confidence items */}
-        {highConfCount > 1 && (
+        {/* Bulk approve button — shown whenever there's at least one high-confidence item */}
+        {highConfCount > 0 && (
           <button
             onClick={approveAllHighConf}
             disabled={bulkBusy}
