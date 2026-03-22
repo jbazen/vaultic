@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, getBudget, isAuthed, deviceAuth } from "../api.js";
+import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, saveTransactionSplits, getBudget, isAuthed, deviceAuth } from "../api.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -61,8 +61,9 @@ function fmtAmount(v) {
  * list grouped by category name.
  */
 function CategoryPicker({ currentItemId, onSelect, onCancel }) {
-  const [groups, setGroups] = useState([]);
+  const [groups,  setGroups]  = useState([]);
   const [loading, setLoading] = useState(true);
+  const [search,  setSearch]  = useState("");
 
   useEffect(() => {
     const month = new Date().toISOString().slice(0, 7);
@@ -72,6 +73,8 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
       .finally(() => setLoading(false));
   }, []);
 
+  const q = search.toLowerCase().trim();
+
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 200,
@@ -79,16 +82,30 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
     }}>
       {/* Header */}
       <div style={{
-        display: "flex", alignItems: "center", gap: 12,
-        padding: "16px 16px 12px", borderBottom: "1px solid var(--border, #2a2f45)",
+        padding: "16px 16px 10px", borderBottom: "1px solid var(--border, #2a2f45)",
         background: "var(--bg2, #171b27)",
       }}>
-        <button onClick={onCancel}
-          style={{ background: "none", border: "none", color: "var(--accent, #4f8ef7)",
-            fontSize: 16, cursor: "pointer", padding: 0 }}>
-          ← Back
-        </button>
-        <span style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>Reassign to…</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+          <button onClick={onCancel}
+            style={{ background: "none", border: "none", color: "var(--accent, #4f8ef7)",
+              fontSize: 16, cursor: "pointer", padding: 0 }}>
+            ← Back
+          </button>
+          <span style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>Reassign to…</span>
+        </div>
+        {/* Search box — triggers keyboard on mobile */}
+        <input
+          type="search"
+          placeholder="Search categories…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{
+            width: "100%", boxSizing: "border-box",
+            padding: "10px 12px", borderRadius: 8,
+            background: "var(--bg3, #1e2336)", border: "1px solid var(--border, #2a2f45)",
+            color: "var(--text, #e8eaf0)", fontSize: 15, outline: "none",
+          }}
+        />
       </div>
 
       {/* Items list */}
@@ -99,17 +116,13 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
           </div>
         ) : (
           groups
-            // Only show groups/items that are part of the current active budget.
-            // "Active" = has a planned amount OR already has spending this month.
-            // This filters out the hundreds of historical items created by the CSV
-            // import that are technically not deleted but aren't in the current budget.
-            // The suggested item is always included even if it has no activity yet so
-            // the user can always re-approve the original suggestion.
             .map(g => ({
               ...g,
-              items: g.items.filter(item =>
-                item.planned > 0 || item.spent > 0 || item.id === currentItemId
-              ),
+              items: g.items
+                // Active budget items only (+ always include current suggestion)
+                .filter(item => item.planned > 0 || item.spent > 0 || item.id === currentItemId)
+                // Fuzzy search: match item name or group name
+                .filter(item => !q || item.name.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)),
             }))
             .filter(g => g.items.length > 0)
             .map(g => (
@@ -124,26 +137,286 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
               }}>
                 {g.name}
               </div>
-              {/* Items */}
-              {g.items.map(item => (
-                <button key={item.id}
-                  onClick={() => onSelect(item.id, item.name, g.name)}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between",
-                    width: "100%", padding: "14px 16px",
-                    background: item.id === currentItemId ? "var(--bg3, #1e2336)" : "transparent",
-                    border: "none", borderBottom: "1px solid var(--border, #2a2f45)",
-                    color: "var(--text, #e8eaf0)", fontSize: 15, cursor: "pointer",
-                    textAlign: "left",
-                  }}>
-                  <span>{item.name}</span>
-                  {item.id === currentItemId && (
-                    <span style={{ color: "var(--accent, #4f8ef7)", fontSize: 13 }}>✓ current</span>
-                  )}
-                </button>
-              ))}
+              {/* Items — show name on left, remaining balance on right */}
+              {g.items.map(item => {
+                const rem = item.remaining ?? 0;
+                const remColor = rem >= 0 ? "#34d399" : "#f87171";
+                const remText  = rem >= 0
+                  ? `$${rem.toFixed(2)} left`
+                  : `-$${Math.abs(rem).toFixed(2)} over`;
+                return (
+                  <button key={item.id}
+                    onClick={() => onSelect(item.id, item.name, g.name)}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      width: "100%", padding: "14px 16px",
+                      background: item.id === currentItemId ? "var(--bg3, #1e2336)" : "transparent",
+                      border: "none", borderBottom: "1px solid var(--border, #2a2f45)",
+                      color: "var(--text, #e8eaf0)", fontSize: 15, cursor: "pointer",
+                      textAlign: "left", gap: 8,
+                    }}>
+                    <span style={{ flex: 1 }}>{item.name}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: remColor, flexShrink: 0 }}>
+                      {remText}
+                    </span>
+                    {item.id === currentItemId && (
+                      <span style={{ color: "var(--accent, #4f8ef7)", fontSize: 13, flexShrink: 0 }}>✓</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Split modal ───────────────────────────────────────────────────────────────
+
+/**
+ * Full-screen split modal for the Review Queue.
+ * Lets the user divide a single transaction across multiple budget items.
+ * Mirrors the split UX from EditExpenseModal but designed for the mobile-first
+ * Review page layout.
+ *
+ * Props:
+ *   txn       — transaction object (needs transaction_id, amount, merchant_name)
+ *   onSave    — called with no args after a successful save; parent removes txn from list
+ *   onCancel  — called to dismiss without saving
+ */
+function ReviewSplitModal({ txn, onSave, onCancel }) {
+  const totalAbs = Math.abs(txn.amount ?? 0);           // absolute value — positive = expense
+  const [splits,  setSplits]  = useState([              // start with two empty rows
+    { item_id: "", amount: "" },
+    { item_id: "", amount: "" },
+  ]);
+  const [saving,  setSaving]  = useState(false);
+  const [error,   setError]   = useState(null);
+  const [loadingBudget, setLoadingBudget] = useState(true);
+
+  // Flat list of active items across all groups for the <select> options
+  const [allItems, setAllItems] = useState([]);
+
+  useEffect(() => {
+    const month = new Date().toISOString().slice(0, 7);
+    getBudget(month)
+      .then(data => {
+        const g = data.groups ?? [];
+        // Flatten to { id, name, groupName, remaining } — active items only
+        const flat = [];
+        for (const grp of g) {
+          for (const item of grp.items) {
+            if (item.planned > 0 || item.spent > 0) {
+              flat.push({
+                id: item.id,
+                name: item.name,
+                groupName: grp.name,
+                remaining: item.remaining ?? 0,
+              });
+            }
+          }
+        }
+        setAllItems(flat);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingBudget(false));
+  }, []);
+
+  // Sum of amounts entered so far
+  const allocatedSum = splits.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const remaining    = totalAbs - allocatedSum;
+
+  function setRow(idx, field, value) {
+    setSplits(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
+  }
+
+  function addRow() {
+    setSplits(prev => [...prev, { item_id: "", amount: "" }]);
+  }
+
+  function removeRow(idx) {
+    setSplits(prev => prev.filter((_, i) => i !== idx));
+  }
+
+  async function handleSave() {
+    setError(null);
+    const valid = splits.filter(r => r.item_id && parseFloat(r.amount) > 0);
+    if (valid.length < 2) { setError("Add at least two split rows."); return; }
+    const total = valid.reduce((s, r) => s + parseFloat(r.amount), 0);
+    if (Math.abs(total - totalAbs) > 0.015) {
+      setError(`Split total $${total.toFixed(2)} must equal transaction $${totalAbs.toFixed(2)}.`);
+      return;
+    }
+    setSaving(true);
+    try {
+      await saveTransactionSplits(
+        txn.transaction_id,
+        valid.map(r => ({ item_id: parseInt(r.item_id), amount: parseFloat(r.amount) })),
+        {}
+      );
+      onSave();
+    } catch (e) {
+      setError("Save failed. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const label = txn.merchant_name || txn.name || "Transaction";
+  const amt   = fmtAmount(txn.amount);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 300,
+      background: "var(--bg, #0f1117)", display: "flex", flexDirection: "column",
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: "16px 16px 12px", borderBottom: "1px solid var(--border, #2a2f45)",
+        background: "var(--bg2, #171b27)",
+        position: "sticky", top: 0, zIndex: 10,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
+          <button onClick={onCancel}
+            style={{ background: "none", border: "none", color: "var(--accent, #4f8ef7)",
+              fontSize: 16, cursor: "pointer", padding: 0 }}>
+            ← Cancel
+          </button>
+          <span style={{ fontWeight: 700, fontSize: 16, flex: 1 }}>Split Transaction</span>
+        </div>
+        {/* Merchant + amount summary */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 6 }}>
+          <span style={{ fontWeight: 700, fontSize: 17, color: "var(--text, #e8eaf0)" }}>{label}</span>
+          <span style={{ fontWeight: 800, fontSize: 19, color: amt.color }}>{amt.text}</span>
+        </div>
+        {/* Remaining to allocate */}
+        <div style={{
+          marginTop: 6, fontSize: 13,
+          color: Math.abs(remaining) < 0.01 ? "#34d399"
+               : remaining < 0             ? "#f87171"
+               : "#f59e0b",
+          fontWeight: 700,
+        }}>
+          {Math.abs(remaining) < 0.01
+            ? "✓ Fully allocated"
+            : remaining > 0
+              ? `$${remaining.toFixed(2)} left to allocate`
+              : `-$${Math.abs(remaining).toFixed(2)} over-allocated`}
+        </div>
+      </div>
+
+      {/* Split rows */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+        {loadingBudget ? (
+          <div style={{ padding: 32, textAlign: "center", color: "var(--text2, #8b90a7)" }}>Loading…</div>
+        ) : (
+          <>
+            {splits.map((row, idx) => {
+              const selItem = allItems.find(it => it.id === parseInt(row.item_id));
+              return (
+                <div key={idx} style={{
+                  background: "var(--bg2, #171b27)",
+                  borderRadius: 10, padding: "14px 14px 12px",
+                  marginBottom: 10,
+                  border: "1px solid var(--border, #2a2f45)",
+                }}>
+                  {/* Category select */}
+                  <div style={{ marginBottom: 8, fontSize: 12, color: "var(--text2, #8b90a7)", fontWeight: 700 }}>
+                    CATEGORY
+                  </div>
+                  <select
+                    value={row.item_id}
+                    onChange={e => setRow(idx, "item_id", e.target.value)}
+                    style={{
+                      width: "100%", padding: "11px 10px",
+                      background: "var(--bg3, #1e2336)",
+                      border: "1px solid var(--border, #2a2f45)",
+                      borderRadius: 8, color: "var(--text, #e8eaf0)",
+                      fontSize: 15, marginBottom: 10,
+                    }}>
+                    <option value="">— Pick a category —</option>
+                    {allItems.map(item => {
+                      const rem = item.remaining;
+                      const remStr = rem >= 0
+                        ? `$${rem.toFixed(2)} left`
+                        : `-$${Math.abs(rem).toFixed(2)} over`;
+                      return (
+                        <option key={item.id} value={item.id}>
+                          {item.groupName} › {item.name} ({remStr})
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {/* Amount input + remove button */}
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ fontSize: 12, color: "var(--text2, #8b90a7)", fontWeight: 700, marginBottom: 0, flexShrink: 0 }}>
+                      $
+                    </div>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={row.amount}
+                      onChange={e => setRow(idx, "amount", e.target.value)}
+                      style={{
+                        flex: 1, padding: "11px 10px",
+                        background: "var(--bg3, #1e2336)",
+                        border: "1px solid var(--border, #2a2f45)",
+                        borderRadius: 8, color: "var(--text, #e8eaf0)",
+                        fontSize: 16,
+                      }}
+                    />
+                    {splits.length > 2 && (
+                      <button
+                        onClick={() => removeRow(idx)}
+                        style={{
+                          background: "none", border: "none",
+                          color: "#f87171", fontSize: 20, cursor: "pointer",
+                          padding: "0 4px", flexShrink: 0,
+                        }}>
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Add another split */}
+            <button
+              onClick={addRow}
+              style={{
+                width: "100%", padding: "12px 0",
+                background: "none", border: "1px dashed var(--border, #2a2f45)",
+                borderRadius: 10, color: "var(--text2, #8b90a7)",
+                fontSize: 14, cursor: "pointer", marginBottom: 16,
+              }}>
+              + Add another split
+            </button>
+
+            {error && (
+              <div style={{ color: "#f87171", fontSize: 13, marginBottom: 12 }}>{error}</div>
+            )}
+
+            {/* Save button */}
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              style={{
+                width: "100%", padding: "15px 0",
+                background: "#34d399", border: "none", borderRadius: 10,
+                color: "#fff", fontWeight: 800, fontSize: 16,
+                cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1,
+              }}>
+              {saving ? "Saving…" : "Save Split"}
+            </button>
+          </>
         )}
       </div>
     </div>
@@ -163,7 +436,7 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
  *                   with no badge, buttons "✓ Assign" / "Pick other".
  *                   If no suggestion: no suggestion row, just "Choose Category →".
  */
-function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
+function TxnCard({ txn, onApprove, onReassign, onSplit, busy, mode = "pending" }) {
   const label  = txn.merchant_name || txn.name || "Unknown";
   const acct   = txn.account_name
     ? `${txn.account_name}${txn.account_mask ? ` *${txn.account_mask}` : ""}`
@@ -244,8 +517,9 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
 
       {/* Row 4: action buttons
           Primary (green) = approve/assign the suggestion
-          Secondary (blue) = open picker to choose a different category */}
-      <div style={{ display: "flex", gap: 10 }}>
+          Secondary (indigo) = open picker to choose a different category
+          Teal = open split modal to divide across multiple categories */}
+      <div style={{ display: "flex", gap: 8 }}>
         {hasSuggestion ? (
           <>
             <button
@@ -266,7 +540,7 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
                 flex: 1, padding: "14px 0",
                 background: "#4f46e5", border: "none",
                 borderRadius: 10, color: "#fff", fontWeight: 700,
-                fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+                fontSize: 14, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
               }}>
               {mode === "pending" ? "Reassign" : "Pick other"}
             </button>
@@ -285,6 +559,20 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
             Choose Category →
           </button>
         )}
+        {/* Split button — teal, always visible */}
+        <button
+          onClick={() => onSplit(txn)}
+          disabled={busy}
+          style={{
+            padding: "14px 14px",
+            background: "#0d9488", border: "none",
+            borderRadius: 10, color: "#fff", fontWeight: 700,
+            fontSize: 14, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+            flexShrink: 0,
+          }}
+          title="Split this transaction across multiple categories">
+          Split
+        </button>
       </div>
     </div>
   );
@@ -305,8 +593,10 @@ export default function Review() {
   const [doneIds,     setDoneIds]     = useState(new Set());     // pending: fading out
   const [newDoneIds,  setNewDoneIds]  = useState(new Set());     // new: fading out
   // reassigning carries the txn + which list it came from so the right API is called
-  const [reassigning, setReassigning] = useState(null);          // { txn, mode: "pending"|"new" }
-  const [bulkBusy,    setBulkBusy]    = useState(false);
+  const [reassigning,  setReassigning]  = useState(null);        // { txn, mode: "pending"|"new" }
+  // splittingTxn carries the txn + which list it came from for the split modal
+  const [splittingTxn, setSplittingTxn] = useState(null);        // { txn, mode: "pending"|"new" }
+  const [bulkBusy,     setBulkBusy]     = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -394,6 +684,28 @@ export default function Review() {
     else                approve(txn.transaction_id, itemId);
   }
 
+  // ── Split save handler ────────────────────────────────────────────────────
+  // After saving splits, remove the transaction from whichever list it was in.
+  function handleSplitSave() {
+    if (!splittingTxn) return;
+    const { txn, mode } = splittingTxn;
+    setSplittingTxn(null);
+    // Animate out then remove from the correct list
+    if (mode === "new") {
+      setNewDoneIds(prev => new Set([...prev, txn.transaction_id]));
+      setTimeout(() => {
+        setNewTxns(prev => prev.filter(t => t.transaction_id !== txn.transaction_id));
+        setNewDoneIds(prev => { const s = new Set(prev); s.delete(txn.transaction_id); return s; });
+      }, 400);
+    } else {
+      setDoneIds(prev => new Set([...prev, txn.transaction_id]));
+      setTimeout(() => {
+        setTxns(prev => prev.filter(t => t.transaction_id !== txn.transaction_id));
+        setDoneIds(prev => { const s = new Set(prev); s.delete(txn.transaction_id); return s; });
+      }, 400);
+    }
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────
 
   // Device token missing or rejected — user needs to log in once from the full app
@@ -423,6 +735,16 @@ export default function Review() {
         currentItemId={reassigning.txn.suggested_item_id}
         onSelect={handleReassignSelect}
         onCancel={() => setReassigning(null)}
+      />
+    );
+  }
+
+  if (splittingTxn) {
+    return (
+      <ReviewSplitModal
+        txn={splittingTxn.txn}
+        onSave={handleSplitSave}
+        onCancel={() => setSplittingTxn(null)}
       />
     );
   }
@@ -542,6 +864,7 @@ export default function Review() {
                     mode="pending"
                     onApprove={approve}
                     onReassign={txn => setReassigning({ txn, mode: "pending" })}
+                    onSplit={txn => setSplittingTxn({ txn, mode: "pending" })}
                     busy={busyIds.has(txn.transaction_id)}
                   />
                 </div>
@@ -574,6 +897,7 @@ export default function Review() {
                     mode="new"
                     onApprove={assign}
                     onReassign={txn => setReassigning({ txn, mode: "new" })}
+                    onSplit={txn => setSplittingTxn({ txn, mode: "new" })}
                     busy={busyIds.has(txn.transaction_id)}
                   />
                 </div>

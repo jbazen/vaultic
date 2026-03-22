@@ -821,7 +821,8 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
           background: "var(--bg2)", borderRadius: 12,
           border: "1px solid var(--border)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
-          padding: "20px 48px 24px 36px",
+          // Reduce horizontal padding on narrow screens so content isn't cut off
+          padding: window.innerWidth <= 480 ? "16px 16px 20px" : "20px 48px 24px 36px",
           boxSizing: "border-box",
         }}
       >
