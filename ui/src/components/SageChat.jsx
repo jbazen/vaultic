@@ -115,9 +115,9 @@ export default function SageChat() {
   const [unread, setUnread] = useState(0);
   const [speaking, setSpeaking] = useState(false);
 
-  // Voice modes
-  const [voiceMode, setVoiceMode] = useState("off"); // off | browser | openai
-  const voiceModeRef = useRef("off"); // ref avoids stale closure in speak()
+  // Voice modes — default to OpenAI (best quality, works on mobile and desktop)
+  const [voiceMode, setVoiceMode] = useState("openai"); // off | browser | openai
+  const voiceModeRef = useRef("openai"); // ref avoids stale closure in speak()
   const [listening, setListening] = useState(false);  // manual mic active
 
   // Always-on / Hey Sage
@@ -176,7 +176,6 @@ export default function SageChat() {
   useEffect(() => {
     if (open) {
       setUnread(0);
-      setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
 
@@ -610,6 +609,8 @@ export default function SageChat() {
 
   // ── Render ───────────────────────────────────────────────────────────────
 
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+
   return (
     <>
       <style>{`
@@ -633,8 +634,11 @@ export default function SageChat() {
           onClick={() => awake ? null : setOpen(true)}
           className="sage-float-btn"
           style={{
-            position: "fixed", bottom: 24, right: 24,
+            position: "fixed",
+            bottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 80px)" : 24,
+            right: isMobile ? 16 : 24,
             width: 56, height: 56, borderRadius: "50%",
+            touchAction: "manipulation",
             background: awake
               ? "linear-gradient(135deg, #34d399, #4f8ef7)"
               : "linear-gradient(135deg, #4f8ef7, #a78bfa)",
@@ -679,7 +683,17 @@ export default function SageChat() {
       {open && (
         <div
           onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
-          style={{
+          style={isMobile ? {
+            position: "fixed", inset: 0,
+            width: "100%", height: "100%",
+            bottom: 0, right: 0, borderRadius: 0,
+            background: dragOver ? "var(--bg3)" : "var(--bg2)",
+            border: dragOver ? "2px dashed var(--accent)" : "1px solid var(--border)",
+            display: "flex", flexDirection: "column",
+            boxShadow: "0 8px 40px rgba(0,0,0,0.5)", zIndex: 1000, overflow: "hidden",
+            transition: "border 0.15s, background 0.15s",
+            touchAction: "manipulation",
+          } : {
             position: "fixed", bottom: 24, right: 24,
             width: "min(420px, calc(100vw - 32px))",
             height: "min(580px, calc(100vh - 100px))",
@@ -688,6 +702,7 @@ export default function SageChat() {
             borderRadius: 16, display: "flex", flexDirection: "column",
             boxShadow: "0 8px 40px rgba(0,0,0,0.5)", zIndex: 1000, overflow: "hidden",
             transition: "border 0.15s, background 0.15s",
+            touchAction: "manipulation",
           }}>
 
           {/* Header */}
@@ -717,8 +732,12 @@ export default function SageChat() {
                     background: alwaysOn ? "rgba(52,211,153,0.15)" : "none",
                     border: `1px solid ${alwaysOn ? "#34d399" : "var(--border)"}`,
                     color: alwaysOn ? "#34d399" : "var(--text2)",
-                    borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 12,
+                    borderRadius: 6,
+                    padding: isMobile ? "10px 14px" : "4px 8px",
+                    minHeight: isMobile ? 44 : undefined,
+                    cursor: "pointer", fontSize: 12,
                     fontWeight: alwaysOn ? 600 : 400,
+                    touchAction: "manipulation",
                   }}
                 >
                   {alwaysOn ? "👂 On" : "👂 Off"}
@@ -734,7 +753,11 @@ export default function SageChat() {
                       border: "none",
                       borderRight: idx < VOICE_MODES.length - 1 ? "1px solid var(--border)" : "none",
                       color: voiceMode === m.value ? "var(--accent)" : "var(--text2)",
-                      padding: "4px 8px", cursor: "pointer", fontSize: 14,
+                      padding: isMobile ? "10px 14px" : "4px 8px",
+                      minWidth: isMobile ? 44 : undefined,
+                      minHeight: isMobile ? 44 : undefined,
+                      cursor: "pointer", fontSize: 14,
+                      touchAction: "manipulation",
                     }}
                   >{m.label}</button>
                 ))}
@@ -744,16 +767,33 @@ export default function SageChat() {
                 <button onClick={stopSpeaking} title="Stop speaking"
                   style={{
                     background: "rgba(248,113,113,0.15)", border: "1px solid #f87171",
-                    color: "#f87171", borderRadius: 6, padding: "4px 8px",
+                    color: "#f87171", borderRadius: 6,
+                    padding: isMobile ? "10px 14px" : "4px 8px",
+                    minHeight: isMobile ? 44 : undefined,
                     cursor: "pointer", fontSize: 13, fontWeight: 600,
+                    touchAction: "manipulation",
                   }}>⏹</button>
               )}
               <button onClick={() => { setMessages([]); setHistory([]); sessionStorage.removeItem(SESSION_KEY); }} title="Clear conversation"
                 style={{ background: "none", border: "1px solid var(--border)", color: "var(--text2)",
-                  borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 13 }}>↺</button>
+                  borderRadius: 6,
+                  padding: isMobile ? "10px 14px" : "4px 8px",
+                  minHeight: isMobile ? 44 : undefined,
+                  cursor: "pointer", fontSize: 13,
+                  touchAction: "manipulation",
+                }}>↺</button>
               <button onClick={() => setOpen(false)}
                 style={{ background: "none", border: "1px solid var(--border)", color: "var(--text2)",
-                  borderRadius: 6, padding: "4px 8px", cursor: "pointer", fontSize: 14 }}>✕</button>
+                  borderRadius: 6,
+                  padding: isMobile ? "10px 14px" : "4px 8px",
+                  width: isMobile ? 44 : undefined,
+                  height: isMobile ? 44 : undefined,
+                  fontSize: isMobile ? 20 : 14,
+                  minHeight: isMobile ? 44 : undefined,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: "pointer",
+                  touchAction: "manipulation",
+                }}>✕</button>
             </div>
           </div>
 
@@ -771,8 +811,10 @@ export default function SageChat() {
                   {["What's my net worth?", "How am I spending?", "Am I on track to retire?"].map(q => (
                     <button key={q} onClick={() => send(q)} style={{
                       background: "var(--bg3)", border: "1px solid var(--border)",
-                      color: "var(--text2)", borderRadius: 20, padding: "6px 14px",
-                      cursor: "pointer", fontSize: 12, transition: "all 0.15s",
+                      color: "var(--text2)", borderRadius: 20,
+                      padding: isMobile ? "10px 18px" : "6px 14px",
+                      cursor: "pointer", fontSize: isMobile ? 14 : 12, transition: "all 0.15s",
+                      touchAction: "manipulation",
                     }}
                       onMouseEnter={e => e.target.style.color = "var(--accent)"}
                       onMouseLeave={e => e.target.style.color = "var(--text2)"}
@@ -799,7 +841,11 @@ export default function SageChat() {
           </div>
 
           {/* Input */}
-          <div style={{ padding: "12px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{
+            padding: "12px",
+            paddingBottom: isMobile ? "calc(env(safe-area-inset-bottom, 0px) + 12px)" : "12px",
+            borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8,
+          }}>
 
             {/* Drag-over overlay hint */}
             {dragOver && (
@@ -852,11 +898,13 @@ export default function SageChat() {
                 disabled={processingFile}
                 title="Attach file (PDF, Word, Excel, image, JSON, CSV, …)"
                 style={{
-                  width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                  width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
+                  borderRadius: "50%", flexShrink: 0,
                   background: "var(--bg3)", border: "1px solid var(--border)",
                   color: processingFile ? "var(--accent)" : "var(--text2)",
                   cursor: "pointer", fontSize: 16,
                   display: "flex", alignItems: "center", justifyContent: "center",
+                  touchAction: "manipulation",
                 }}>
                 {processingFile ? "⏳" : "📎"}
               </button>
@@ -889,26 +937,30 @@ export default function SageChat() {
                     onClick={toggleWhisperRecording}
                     title={whisperRecording ? "Click to stop recording" : "Click to record (Whisper AI)"}
                     style={{
-                      width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                      width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
+                      borderRadius: "50%", flexShrink: 0,
                       background: whisperRecording ? "#f87171" : "var(--bg3)",
                       border: `1px solid ${whisperRecording ? "#f87171" : "var(--border)"}`,
                       color: whisperRecording ? "#fff" : "var(--text2)",
                       cursor: "pointer", fontSize: 16,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       animation: whisperRecording ? "sage-awake-pulse 1s ease-in-out infinite" : "none",
+                      touchAction: "manipulation",
                     }}>🎤</button>
                 ) : hasVoice ? (
                   <button
                     onClick={listening ? stopListening : startListening}
                     title={listening ? "Stop" : "Push to talk (browser)"}
                     style={{
-                      width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                      width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
+                      borderRadius: "50%", flexShrink: 0,
                       background: listening ? "#f87171" : "var(--bg3)",
                       border: `1px solid ${listening ? "#f87171" : "var(--border)"}`,
                       color: listening ? "#fff" : "var(--text2)",
                       cursor: "pointer", fontSize: 16,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       animation: listening ? "sage-awake-pulse 1s ease-in-out infinite" : "none",
+                      touchAction: "manipulation",
                     }}>🎤</button>
                 ) : null
               )}
@@ -917,13 +969,15 @@ export default function SageChat() {
                 onClick={() => send()}
                 disabled={(!input.trim() && pendingFiles.length === 0) || loading}
                 style={{
-                  width: 38, height: 38, borderRadius: "50%", flexShrink: 0,
+                  width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
+                  borderRadius: "50%", flexShrink: 0,
                   background: (input.trim() || pendingFiles.length > 0) && !loading ? "var(--accent)" : "var(--bg3)",
                   border: "1px solid var(--border)",
                   color: (input.trim() || pendingFiles.length > 0) && !loading ? "#fff" : "var(--text2)",
                   cursor: (input.trim() || pendingFiles.length > 0) && !loading ? "pointer" : "default",
                   fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 0.15s",
+                  touchAction: "manipulation",
                 }}>➤</button>
             </div>
           </div>

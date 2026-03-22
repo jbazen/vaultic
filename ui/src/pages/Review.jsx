@@ -257,13 +257,19 @@ export default function Review() {
     // This lets the Review page work after a notification tap without the user
     // ever needing to open the full app and log in manually.
     async function init() {
-      if (!isAuthed()) {
+      const hasDeviceToken = !!localStorage.getItem("vaultic_device_token");
+      if (hasDeviceToken) {
+        // Always refresh JWT via device token — ensures it's never expired when load() fires
         const ok = await deviceAuth();
         if (!ok) {
           setAuthFailed(true);
           setLoading(false);
           return;
         }
+      } else if (!isAuthed()) {
+        setAuthFailed(true);
+        setLoading(false);
+        return;
       }
       load();
     }
@@ -317,7 +323,7 @@ export default function Review() {
     return (
       <div style={{
         position: "fixed", inset: 0, zIndex: 50,
-        background: "var(--bg)", display: "flex", flexDirection: "column",
+        background: "var(--bg, #0f1117)", display: "flex", flexDirection: "column",
         alignItems: "center", justifyContent: "center",
         gap: 12, padding: 32, textAlign: "center",
       }}>
@@ -346,7 +352,7 @@ export default function Review() {
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 50,
-      background: "var(--bg)",
+      background: "var(--bg, #0f1117)",
       display: "flex", flexDirection: "column",
       overflowY: "auto",
     }}>
