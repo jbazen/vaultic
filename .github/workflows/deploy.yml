@@ -65,4 +65,8 @@ jobs:
             # Restart API (Litestream wraps uvicorn — both restart together)
             sudo systemctl restart vaultic-api.service
 
+            # Update nginx config and reload (picks up cache-control header changes)
+            sudo cp deploy/vaultic-nginx.conf /etc/nginx/sites-available/vaultic
+            sudo nginx -t && sudo systemctl reload nginx
+
             echo "Deploy complete"
