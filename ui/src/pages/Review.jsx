@@ -35,10 +35,10 @@ function fmtDate(s) {
 
 /** Map 0–100 confidence to a label and color. */
 function confidenceInfo(conf) {
-  if (conf == null) return { label: "—",    color: "var(--text2)" };
-  if (conf >= 90)   return { label: "High", color: "var(--green)" };
+  if (conf == null) return { label: "—",    color: "var(--text2, #8b90a7)" };
+  if (conf >= 90)   return { label: "High", color: "var(--green, #34d399)" };
   if (conf >= 70)   return { label: "Good", color: "#f59e0b" };
-  return              { label: "Low",  color: "var(--red)" };
+  return              { label: "Low",  color: "var(--red, #f87171)" };
 }
 
 
@@ -64,16 +64,16 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 200,
-      background: "var(--bg)", display: "flex", flexDirection: "column",
+      background: "var(--bg, #0f1117)", display: "flex", flexDirection: "column",
     }}>
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "center", gap: 12,
-        padding: "16px 16px 12px", borderBottom: "1px solid var(--border)",
-        background: "var(--bg2)",
+        padding: "16px 16px 12px", borderBottom: "1px solid var(--border, #2a2f45)",
+        background: "var(--bg2, #171b27)",
       }}>
         <button onClick={onCancel}
-          style={{ background: "none", border: "none", color: "var(--accent)",
+          style={{ background: "none", border: "none", color: "var(--accent, #4f8ef7)",
             fontSize: 16, cursor: "pointer", padding: 0 }}>
           ← Back
         </button>
@@ -83,7 +83,7 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
       {/* Items list */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {loading ? (
-          <div style={{ padding: 32, textAlign: "center", color: "var(--text2)" }}>
+          <div style={{ padding: 32, textAlign: "center", color: "var(--text2, #8b90a7)" }}>
             Loading…
           </div>
         ) : (
@@ -92,10 +92,10 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
               {/* Group header */}
               <div style={{
                 padding: "10px 16px 6px",
-                fontSize: 11, fontWeight: 700, color: "var(--text2)",
+                fontSize: 11, fontWeight: 700, color: "var(--text2, #8b90a7)",
                 textTransform: "uppercase", letterSpacing: "0.8px",
-                background: "var(--bg3)",
-                borderBottom: "1px solid var(--border)",
+                background: "var(--bg3, #1e2336)",
+                borderBottom: "1px solid var(--border, #2a2f45)",
               }}>
                 {g.name}
               </div>
@@ -106,14 +106,14 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     width: "100%", padding: "14px 16px",
-                    background: item.id === currentItemId ? "var(--bg3)" : "transparent",
-                    border: "none", borderBottom: "1px solid var(--border)",
-                    color: "var(--text)", fontSize: 15, cursor: "pointer",
+                    background: item.id === currentItemId ? "var(--bg3, #1e2336)" : "transparent",
+                    border: "none", borderBottom: "1px solid var(--border, #2a2f45)",
+                    color: "var(--text, #e8eaf0)", fontSize: 15, cursor: "pointer",
                     textAlign: "left",
                   }}>
                   <span>{item.name}</span>
                   {item.id === currentItemId && (
-                    <span style={{ color: "var(--accent)", fontSize: 13 }}>✓ current</span>
+                    <span style={{ color: "var(--accent, #4f8ef7)", fontSize: 13 }}>✓ current</span>
                   )}
                 </button>
               ))}
@@ -142,20 +142,20 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
 
   return (
     <div style={{
-      background: "var(--bg2)",
-      borderBottom: "3px solid var(--border)",
+      background: "var(--bg2, #171b27)",
+      borderBottom: "3px solid var(--border, #2a2f45)",
       padding: "18px 16px 14px",
     }}>
       {/* Row 1: merchant + amount */}
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
         <span style={{
-          flex: 1, fontWeight: 800, fontSize: 20, color: "var(--text)",
+          flex: 1, fontWeight: 800, fontSize: 20, color: "var(--text, #e8eaf0)",
           lineHeight: 1.2, wordBreak: "break-word",
         }}>
           {label}
         </span>
         <span style={{
-          fontWeight: 800, fontSize: 22, color: "var(--text)",
+          fontWeight: 800, fontSize: 22, color: "var(--text, #e8eaf0)",
           flexShrink: 0, paddingTop: 1,
         }}>
           {fmt(txn.amount)}
@@ -164,7 +164,7 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
 
       {/* Row 2: date + account */}
       <div style={{
-        fontSize: 13, color: "var(--text2)", marginBottom: 12,
+        fontSize: 13, color: "var(--text2, #8b90a7)", marginBottom: 12,
         display: "flex", alignItems: "center", gap: 8,
       }}>
         <span>{fmtDate(txn.date)}</span>
@@ -179,17 +179,17 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
       {/* Row 3: suggested category + confidence */}
       <div style={{
         display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
-        padding: "8px 12px", background: "var(--bg3)", borderRadius: 8,
+        padding: "8px 12px", background: "var(--bg3, #1e2336)", borderRadius: 8,
       }}>
-        <span style={{ fontSize: 12, color: "var(--text2)" }}>Suggested</span>
+        <span style={{ fontSize: 12, color: "var(--text2, #8b90a7)" }}>Suggested</span>
         <span style={{
-          flex: 1, fontWeight: 700, fontSize: 14, color: "var(--text)",
+          flex: 1, fontWeight: 700, fontSize: 14, color: "var(--text, #e8eaf0)",
         }}>
           {txn.suggested_group_name} › {txn.suggested_item_name}
         </span>
         <span style={{
           fontSize: 11, fontWeight: 700, color: conf.color,
-          background: "var(--bg)", borderRadius: 4, padding: "2px 7px",
+          background: "var(--bg, #0f1117)", borderRadius: 4, padding: "2px 7px",
         }}>
           {conf.label}
         </span>
@@ -202,7 +202,7 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
           disabled={busy}
           style={{
             flex: 2, padding: "13px 0",
-            background: "var(--green)", border: "none", borderRadius: 10,
+            background: "var(--green, #34d399)", border: "none", borderRadius: 10,
             color: "#fff", fontWeight: 800, fontSize: 16, cursor: busy ? "default" : "pointer",
             opacity: busy ? 0.6 : 1,
           }}>
@@ -213,8 +213,8 @@ function TxnCard({ txn, onApprove, onReassign, busy }) {
           disabled={busy}
           style={{
             flex: 1, padding: "13px 0",
-            background: "var(--bg3)", border: "1px solid var(--border)",
-            borderRadius: 10, color: "var(--text)", fontWeight: 700,
+            background: "var(--bg3, #1e2336)", border: "1px solid var(--border, #2a2f45)",
+            borderRadius: 10, color: "var(--text, #e8eaf0)", fontWeight: 700,
             fontSize: 15, cursor: busy ? "default" : "pointer",
             opacity: busy ? 0.6 : 1,
           }}>
@@ -328,10 +328,10 @@ export default function Review() {
         gap: 12, padding: 32, textAlign: "center",
       }}>
         <div style={{ fontSize: 48 }}>🔒</div>
-        <div style={{ fontWeight: 800, fontSize: 20, color: "var(--text)" }}>
+        <div style={{ fontWeight: 800, fontSize: 20, color: "var(--text, #e8eaf0)" }}>
           Sign in required
         </div>
-        <div style={{ fontSize: 14, color: "var(--text2)", maxWidth: 280 }}>
+        <div style={{ fontSize: 14, color: "var(--text2, #8b90a7)", maxWidth: 280 }}>
           Open Vaultic, sign in, then go to Settings → Push Notifications
           and tap <strong>Disable</strong> then <strong>Enable</strong> to link this device.
         </div>
@@ -359,14 +359,14 @@ export default function Review() {
       {/* ── Header ── */}
       <div style={{
         position: "sticky", top: 0, zIndex: 10,
-        background: "var(--bg2)", borderBottom: "1px solid var(--border)",
+        background: "var(--bg2, #171b27)", borderBottom: "1px solid var(--border, #2a2f45)",
         padding: "14px 16px 12px",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
             onClick={() => navigate("/")}
             style={{
-              background: "none", border: "none", color: "var(--accent)",
+              background: "none", border: "none", color: "var(--accent, #4f8ef7)",
               fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
             }}
             title="Back to Vaultic"
@@ -378,7 +378,7 @@ export default function Review() {
           </span>
           {visible.length > 0 && (
             <span style={{
-              background: "var(--accent)", color: "#fff",
+              background: "var(--accent, #4f8ef7)", color: "#fff",
               borderRadius: 12, padding: "2px 10px",
               fontSize: 13, fontWeight: 700,
             }}>
@@ -388,7 +388,7 @@ export default function Review() {
           <button
             onClick={load}
             style={{
-              background: "none", border: "none", color: "var(--text2)",
+              background: "none", border: "none", color: "var(--text2, #8b90a7)",
               fontSize: 18, cursor: "pointer", padding: "0 4px",
             }}
             title="Refresh">
@@ -403,8 +403,8 @@ export default function Review() {
             disabled={bulkBusy}
             style={{
               marginTop: 10, width: "100%", padding: "11px 0",
-              background: "var(--bg3)", border: "1px solid var(--green)",
-              borderRadius: 8, color: "var(--green)",
+              background: "var(--bg3, #1e2336)", border: "1px solid var(--green, #34d399)",
+              borderRadius: 8, color: "var(--green, #34d399)",
               fontWeight: 700, fontSize: 14, cursor: bulkBusy ? "default" : "pointer",
               opacity: bulkBusy ? 0.6 : 1,
             }}>
@@ -419,7 +419,7 @@ export default function Review() {
       {loading ? (
         <div style={{
           flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-          color: "var(--text2)", fontSize: 15,
+          color: "var(--text2, #8b90a7)", fontSize: 15,
         }}>
           Loading…
         </div>
@@ -431,10 +431,10 @@ export default function Review() {
           gap: 12, padding: 32, textAlign: "center",
         }}>
           <div style={{ fontSize: 56 }}>✓</div>
-          <div style={{ fontWeight: 800, fontSize: 22, color: "var(--text)" }}>
+          <div style={{ fontWeight: 800, fontSize: 22, color: "var(--text, #e8eaf0)" }}>
             All clear!
           </div>
-          <div style={{ fontSize: 14, color: "var(--text2)", maxWidth: 260 }}>
+          <div style={{ fontSize: 14, color: "var(--text2, #8b90a7)", maxWidth: 260 }}>
             No transactions waiting for review. You'll get a notification when
             new ones arrive after the next sync.
           </div>
