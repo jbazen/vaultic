@@ -77,17 +77,18 @@ export default function App() {
   const location = useLocation();
   const [authed, setAuthed] = useState(isAuthed());
 
-  // Render the Review page completely outside the auth shell so push notification
-  // taps always land on a working page — it handles its own auth via device token.
-  if (location.pathname === "/review") {
-    return <Review />;
-  }
-
+  // Hooks must all be called before any conditional return (Rules of Hooks).
   useEffect(() => {
     const handler = () => setAuthed(false);
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
   }, []);
+
+  // Render the Review page completely outside the auth shell so push notification
+  // taps always land on a working page — it handles its own auth via device token.
+  if (location.pathname === "/review") {
+    return <Review />;
+  }
 
   if (!authed) {
     return <Login onLogin={() => setAuthed(true)} />;
