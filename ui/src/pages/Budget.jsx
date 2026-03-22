@@ -1856,6 +1856,10 @@ export default function Budget() {
   const [budget, setBudget] = useState(null);
   const [loading, setLoading] = useState(true);
   const [rightTab, setRightTab] = useState("summary"); // summary | transactions
+  // Mobile: one panel visible at a time. "budget" = left groups panel,
+  // "summary" / "transactions" = right panel tabs.
+  const [mobileTab, setMobileTab] = useState("budget");
+  const isMobile = window.innerWidth <= 768;
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [addingGroup, setAddingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
@@ -2047,12 +2051,41 @@ export default function Budget() {
         </div>
       )}
 
-      {/* ── Main two-column layout ── */}
+      {/* ── Main layout ── */}
       {!loading && hasGroups && (
+        <>
+        {/* Mobile tab bar — switches between the groups panel and the right panel */}
+        {isMobile && (
+          <div style={{
+            display: "flex", marginBottom: 12,
+            background: "var(--bg2)", borderRadius: 8,
+            border: "1px solid var(--border)", overflow: "hidden",
+          }}>
+            {[
+              { key: "budget",       label: "Budget" },
+              { key: "summary",      label: "Summary" },
+              { key: "transactions", label: "Transactions" },
+            ].map(({ key, label }) => (
+              <button key={key}
+                onClick={() => { setMobileTab(key); if (key !== "budget") setRightTab(key); }}
+                style={{
+                  flex: 1, padding: "10px 0", fontSize: 13,
+                  fontWeight: mobileTab === key ? 700 : 400,
+                  background: mobileTab === key ? "var(--accent)" : "none",
+                  border: "none",
+                  color: mobileTab === key ? "#fff" : "var(--text2)",
+                  cursor: "pointer",
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
 
-          {/* LEFT — budget groups list (only groups with activity this month) */}
-          <div style={{ flex: 1, minWidth: 0 }}>
+          {/* LEFT — budget groups list */}
+          <div style={{ flex: 1, minWidth: 0, display: isMobile && mobileTab !== "budget" ? "none" : undefined }}>
             {visibleGroups.map(g => (
               /* GroupSection is draggable. Item rows inside it are also draggable,
                  but their drag handlers return early (without stopPropagation) when
@@ -2112,11 +2145,15 @@ export default function Budget() {
             </div>
           </div>
 
-          {/* RIGHT — Summary / Transactions sticky panel */}
+          {/* RIGHT — Summary / Transactions panel */}
           <div style={{
-            width: 340, flexShrink: 0,
-            position: "sticky", top: 20,
-            maxHeight: "calc(100vh - 100px)", overflowY: "auto",
+            width: isMobile ? "100%" : 340,
+            flexShrink: 0,
+            display: isMobile && mobileTab === "budget" ? "none" : undefined,
+            position: isMobile ? "static" : "sticky",
+            top: 20,
+            maxHeight: isMobile ? undefined : "calc(100vh - 100px)",
+            overflowY: isMobile ? undefined : "auto",
           }}>
             <div className="card" style={{ padding: 16 }}>
               {/* Panel tab bar */}
@@ -2147,6 +2184,7 @@ export default function Budget() {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {/* Item detail modal — rendered at page root so it's never clipped by a parent overflow */}
