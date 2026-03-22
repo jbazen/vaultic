@@ -228,14 +228,14 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
           }}>
             {txn.suggested_group_name} › {txn.suggested_item_name}
           </span>
-          {/* Confidence badge:
-              pending = colored % (green/yellow/orange/red based on score)
-              new     = grey N/A (auto-rule match, no Sage confidence score) */}
+          {/* Confidence badge: solid colored background so it pops visually.
+              pending = green/yellow/orange/red fill based on score
+              new     = grey fill (auto-rule match, no Sage score) */}
           <span style={{
             fontSize: 13, fontWeight: 800,
-            color:      conf ? conf.color : "#6b7280",
-            background: "var(--bg, #0f1117)", borderRadius: 6,
-            padding: "3px 10px", flexShrink: 0,
+            background: conf ? conf.color : "#4b5563",
+            color: conf && conf.color === "#f59e0b" ? "#000" : "#fff",
+            borderRadius: 6, padding: "4px 11px", flexShrink: 0,
           }}>
             {conf ? conf.label : "N/A"}
           </span>
@@ -264,8 +264,8 @@ function TxnCard({ txn, onApprove, onReassign, busy, mode = "pending" }) {
               disabled={busy}
               style={{
                 flex: 1, padding: "14px 0",
-                background: "rgba(99,102,241,0.15)", border: "1px solid rgba(99,102,241,0.5)",
-                borderRadius: 10, color: "#818cf8", fontWeight: 700,
+                background: "#4f46e5", border: "none",
+                borderRadius: 10, color: "#fff", fontWeight: 700,
                 fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
               }}>
               {mode === "pending" ? "Reassign" : "Pick other"}
