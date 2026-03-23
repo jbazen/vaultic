@@ -13,6 +13,7 @@ Tables used (created by migration — not here):
 """
 import csv
 import io
+import json
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -1318,6 +1319,28 @@ async def save_transaction_splits(
                     notes        = excluded.notes,
                     updated_at   = CURRENT_TIMESTAMP
             """, (transaction_id, body.check_number, body.notes))
+
+        # Record split pattern for future learning (percentage-based so it generalizes across amounts)
+        merchant_row = conn.execute(
+            "SELECT COALESCE(merchant_name, name, '') AS merchant FROM transactions WHERE transaction_id = ?",
+            (transaction_id,)
+        ).fetchone()
+        if merchant_row and merchant_row["merchant"].strip():
+            merchant = merchant_row["merchant"].strip()
+            total_amount = sum(s.amount for s in body.splits)
+            if total_amount > 0:
+                split_pattern = json.dumps([
+                    {"item_id": s.item_id, "pct": round(s.amount / total_amount * 100, 2)}
+                    for s in body.splits
+                ])
+                conn.execute("""
+                    INSERT INTO split_rules (merchant, splits, use_count)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(merchant) DO UPDATE SET
+                        splits    = excluded.splits,
+                        use_count = use_count + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (merchant, split_pattern))
 
     return {"status": "saved", "splits": len(body.splits)}
 

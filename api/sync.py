@@ -3,6 +3,7 @@ Plaid sync logic: pull balances + transactions for all connected items.
 Called on startup, on-demand via API, and daily via APScheduler.
 """
 import os
+import json
 import logging
 from datetime import date
 
@@ -16,18 +17,131 @@ from api.encryption import decrypt
 from api import security_log
 
 
+def _ai_categorize_unmatched(conn, txn_ids: list[str]):
+    """Call Claude Haiku to categorize transactions that had no rule-based match.
+
+    Builds a single batched prompt for all unmatched transactions and inserts
+    results as pending_review assignments with the AI-returned confidence score.
+    All errors are caught and logged — this function must never crash sync.
+    """
+    try:
+        import anthropic
+
+        # Load transaction details
+        placeholders = ",".join("?" * len(txn_ids))
+        txns = conn.execute(
+            f"SELECT transaction_id,"
+            f" COALESCE(merchant_name, name, '') AS merchant,"
+            f" ABS(amount) AS amount,"
+            f" category"
+            f" FROM transactions WHERE transaction_id IN ({placeholders})",
+            txn_ids
+        ).fetchall()
+        if not txns:
+            return
+
+        # Load active budget items
+        items = conn.execute(
+            "SELECT bi.id, bi.name, bg.name AS group_name"
+            " FROM budget_items bi"
+            " JOIN budget_groups bg ON bg.id = bi.group_id"
+            " WHERE bi.is_deleted = 0 AND bg.is_deleted = 0"
+        ).fetchall()
+        if not items:
+            logger.info("AI categorization skipped — no active budget items")
+            return
+
+        valid_item_ids = {row["id"] for row in items}
+
+        categories_block = "\n".join(
+            f"{item['id']}|{item['group_name']}|{item['name']}" for item in items
+        )
+        txns_block = "\n".join(
+            f"{i + 1}|{txn['merchant']}|${txn['amount']:.2f}|{txn['category'] or 'unknown'}"
+            for i, txn in enumerate(txns)
+        )
+
+        prompt = (
+            "You are a personal finance assistant helping categorize bank transactions into budget categories.\n\n"
+            "Budget categories (id|group|name):\n"
+            f"{categories_block}\n\n"
+            "Transactions to categorize (index|merchant|amount|plaid_hint):\n"
+            f"{txns_block}\n\n"
+            "For each transaction, pick the single best budget category. Respond with ONLY a JSON array, no explanation:\n"
+            '[{"index": 1, "item_id": 123, "confidence": 85}, ...]\n\n'
+            "Confidence guide:\n"
+            "- 90-99: very obvious match (e.g. merchant name clearly maps to category)\n"
+            "- 70-89: reasonable guess based on merchant name or Plaid hint\n"
+            "- 50-69: uncertain but plausible\n"
+            "- 30-49: best guess with low confidence\n"
+            "Never skip a transaction — always provide your best guess."
+        )
+
+        logger.info(f"AI categorization: sending {len(txns)} transactions to Claude Haiku")
+
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        raw_text = response.content[0].text.strip()
+
+        # Strip markdown code fences if present
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+
+        results = json.loads(raw_text)
+
+        assigned = 0
+        for result in results:
+            idx = result.get("index")
+            item_id = result.get("item_id")
+            confidence = result.get("confidence", 50)
+            if idx is None or item_id is None:
+                continue
+            if not (1 <= idx <= len(txns)):
+                continue
+            if item_id not in valid_item_ids:
+                logger.warning(f"AI returned unknown item_id {item_id} — skipping")
+                continue
+            txn_id = txns[idx - 1]["transaction_id"]
+            conn.execute(
+                "INSERT OR IGNORE INTO transaction_assignments"
+                " (transaction_id, item_id, status, confidence)"
+                " VALUES (?, ?, 'pending_review', ?)",
+                (txn_id, item_id, confidence)
+            )
+            assigned += 1
+
+        logger.info(f"AI categorization: assigned {assigned}/{len(txns)} transactions")
+
+    except Exception as e:
+        logger.error(f"AI categorization failed (non-fatal): {e}")
+
+
 def _auto_categorize_new(conn, transaction_ids: list[str]):
     """Match newly synced transactions against budget_auto_rules and insert
-    pending_review assignments.
+    pending_review assignments. Transactions with no rule match are then sent
+    to Claude Haiku for AI-powered categorization (second pass).
 
-    Uses match_count to derive a confidence score:
+    Pass 1 — Rule-based: uses match_count to derive a confidence score:
       ≥ 10 matches → 95%  (very reliable, seen many times)
       5–9 matches  → 85%  (reliable)
       2–4 matches  → 70%  (seen a few times)
       1 match      → 55%  (seen once — low confidence)
 
-    Only transactions with no existing assignment are processed. Skipped
-    transactions remain unassigned and appear in the New tab.
+    Pass 2 — AI fallback: transactions still unassigned after the rule pass
+      are batched into a single Claude Haiku call which returns item_id +
+      confidence for each. Results are inserted as pending_review so the user
+      can approve or correct them in the Pending tab.
+
+    Only transactions with no existing assignment are processed. Transactions
+    skipped by both passes remain unassigned and appear in the New tab.
     """
     if not transaction_ids:
         return
@@ -80,6 +194,18 @@ def _auto_categorize_new(conn, transaction_ids: list[str]):
             " VALUES (?, ?, 'pending_review', ?)",
             (txn_id, item_id, confidence)
         )
+
+    # Pass 2: AI categorization for transactions still unassigned after the rule pass
+    remaining_ids = []
+    for txn_id in transaction_ids:
+        assigned = conn.execute(
+            "SELECT 1 FROM transaction_assignments WHERE transaction_id = ?", (txn_id,)
+        ).fetchone()
+        if not assigned:
+            remaining_ids.append(txn_id)
+    if remaining_ids:
+        logger.info(f"Rule-based pass left {len(remaining_ids)} unmatched — sending to AI")
+        _ai_categorize_unmatched(conn, remaining_ids)
 
 logger = logging.getLogger("vaultic.sync")
 

@@ -354,6 +354,19 @@ MIGRATIONS = [
     )""",
     # Add device_token to existing push_subscriptions rows (migration for existing installs)
     "ALTER TABLE push_subscriptions ADD COLUMN device_token TEXT",
+    # split_rules: stores percentage-based split patterns per merchant so future
+    # transactions from the same merchant can be pre-populated with the same split.
+    # splits column is JSON: [{"item_id": 1, "pct": 60.0}, {"item_id": 2, "pct": 40.0}]
+    # use_count increments each time the user saves a split for this merchant so the
+    # most-used pattern is always kept current.
+    """CREATE TABLE IF NOT EXISTS split_rules (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        merchant    TEXT NOT NULL UNIQUE,
+        splits      TEXT NOT NULL,
+        use_count   INTEGER DEFAULT 1,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 
