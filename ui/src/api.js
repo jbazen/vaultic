@@ -535,6 +535,25 @@ export async function toggleExcludeFromNetWorth(id) {
   return res.json(); // { exclude_from_net_worth: 0 | 1 }
 }
 
+// Soft-delete a transaction from the budget (excluded from all queues and spending totals)
+export async function budgetDeleteTransaction(transactionId) {
+  const res = await apiFetch(`/api/budget/transactions/${transactionId}`, { method: "DELETE" });
+  return res.json();
+}
+
+// Restore a soft-deleted transaction back to the unassigned queue
+export async function budgetRestoreTransaction(transactionId) {
+  const res = await apiFetch(`/api/budget/transactions/${transactionId}/restore`, { method: "POST" });
+  return res.json();
+}
+
+// Get soft-deleted transactions for a month (no arg = current month)
+export async function getDeletedTransactions(month) {
+  const m = month || new Date().toISOString().slice(0, 7);
+  const res = await apiFetch(`/api/budget/deleted/${m}`);
+  return res.json();
+}
+
 // ── Edit Expense / transaction split API ──────────────────────────────────────
 
 /** Fetch full transaction details + current assignment/splits for the edit modal. */

@@ -14,9 +14,9 @@
  *   • "All clear" state when queue is empty
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, saveTransactionSplits, getBudget, isAuthed, deviceAuth } from "../api.js";
+import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, saveTransactionSplits, getBudget, isAuthed, deviceAuth, budgetDeleteTransaction } from "../api.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -436,7 +436,34 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
  *                   with no badge, buttons "✓ Assign" / "Pick other".
  *                   If no suggestion: no suggestion row, just "Choose Category →".
  */
-function TxnCard({ txn, onApprove, onReassign, onSplit, busy, mode = "pending" }) {
+function TxnCard({ txn, onApprove, onReassign, onSplit, onDelete, busy, mode = "pending" }) {
+  const [swipeX, setSwipeX] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const touchStartX = useRef(null);
+
+  function handleTouchStart(e) {
+    touchStartX.current = e.touches[0].clientX;
+    setSwiping(false);
+  }
+
+  function handleTouchMove(e) {
+    if (touchStartX.current === null) return;
+    const dx = e.touches[0].clientX - touchStartX.current;
+    if (dx < 0) {  // only allow left swipe
+      setSwipeX(Math.max(dx, -100));
+      setSwiping(true);
+    }
+  }
+
+  function handleTouchEnd() {
+    if (swipeX < -60) {
+      onDelete(txn);
+    }
+    setSwipeX(0);
+    setSwiping(false);
+    touchStartX.current = null;
+  }
+
   const label  = txn.merchant_name || txn.name || "Unknown";
   const acct   = txn.account_name
     ? `${txn.account_name}${txn.account_mask ? ` *${txn.account_mask}` : ""}`
@@ -449,90 +476,122 @@ function TxnCard({ txn, onApprove, onReassign, onSplit, busy, mode = "pending" }
     : null;
 
   return (
-    <div style={{
-      background: "var(--bg2, #171b27)",
-      marginBottom: 8,          // visible gap between cards — dark bg shows through
-      padding: "18px 16px 16px",
-    }}>
-      {/* Row 1: merchant + colored amount */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 4 }}>
-        <span style={{
-          flex: 1, fontWeight: 800, fontSize: 20, color: "var(--text, #e8eaf0)",
-          lineHeight: 1.2, wordBreak: "break-word",
-        }}>
-          {label}
-        </span>
-        <span style={{
-          fontWeight: 800, fontSize: 22, color: amount.color,
-          flexShrink: 0, paddingTop: 1,
-        }}>
-          {amount.text}
-        </span>
-      </div>
-
-      {/* Row 2: date + account */}
+    <div style={{ position: "relative", marginBottom: 8, overflow: "hidden" }}>
+      {/* Red delete background revealed by swipe */}
       <div style={{
-        fontSize: 13, color: "var(--text2, #8b90a7)", marginBottom: 14,
-        display: "flex", alignItems: "center", gap: 8,
+        position: "absolute", top: 0, right: 0, bottom: 0,
+        width: 100, background: "#ef4444",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        color: "#fff", fontWeight: 800, fontSize: 13,
       }}>
-        <span>{fmtDate(txn.date)}</span>
-        {acct && (
-          <>
-            <span style={{ opacity: 0.4 }}>·</span>
-            <span>{acct}</span>
-          </>
-        )}
+        Delete
       </div>
-
-      {/* Row 3: category suggestion row
-          - pending: "Suggested" label + colored confidence % badge (always present)
-          - new with auto-rule: "From history" label + grey N/A badge (no Sage score)
-          - new with no suggestion: omitted entirely — just show the assign button */}
-      {hasSuggestion && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10, marginBottom: 14,
-          padding: "11px 14px", background: "var(--bg3, #1e2336)", borderRadius: 8,
-        }}>
-          <span style={{ fontSize: 12, color: "var(--text2, #8b90a7)", flexShrink: 0 }}>
-            {mode === "pending" ? "Suggested" : "From history"}
+      {/* Card — slides left on swipe */}
+      <div
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        style={{
+          background: "var(--bg2, #171b27)",
+          padding: "18px 16px 16px",
+          transform: `translateX(${swipeX}px)`,
+          transition: swiping ? "none" : "transform 0.2s ease",
+          position: "relative",
+        }}
+      >
+        {/* Row 1: merchant + colored amount */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 4 }}>
+          <span style={{
+            flex: 1, fontWeight: 800, fontSize: 20, color: "var(--text, #e8eaf0)",
+            lineHeight: 1.2, wordBreak: "break-word",
+          }}>
+            {label}
           </span>
           <span style={{
-            flex: 1, fontWeight: 700, fontSize: 16, color: "var(--text, #e8eaf0)",
+            fontWeight: 800, fontSize: 22, color: amount.color,
+            flexShrink: 0, paddingTop: 1,
           }}>
-            {txn.suggested_group_name} › {txn.suggested_item_name}
-          </span>
-          {/* Confidence badge: solid colored background so it pops visually.
-              pending = green/yellow/orange/red fill based on score
-              new     = grey fill (auto-rule match, no Sage score) */}
-          <span style={{
-            fontSize: 13, fontWeight: 800,
-            background: conf ? conf.color : "#4b5563",
-            color: conf && conf.color === "#f59e0b" ? "#000" : "#fff",
-            borderRadius: 6, padding: "4px 11px", flexShrink: 0,
-          }}>
-            {conf ? conf.label : "N/A"}
+            {amount.text}
           </span>
         </div>
-      )}
 
-      {/* Row 4: action buttons
-          Primary (green) = approve/assign the suggestion
-          Secondary (indigo) = open picker to choose a different category
-          Teal = open split modal to divide across multiple categories */}
-      <div style={{ display: "flex", gap: 8 }}>
-        {hasSuggestion ? (
-          <>
-            <button
-              onClick={() => onApprove(txn.transaction_id, txn.suggested_item_id)}
-              disabled={busy}
-              style={{
-                flex: 2, padding: "14px 0",
-                background: "#34d399", border: "none", borderRadius: 10,
-                color: "#fff", fontWeight: 800, fontSize: 16,
-                cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
-              }}>
-              {mode === "pending" ? "✓ Approve" : "✓ Assign"}
-            </button>
+        {/* Row 2: date + account */}
+        <div style={{
+          fontSize: 13, color: "var(--text2, #8b90a7)", marginBottom: 14,
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span>{fmtDate(txn.date)}</span>
+          {acct && (
+            <>
+              <span style={{ opacity: 0.4 }}>·</span>
+              <span>{acct}</span>
+            </>
+          )}
+        </div>
+
+        {/* Row 3: category suggestion row
+            - pending: "Suggested" label + colored confidence % badge (always present)
+            - new with auto-rule: "From history" label + grey N/A badge (no Sage score)
+            - new with no suggestion: omitted entirely — just show the assign button */}
+        {hasSuggestion && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10, marginBottom: 14,
+            padding: "11px 14px", background: "var(--bg3, #1e2336)", borderRadius: 8,
+          }}>
+            <span style={{ fontSize: 12, color: "var(--text2, #8b90a7)", flexShrink: 0 }}>
+              {mode === "pending" ? "Suggested" : "From history"}
+            </span>
+            <span style={{
+              flex: 1, fontWeight: 700, fontSize: 16, color: "var(--text, #e8eaf0)",
+            }}>
+              {txn.suggested_group_name} › {txn.suggested_item_name}
+            </span>
+            {/* Confidence badge: solid colored background so it pops visually.
+                pending = green/yellow/orange/red fill based on score
+                new     = grey fill (auto-rule match, no Sage score) */}
+            <span style={{
+              fontSize: 13, fontWeight: 800,
+              background: conf ? conf.color : "#4b5563",
+              color: conf && conf.color === "#f59e0b" ? "#000" : "#fff",
+              borderRadius: 6, padding: "4px 11px", flexShrink: 0,
+            }}>
+              {conf ? conf.label : "N/A"}
+            </span>
+          </div>
+        )}
+
+        {/* Row 4: action buttons
+            Primary (green) = approve/assign the suggestion
+            Secondary (indigo) = open picker to choose a different category
+            Teal = open split modal to divide across multiple categories */}
+        <div style={{ display: "flex", gap: 8 }}>
+          {hasSuggestion ? (
+            <>
+              <button
+                onClick={() => onApprove(txn.transaction_id, txn.suggested_item_id)}
+                disabled={busy}
+                style={{
+                  flex: 2, padding: "14px 0",
+                  background: "#34d399", border: "none", borderRadius: 10,
+                  color: "#fff", fontWeight: 800, fontSize: 16,
+                  cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+                }}>
+                {mode === "pending" ? "✓ Approve" : "✓ Assign"}
+              </button>
+              <button
+                onClick={() => onReassign(txn)}
+                disabled={busy}
+                style={{
+                  flex: 1, padding: "14px 0",
+                  background: "#4f46e5", border: "none",
+                  borderRadius: 10, color: "#fff", fontWeight: 700,
+                  fontSize: 14, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+                }}>
+                {mode === "pending" ? "Reassign" : "Pick other"}
+              </button>
+            </>
+          ) : (
+            /* No Sage suggestion at all — only option is to open the picker */
             <button
               onClick={() => onReassign(txn)}
               disabled={busy}
@@ -540,39 +599,26 @@ function TxnCard({ txn, onApprove, onReassign, onSplit, busy, mode = "pending" }
                 flex: 1, padding: "14px 0",
                 background: "#4f46e5", border: "none",
                 borderRadius: 10, color: "#fff", fontWeight: 700,
-                fontSize: 14, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+                fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
               }}>
-              {mode === "pending" ? "Reassign" : "Pick other"}
+              Choose Category →
             </button>
-          </>
-        ) : (
-          /* No Sage suggestion at all — only option is to open the picker */
+          )}
+          {/* Split button — teal, always visible */}
           <button
-            onClick={() => onReassign(txn)}
+            onClick={() => onSplit(txn)}
             disabled={busy}
             style={{
-              flex: 1, padding: "14px 0",
-              background: "#4f46e5", border: "none",
+              padding: "14px 14px",
+              background: "#0d9488", border: "none",
               borderRadius: 10, color: "#fff", fontWeight: 700,
-              fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
-            }}>
-            Choose Category →
+              fontSize: 14, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
+              flexShrink: 0,
+            }}
+            title="Split this transaction across multiple categories">
+            Split
           </button>
-        )}
-        {/* Split button — teal, always visible */}
-        <button
-          onClick={() => onSplit(txn)}
-          disabled={busy}
-          style={{
-            padding: "14px 14px",
-            background: "#0d9488", border: "none",
-            borderRadius: 10, color: "#fff", fontWeight: 700,
-            fontSize: 14, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
-            flexShrink: 0,
-          }}
-          title="Split this transaction across multiple categories">
-          Split
-        </button>
+        </div>
       </div>
     </div>
   );
@@ -655,6 +701,25 @@ export default function Review() {
       }, 400);
     } catch {}
     finally { setBusyIds(prev => { const s = new Set(prev); s.delete(transactionId); return s; }); }
+  }
+
+  // Soft-delete a transaction from the budget (hides it permanently from all queues)
+  async function handleDelete(txn) {
+    // Optimistically remove from UI
+    if (txns.some(t => t.transaction_id === txn.transaction_id)) {
+      setDoneIds(prev => new Set([...prev, txn.transaction_id]));
+      setTimeout(() => {
+        setTxns(prev => prev.filter(t => t.transaction_id !== txn.transaction_id));
+        setDoneIds(prev => { const s = new Set(prev); s.delete(txn.transaction_id); return s; });
+      }, 400);
+    } else {
+      setNewDoneIds(prev => new Set([...prev, txn.transaction_id]));
+      setTimeout(() => {
+        setNewTxns(prev => prev.filter(t => t.transaction_id !== txn.transaction_id));
+        setNewDoneIds(prev => { const s = new Set(prev); s.delete(txn.transaction_id); return s; });
+      }, 400);
+    }
+    try { await budgetDeleteTransaction(txn.transaction_id); } catch {}
   }
 
   // Bulk-approve all pending_review with confidence ≥ 85
@@ -865,6 +930,7 @@ export default function Review() {
                     onApprove={approve}
                     onReassign={txn => setReassigning({ txn, mode: "pending" })}
                     onSplit={txn => setSplittingTxn({ txn, mode: "pending" })}
+                    onDelete={handleDelete}
                     busy={busyIds.has(txn.transaction_id)}
                   />
                 </div>
@@ -898,6 +964,7 @@ export default function Review() {
                     onApprove={assign}
                     onReassign={txn => setReassigning({ txn, mode: "new" })}
                     onSplit={txn => setSplittingTxn({ txn, mode: "new" })}
+                    onDelete={handleDelete}
                     busy={busyIds.has(txn.transaction_id)}
                   />
                 </div>

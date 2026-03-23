@@ -367,6 +367,12 @@ MIGRATIONS = [
         created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+    # Soft-delete transactions from the budget view without losing the Plaid record.
+    # budget_deleted=1 hides the transaction from all budget queues (unassigned,
+    # pending-review, assigned) and excludes it from spending totals. Use case:
+    # account transfers, credits, and other non-spending items that Sage can't
+    # reliably categorize and that the user wants to permanently dismiss.
+    "ALTER TABLE transactions ADD COLUMN budget_deleted INTEGER DEFAULT 0",
 ]
 
 

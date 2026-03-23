@@ -70,11 +70,13 @@ def _ai_categorize_unmatched(conn, txn_ids: list[str]):
             "For each transaction, pick the single best budget category. Respond with ONLY a JSON array, no explanation:\n"
             '[{"index": 1, "item_id": 123, "confidence": 85}, ...]\n\n'
             "Confidence guide:\n"
-            "- 90-99: very obvious match (e.g. merchant name clearly maps to category)\n"
-            "- 70-89: reasonable guess based on merchant name or Plaid hint\n"
-            "- 50-69: uncertain but plausible\n"
-            "- 30-49: best guess with low confidence\n"
-            "Never skip a transaction — always provide your best guess."
+            "- 90-99: very obvious match (merchant name clearly identifies the category)\n"
+            "- 70-89: reasonable match based on merchant name or Plaid hint\n"
+            "- 50-69: plausible guess\n"
+            "- 30-49: low confidence guess\n\n"
+            "If you are genuinely unsure (e.g., the transaction looks like an account transfer, "
+            "payment, or credit that doesn't belong in a spending category), return item_id: null "
+            "and confidence: 0. It is better to leave a transaction unassigned than to guess wrong."
         )
 
         logger.info(f"AI categorization: sending {len(txns)} transactions to Claude Haiku")
@@ -102,13 +104,12 @@ def _ai_categorize_unmatched(conn, txn_ids: list[str]):
             idx = result.get("index")
             item_id = result.get("item_id")
             confidence = result.get("confidence", 50)
-            if idx is None or item_id is None:
+            if idx is None:
                 continue
             if not (1 <= idx <= len(txns)):
                 continue
-            if item_id not in valid_item_ids:
-                logger.warning(f"AI returned unknown item_id {item_id} — skipping")
-                continue
+            if not item_id or item_id not in valid_item_ids:
+                continue  # leave unassigned — Sage wasn't confident enough
             txn_id = txns[idx - 1]["transaction_id"]
             conn.execute(
                 "INSERT OR IGNORE INTO transaction_assignments"
@@ -165,11 +166,11 @@ def _auto_categorize_new(conn, transaction_ids: list[str]):
             continue
 
         txn = conn.execute(
-            "SELECT COALESCE(merchant_name, name, '') AS merchant"
+            "SELECT COALESCE(merchant_name, name, '') AS merchant, budget_deleted"
             " FROM transactions WHERE transaction_id = ?",
             (txn_id,)
         ).fetchone()
-        if not txn:
+        if not txn or txn["budget_deleted"]:
             continue
 
         merchant = txn["merchant"].strip()

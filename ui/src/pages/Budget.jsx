@@ -25,6 +25,7 @@ import {
   autoAssignDebug, getItemDetail, reorderGroups, reorderItems,
   getTransaction, saveTransactionSplits,
   getPendingReviewTransactions, approveTransaction,
+  budgetDeleteTransaction, budgetRestoreTransaction, getDeletedTransactions,
 } from "../api.js";
 
 // ── Color palette — one color per expense group (income is always green) ──────
@@ -363,10 +364,11 @@ function SummaryPanel({ groups, summary }) {
 
 // ── Transactions panel (right side) ───────────────────────────────────────────
 function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
-  const [tab, setTab] = useState("pending"); // pending | new | tracked
+  const [tab, setTab] = useState("pending"); // pending | new | tracked | deleted
   const [unassigned, setUnassigned] = useState([]);
   const [assigned, setAssigned] = useState([]);
   const [pending, setPending] = useState([]);   // Sage-suggested, awaiting review
+  const [deleted, setDeleted] = useState([]);   // soft-deleted transactions
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
@@ -378,6 +380,7 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
       getUnassignedTransactions(month).then(setUnassigned),
       getAssignedTransactions(month).then(setAssigned),
       getPendingReviewTransactions(month).then(setPending),
+      getDeletedTransactions(month).then(setDeleted),
     ]);
     setLoading(false);
   }
@@ -442,7 +445,19 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
     }
   }
 
-  const txns = (tab === "pending" ? pending : tab === "new" ? unassigned : assigned).filter(t => {
+  async function handleDelete(txnId) {
+    await budgetDeleteTransaction(txnId);
+    await loadAll();
+    onBudgetUpdate?.();
+  }
+
+  async function handleRestore(txnId) {
+    await budgetRestoreTransaction(txnId);
+    await loadAll();
+    onBudgetUpdate?.();
+  }
+
+  const txns = (tab === "pending" ? pending : tab === "new" ? unassigned : tab === "tracked" ? assigned : deleted).filter(t => {
     if (!search) return true;
     const q = search.toLowerCase();
     return (t.merchant_name || t.name || "").toLowerCase().includes(q);
@@ -465,11 +480,12 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
 
   return (
     <div>
-      {/* Sub-tabs — Pending shows Sage suggestions; New = unassigned; Tracked = confirmed */}
+      {/* Sub-tabs — Pending shows Sage suggestions; New = unassigned; Tracked = confirmed; Deleted = soft-deleted */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 10 }}>
         {tabBtn("pending", "⚡ Pending", pending.length)}
         {tabBtn("new", "New", unassigned.length)}
         {tabBtn("tracked", "Tracked", assigned.length)}
+        {tabBtn("deleted", "Deleted", deleted.length)}
       </div>
 
       {/* Search */}
@@ -539,7 +555,9 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
 
       {!loading && txns.length === 0 && (
         <div style={{ color: "var(--text2)", fontSize: 12, textAlign: "center", padding: "20px 0" }}>
-          {tab === "new" ? "✓ All transactions assigned" : "No tracked transactions this month"}
+          {tab === "new" ? "✓ All transactions assigned"
+           : tab === "deleted" ? "No deleted transactions this month"
+           : "No tracked transactions this month"}
         </div>
       )}
 
@@ -610,7 +628,7 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                 )}
               </div>
 
-              <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div style={{ textAlign: "right", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: isDebit ? "var(--red)" : "var(--green)" }}>
                   {isDebit ? "-" : "+"}{fmt(Math.abs(t.amount))}
                 </div>
@@ -631,6 +649,30 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                       border: "none", cursor: "pointer", marginTop: 2, padding: 0 }}>
                     unassign
                   </button>
+                )}
+                {/* Trash icon — delete button for New and Tracked tabs */}
+                {(tab === "new" || tab === "tracked") && (
+                  <button
+                    onClick={() => handleDelete(t.transaction_id)}
+                    title="Remove from budget"
+                    style={{
+                      fontSize: 11, color: "var(--text2)", background: "none",
+                      border: "none", cursor: "pointer", padding: 0, opacity: 0.5,
+                      lineHeight: 1,
+                    }}
+                  >🗑</button>
+                )}
+                {/* Restore button for Deleted tab */}
+                {tab === "deleted" && (
+                  <button
+                    onClick={() => handleRestore(t.transaction_id)}
+                    title="Restore to unassigned"
+                    style={{
+                      marginTop: 4, padding: "3px 8px", borderRadius: 5, fontSize: 10, fontWeight: 600,
+                      background: "rgba(79,142,247,0.12)", border: "1px solid rgba(79,142,247,0.3)",
+                      color: "var(--accent)", cursor: "pointer",
+                    }}
+                  >↩ Restore</button>
                 )}
               </div>
             </div>

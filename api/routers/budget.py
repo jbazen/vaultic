@@ -150,6 +150,7 @@ async def get_all_pending_review(_user: str = Depends(get_current_user)):
             LEFT JOIN accounts a ON a.id = t.account_id
             WHERE t.pending = 0
               AND ta.status = 'pending_review'
+              AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
             ORDER BY t.date DESC
         """).fetchall()
 
@@ -187,6 +188,7 @@ async def get_pending_review(month: str, _user: str = Depends(get_current_user))
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND ta.status = 'pending_review'
+              AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
             ORDER BY t.date DESC
         """, (month,)).fetchall()
 
@@ -237,6 +239,7 @@ async def get_all_unassigned(_user: str = Depends(get_current_user)):
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+              AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
               -- Exclude transactions that have already been split across categories.
               -- Split transactions live in transaction_splits, not transaction_assignments,
               -- so the ta JOIN above sees NULL for them and incorrectly marks them unassigned.
@@ -248,6 +251,84 @@ async def get_all_unassigned(_user: str = Depends(get_current_user)):
         """, (current_month,)).fetchall()
 
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /deleted — soft-deleted transactions for current month
+# GET /deleted/{month} — soft-deleted transactions for a specific month
+# DELETE /transactions/{transaction_id} — soft-delete a transaction from budget
+# POST /transactions/{transaction_id}/restore — restore a soft-deleted transaction
+#
+# ROUTE ORDER NOTE: All of these must be defined BEFORE /{month} so FastAPI
+# does not match "deleted" or "transactions" as a month string.
+# ---------------------------------------------------------------------------
+
+@router.get("/deleted")
+async def get_deleted_current_month(_user: str = Depends(get_current_user)):
+    """Return soft-deleted transactions for the current month."""
+    month = date.today().strftime("%Y-%m")
+    return await _get_deleted(month)
+
+
+@router.get("/deleted/{month}")
+async def get_deleted_month(month: str, _user: str = Depends(get_current_user)):
+    """Return soft-deleted transactions for a specific month."""
+    _validate_month(month)
+    return await _get_deleted(month)
+
+
+async def _get_deleted(month: str):
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT t.transaction_id, t.date, t.name, t.merchant_name,
+                   t.amount, t.category,
+                   a.name AS account_name, a.mask AS account_mask
+            FROM transactions t
+            LEFT JOIN accounts a ON a.id = t.account_id
+            WHERE strftime('%Y-%m', t.date) = ?
+              AND t.budget_deleted = 1
+            ORDER BY t.date DESC
+        """, (month,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+@router.delete("/transactions/{transaction_id}")
+async def budget_delete_transaction(
+    transaction_id: str,
+    _user: str = Depends(get_current_user),
+):
+    """Mark a transaction as budget-deleted so it no longer appears in the
+    unassigned or pending-review queues and doesn't count toward spending totals.
+    Also removes any existing assignment or split so totals update immediately.
+    """
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE transactions SET budget_deleted = 1 WHERE transaction_id = ?",
+            (transaction_id,)
+        )
+        conn.execute(
+            "DELETE FROM transaction_assignments WHERE transaction_id = ?",
+            (transaction_id,)
+        )
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (transaction_id,)
+        )
+    return {"ok": True}
+
+
+@router.post("/transactions/{transaction_id}/restore")
+async def budget_restore_transaction(
+    transaction_id: str,
+    _user: str = Depends(get_current_user),
+):
+    """Restore a budget-deleted transaction back to the unassigned queue."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE transactions SET budget_deleted = 0 WHERE transaction_id = ?",
+            (transaction_id,)
+        )
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -637,6 +718,7 @@ async def get_unassigned(month: str, _user: str = Depends(get_current_user)):
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+              AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
               -- Exclude split transactions — they live in transaction_splits, not
               -- transaction_assignments, so the ta JOIN above returns NULL for them
               -- and would incorrectly treat them as unassigned.
@@ -680,6 +762,7 @@ async def get_assigned(month: str, _user: str = Depends(get_current_user)):
               AND t.pending = 0
               AND ta.item_id IS NOT NULL
               AND ta.status != 'pending_review'
+              AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
             ORDER BY t.date DESC
         """, (month,)).fetchall()
 
