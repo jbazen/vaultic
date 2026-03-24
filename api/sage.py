@@ -203,6 +203,20 @@ TOOLS = [
         },
     },
     {
+        "name": "get_paystubs",
+        "description": "Get paystub data including YTD gross income, federal/state withholding, Social Security, and Medicare. Use when the user asks about their paycheck, YTD earnings, current withholding, or wants to know how much they've made or withheld so far this year.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ytd_only": {
+                    "type": "boolean",
+                    "description": "If true, return only the most recent paystub per employer (which has the YTD totals). Default true."
+                }
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_tax_history",
         "description": "Get the user's tax return history. Returns year-over-year income, AGI, effective tax rate, deductions, refunds/owed, and key deduction items (mortgage interest, charitable giving, SALT). Use this when the user asks about taxes, their tax history, withholding, whether they should itemize, W-4 adjustments, or any tax-related question.",
         "input_schema": {
@@ -544,6 +558,27 @@ def _call_tool(name: str, inputs: dict) -> str:
                 f"Found {len(rows)} matching transaction(s):\n"
                 + str([dict(r) for r in rows])
             )
+
+        elif name == "get_paystubs":
+            ytd_only = inputs.get("ytd_only", True)
+            with get_db() as conn:
+                if ytd_only:
+                    rows = conn.execute("""
+                        SELECT p.* FROM paystubs p
+                        INNER JOIN (
+                            SELECT employer, MAX(pay_date) AS latest
+                            FROM paystubs GROUP BY employer
+                        ) l ON p.employer = l.employer AND p.pay_date = l.latest
+                        ORDER BY p.employer
+                    """).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM paystubs ORDER BY pay_date DESC"
+                    ).fetchall()
+            result = [dict(r) for r in rows]
+            if not result:
+                return "No paystubs have been uploaded yet."
+            return str(result)
 
         elif name == "get_tax_history":
             year = inputs.get("year")

@@ -431,6 +431,32 @@ MIGRATIONS = [
         parsed_data     TEXT,
         uploaded_at     DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+
+    # paystubs: one row per uploaded paystub PDF.
+    # Stores current-period and YTD figures extracted by Claude Haiku.
+    """CREATE TABLE IF NOT EXISTS paystubs (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        employer                TEXT,
+        pay_date                TEXT,
+        period_start            TEXT,
+        period_end              TEXT,
+        gross_pay               REAL,
+        net_pay                 REAL,
+        federal_income_tax      REAL,
+        state_income_tax        REAL,
+        social_security         REAL,
+        medicare                REAL,
+        other_deductions        REAL,
+        ytd_gross               REAL,
+        ytd_federal             REAL,
+        ytd_state               REAL,
+        ytd_social_security     REAL,
+        ytd_medicare            REAL,
+        ytd_net                 REAL,
+        source_file             TEXT,
+        parsed_at               DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(employer, pay_date)
+    )""",
 ]
 
 

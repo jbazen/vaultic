@@ -697,6 +697,28 @@ export async function uploadTaxPdf(file) {
   return res.json();
 }
 
+export async function getPaystubs() {
+  const res = await apiFetch("/api/paystubs");
+  return res.json();
+}
+
+export async function getPaystubsYtd() {
+  const res = await apiFetch("/api/paystubs/ytd");
+  return res.json();
+}
+
+export async function uploadPaystub(file) {
+  const token = localStorage.getItem("vaultic_token");
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/paystubs/upload", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  return res.json();
+}
+
 /**
  * Exchange the stored device_token for a fresh JWT.
  *

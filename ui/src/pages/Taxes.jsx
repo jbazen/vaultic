@@ -4,7 +4,7 @@
  * Sage is the primary interface for tax questions and planning.
  */
 import { useState, useEffect, useRef } from "react";
-import { getTaxSummary, uploadTaxPdf } from "../api.js";
+import { getTaxSummary, uploadTaxPdf, getPaystubsYtd, uploadPaystub } from "../api.js";
 
 // Currency formatter
 function fmt(v) {
@@ -29,6 +29,11 @@ export default function Taxes() {
   const [uploadMsg, setUploadMsg] = useState(null);
   const fileInputRef = useRef(null);
 
+  const [paystubs, setPaystubs] = useState([]);
+  const [stubUploading, setStubUploading] = useState(false);
+  const [stubMsg, setStubMsg] = useState(null);
+  const stubInputRef = useRef(null);
+
   function loadSummary() {
     getTaxSummary()
       .then(setSummary)
@@ -38,6 +43,7 @@ export default function Taxes() {
 
   useEffect(() => {
     loadSummary();
+    getPaystubsYtd().then(setPaystubs).catch(() => {});
   }, []);
 
   // Color for refund (green) vs owed (red)
@@ -51,6 +57,30 @@ export default function Taxes() {
     if (row.refund > 0) return `+${fmt(row.refund)}`;
     if (row.owed > 0) return `-${fmt(row.owed)}`;
     return "—";
+  }
+
+  async function handleStubUpload(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setStubUploading(true);
+    setStubMsg(null);
+    const results = [];
+    for (const file of files) {
+      try {
+        const res = await uploadPaystub(file);
+        if (res.ok) {
+          results.push(`${res.employer || file.name} (${res.pay_date}): parsed`);
+        } else {
+          results.push(`${file.name}: ${res.detail || "parse failed"}`);
+        }
+      } catch (err) {
+        results.push(`${file.name}: ${err.message}`);
+      }
+    }
+    setStubMsg(results.join(" · "));
+    setStubUploading(false);
+    getPaystubsYtd().then(setPaystubs).catch(() => {});
+    if (stubInputRef.current) stubInputRef.current.value = "";
   }
 
   async function handleFileUpload(e) {
@@ -262,6 +292,77 @@ export default function Taxes() {
               </div>
             );
           })()}
+
+          {/* Paystubs — YTD summary */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>Paystubs — YTD</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {stubMsg && (
+                  <span style={{ fontSize: 12, color: "var(--text2)" }}>{stubMsg}</span>
+                )}
+                <input
+                  ref={stubInputRef}
+                  type="file"
+                  accept=".pdf"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={handleStubUpload}
+                />
+                <button
+                  onClick={() => stubInputRef.current?.click()}
+                  disabled={stubUploading}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: 8,
+                    background: "var(--accent)",
+                    color: "#fff",
+                    border: "none",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: stubUploading ? "not-allowed" : "pointer",
+                    opacity: stubUploading ? 0.7 : 1,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {stubUploading ? "Parsing…" : "Upload Paystub"}
+                </button>
+              </div>
+            </div>
+
+            {paystubs.length === 0 ? (
+              <div style={{ color: "var(--text2)", fontSize: 14, textAlign: "center", padding: "20px 0" }}>
+                No paystubs uploaded yet. Upload a recent paystub to see YTD totals.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
+                      {["Employer", "Pay Date", "Gross (Period)", "YTD Gross", "YTD Federal", "YTD State", "YTD SS", "YTD Medicare", "YTD Net"].map(h => (
+                        <th key={h} style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paystubs.map(p => (
+                      <tr key={p.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                        <td style={{ padding: "12px 12px", fontWeight: 600 }}>{p.employer || "—"}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--text2)" }}>{p.pay_date || "—"}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.gross_pay)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", fontWeight: 600 }}>{fmt(p.ytd_gross)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "#f87171" }}>{fmt(p.ytd_federal)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "#f87171" }}>{fmt(p.ytd_state)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.ytd_social_security)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.ytd_medicare)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "#34d399", fontWeight: 600 }}>{fmt(p.ytd_net)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
           {/* Sage prompt suggestions */}
           <div className="card">
