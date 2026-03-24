@@ -475,6 +475,58 @@ MIGRATIONS = [
         parsed_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(employer, effective_date)
     )""",
+
+    # tax_docs: universal tax document store. One row per uploaded document.
+    # doc_type: w2, 1098, 1099_int, 1099_div, 1099_b, 1099_r, 1099_g,
+    #           giving_statement, 1098_sa, 5498_sa
+    # parsed_data: full JSON returned by Claude for the document
+    # Key fields are denormalized for fast aggregation in the draft return calc.
+    """CREATE TABLE IF NOT EXISTS tax_docs (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        tax_year            INTEGER NOT NULL,
+        doc_type            TEXT NOT NULL,
+        issuer              TEXT,
+        source_file         TEXT,
+        parsed_data         TEXT,
+        -- W-2 fields
+        w2_wages            REAL,
+        w2_fed_withheld     REAL,
+        w2_state_withheld   REAL,
+        w2_ss_withheld      REAL,
+        w2_medicare_withheld REAL,
+        w2_401k             REAL,
+        w2_hsa_employer     REAL,
+        -- 1098 fields
+        mortgage_interest   REAL,
+        mortgage_points     REAL,
+        property_taxes      REAL,
+        -- 1099-INT fields
+        interest_income     REAL,
+        -- 1099-DIV fields
+        ordinary_dividends  REAL,
+        qualified_dividends REAL,
+        cap_gains_dist      REAL,
+        -- 1099-B fields (stored as JSON array in parsed_data; total here)
+        proceeds            REAL,
+        cost_basis          REAL,
+        net_cap_gains       REAL,
+        -- 1099-R fields
+        gross_distribution  REAL,
+        taxable_distribution REAL,
+        distribution_code   TEXT,
+        -- 1099-G fields
+        state_refund        REAL,
+        unemployment        REAL,
+        -- giving statement fields
+        charitable_cash     REAL,
+        charitable_noncash  REAL,
+        -- HSA fields (1098-SA / 5498-SA)
+        hsa_distributions   REAL,
+        hsa_contributions   REAL,
+        -- withholding (any 1099 with box 4)
+        fed_withheld        REAL,
+        parsed_at           DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 

@@ -697,6 +697,33 @@ export async function uploadTaxPdf(file) {
   return res.json();
 }
 
+export async function uploadTaxDoc(file) {
+  const token = localStorage.getItem("vaultic_token");
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/tax/docs/upload", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  return res.json();
+}
+
+export async function getTaxDocs(year) {
+  const res = await apiFetch(`/api/tax/docs/${year}`);
+  return res.json();
+}
+
+export async function deleteTaxDoc(id) {
+  const res = await apiFetch(`/api/tax/docs/${id}`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function getDraftReturn(year) {
+  const res = await apiFetch(`/api/tax/draft/${year}`);
+  return res.json();
+}
+
 export async function getTaxProjection(year) {
   const res = await apiFetch(`/api/tax/projection/${year}`);
   return res.json();

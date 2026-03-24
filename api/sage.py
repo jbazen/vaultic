@@ -217,6 +217,17 @@ TOOLS = [
         },
     },
     {
+        "name": "get_draft_return",
+        "description": "Calculate a complete draft 1040 for a given tax year using all uploaded tax documents (W-2s, 1099s, 1098s, giving statements). Returns line-by-line income, deductions, tax, withholding, and estimated refund or amount owed. Use when the user wants to know their tax situation for a specific year based on actual documents they've uploaded.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "Tax year (e.g. 2025)"}
+            },
+            "required": ["year"],
+        },
+    },
+    {
         "name": "get_tax_projection",
         "description": "Get a projected tax liability estimate for 2025 using YTD paystub data extrapolated to a full year. Returns projected gross income, deduction, taxable income, estimated tax, projected withholding, and estimated refund or amount owed. Use when the user asks about their 2025 taxes, whether they owe money, if they're on track with withholding, or wants a tax estimate.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
@@ -584,6 +595,65 @@ def _call_tool(name: str, inputs: dict) -> str:
             if not result:
                 return "No paystubs have been uploaded yet."
             return str(result)
+
+        elif name == "get_draft_return":
+            from api.routers.tax import get_draft_return as _draft
+            year = inputs.get("year", 2025)
+            # Call the endpoint logic directly
+            from api.routers.tax import _calc_tax, _BRACKETS_2025_MFJ, _DOC_TYPE_LABELS
+            with get_db() as conn:
+                docs = conn.execute(
+                    "SELECT * FROM tax_docs WHERE tax_year = ?", (year,)
+                ).fetchall()
+                filed = conn.execute(
+                    "SELECT * FROM tax_returns WHERE tax_year = ?", (year,)
+                ).fetchone()
+            docs = [dict(d) for d in docs]
+            if not docs:
+                return f"No tax documents uploaded for {year} yet. Ask the user to upload their W-2s, 1099s, and other tax documents on the Tax page."
+            doc_types = list({d["doc_type"] for d in docs})
+            missing = []
+            if "w2" not in doc_types: missing.append("W-2")
+            if "1098" not in doc_types: missing.append("1098 (mortgage interest)")
+            def _sum(f): return sum((d.get(f) or 0) for d in docs)
+            wages = _sum("w2_wages")
+            interest = _sum("interest_income")
+            ord_div = _sum("ordinary_dividends")
+            cap_gains = _sum("net_cap_gains") + _sum("cap_gains_dist")
+            retirement = _sum("taxable_distribution")
+            total_income = wages + interest + ord_div + cap_gains + retirement
+            hsa_ded = max(0, _sum("hsa_contributions") - _sum("w2_hsa_employer"))
+            agi = total_income - hsa_ded
+            std = {2024: 29200, 2025: 30000}.get(year, 30000)
+            mortgage = _sum("mortgage_interest") + _sum("mortgage_points")
+            salt = min(10000, _sum("property_taxes") + _sum("w2_state_withheld"))
+            charity = _sum("charitable_cash") + _sum("charitable_noncash")
+            itemized = mortgage + salt + charity
+            ded_method = "itemized" if itemized > std else "standard"
+            ded_amt = itemized if itemized > std else std
+            taxable = max(0, agi - ded_amt)
+            brackets = _BRACKETS_2025_MFJ if year == 2025 else [
+                (23200, 0.10), (94300, 0.12), (201050, 0.22),
+                (383900, 0.24), (487450, 0.32), (731200, 0.35), (float("inf"), 0.37),
+            ]
+            gross_tax = _calc_tax(taxable, brackets)
+            net_tax = max(0, gross_tax - 4000)
+            withheld = _sum("w2_fed_withheld") + sum((d.get("fed_withheld") or 0) for d in docs if d.get("doc_type") != "w2")
+            delta = withheld - net_tax
+            return str({
+                "year": year, "docs_uploaded": doc_types,
+                "missing_docs": missing,
+                "wages": round(wages), "total_income": round(total_income),
+                "agi": round(agi), "deduction_method": ded_method,
+                "deduction": round(ded_amt), "itemized_total": round(itemized),
+                "taxable_income": round(taxable), "gross_tax": round(gross_tax),
+                "child_tax_credit": 4000, "net_tax": round(net_tax),
+                "total_withheld": round(withheld),
+                "refund": round(delta) if delta >= 0 else None,
+                "owed": round(-delta) if delta < 0 else None,
+                "effective_rate": round(net_tax / agi * 100, 2) if agi else None,
+                "note": f"Missing documents: {missing}" if missing else "All key documents present."
+            })
 
         elif name == "get_tax_projection":
             import httpx

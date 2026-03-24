@@ -453,3 +453,350 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
         "effective_rate": effective_rate,
         "employers": [{"employer": s["employer"], "ytd_gross": s.get("ytd_gross"), "ytd_federal": s.get("ytd_federal"), "pay_date": s.get("pay_date")} for s in stubs],
     }
+
+
+# ── Universal tax document upload ─────────────────────────────────────────────
+
+_DOC_TYPE_LABELS = {
+    "w2": "W-2",
+    "1098": "1098 Mortgage Interest",
+    "1099_int": "1099-INT Interest",
+    "1099_div": "1099-DIV Dividends",
+    "1099_b": "1099-B Investment Sales",
+    "1099_r": "1099-R Retirement",
+    "1099_g": "1099-G State Refund",
+    "giving_statement": "Charitable Giving Statement",
+    "1098_sa": "1098-SA HSA Distributions",
+    "5498_sa": "5498-SA HSA Contributions",
+}
+
+_DOC_PARSE_PROMPT = """You are a tax document parser. First identify the document type, then extract all key fields.
+
+Return ONLY a valid JSON object (numbers without $ or commas, null for missing values):
+
+{{
+  "doc_type": one of: "w2", "1098", "1099_int", "1099_div", "1099_b", "1099_r", "1099_g", "giving_statement", "1098_sa", "5498_sa",
+  "tax_year": <4-digit year the document covers>,
+  "issuer": <company/institution name that issued this document>,
+
+  // W-2 fields (if doc_type is "w2"):
+  "w2_wages": <Box 1 wages>,
+  "w2_fed_withheld": <Box 2 federal income tax withheld>,
+  "w2_ss_withheld": <Box 4 Social Security tax withheld>,
+  "w2_medicare_withheld": <Box 6 Medicare tax withheld>,
+  "w2_state_withheld": <Box 17 state income tax withheld>,
+  "w2_401k": <Box 12 code D - 401k contributions>,
+  "w2_hsa_employer": <Box 12 code W - employer HSA contributions>,
+
+  // 1098 mortgage interest (if doc_type is "1098"):
+  "mortgage_interest": <Box 1 mortgage interest received>,
+  "mortgage_points": <Box 6 points paid>,
+  "property_taxes": <Box 10 real estate taxes>,
+
+  // 1099-INT (if doc_type is "1099_int"):
+  "interest_income": <Box 1 interest income>,
+  "fed_withheld": <Box 4 federal income tax withheld>,
+
+  // 1099-DIV (if doc_type is "1099_div"):
+  "ordinary_dividends": <Box 1a total ordinary dividends>,
+  "qualified_dividends": <Box 1b qualified dividends>,
+  "cap_gains_dist": <Box 2a total capital gain distributions>,
+  "fed_withheld": <Box 4 federal income tax withheld>,
+
+  // 1099-B investment sales (if doc_type is "1099_b"):
+  "proceeds": <total proceeds from all sales>,
+  "cost_basis": <total cost basis from all sales>,
+  "net_cap_gains": <proceeds minus cost basis — positive = gain, negative = loss>,
+  "fed_withheld": <any federal tax withheld>,
+
+  // 1099-R retirement (if doc_type is "1099_r"):
+  "gross_distribution": <Box 1 gross distribution>,
+  "taxable_distribution": <Box 2a taxable amount>,
+  "distribution_code": <Box 7 distribution code>,
+  "fed_withheld": <Box 4 federal income tax withheld>,
+
+  // 1099-G state refund (if doc_type is "1099_g"):
+  "state_refund": <Box 2 state or local income tax refund>,
+  "unemployment": <Box 1 unemployment compensation>,
+  "fed_withheld": <Box 4 federal income tax withheld>,
+
+  // Charitable giving statement:
+  "charitable_cash": <total cash/check/card donations>,
+  "charitable_noncash": <total non-cash donations>,
+
+  // 1098-SA HSA distributions:
+  "hsa_distributions": <Box 1 total distributions>,
+
+  // 5498-SA HSA contributions:
+  "hsa_contributions": <Box 2 total contributions>
+}}
+
+Document text:
+{text}
+
+Return ONLY the JSON object, no explanation."""
+
+
+def _parse_tax_doc_with_ai(pdf_path: str) -> dict:
+    """Auto-detect and parse any tax document using Claude Haiku."""
+    text_pages = []
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages[:8]:
+            t = page.extract_text()
+            if t:
+                text_pages.append(t)
+    full_text = "\n\n".join(text_pages)
+    if not full_text.strip():
+        raise ValueError("Could not extract text from PDF")
+
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    prompt = _DOC_PARSE_PROMPT.format(text=full_text[:12000])
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=768,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    logger.info("Tax doc raw AI response: %s", raw)
+    return json.loads(raw)
+
+
+@router.post("/docs/upload")
+async def upload_tax_doc(
+    file: UploadFile = File(...),
+    _user: str = Depends(get_current_user),
+):
+    """Upload any tax document PDF — auto-detects type and parses fields."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    suffix = Path(file.filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    try:
+        data = _parse_tax_doc_with_ai(tmp_path)
+    except Exception as e:
+        logger.error(f"Tax doc parse failed: {e}")
+        raise HTTPException(status_code=422, detail=f"Could not parse document: {e}")
+    finally:
+        os.unlink(tmp_path)
+
+    doc_type = data.get("doc_type")
+    tax_year = data.get("tax_year")
+    if not doc_type or not tax_year:
+        raise HTTPException(status_code=422, detail="Could not determine document type or tax year")
+
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO tax_docs (
+                tax_year, doc_type, issuer, source_file, parsed_data,
+                w2_wages, w2_fed_withheld, w2_state_withheld, w2_ss_withheld,
+                w2_medicare_withheld, w2_401k, w2_hsa_employer,
+                mortgage_interest, mortgage_points, property_taxes,
+                interest_income, ordinary_dividends, qualified_dividends,
+                cap_gains_dist, proceeds, cost_basis, net_cap_gains,
+                gross_distribution, taxable_distribution, distribution_code,
+                state_refund, unemployment, charitable_cash, charitable_noncash,
+                hsa_distributions, hsa_contributions, fed_withheld
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            tax_year, doc_type, data.get("issuer"), file.filename,
+            json.dumps(data),
+            data.get("w2_wages"), data.get("w2_fed_withheld"),
+            data.get("w2_state_withheld"), data.get("w2_ss_withheld"),
+            data.get("w2_medicare_withheld"), data.get("w2_401k"),
+            data.get("w2_hsa_employer"), data.get("mortgage_interest"),
+            data.get("mortgage_points"), data.get("property_taxes"),
+            data.get("interest_income"), data.get("ordinary_dividends"),
+            data.get("qualified_dividends"), data.get("cap_gains_dist"),
+            data.get("proceeds"), data.get("cost_basis"),
+            data.get("net_cap_gains"), data.get("gross_distribution"),
+            data.get("taxable_distribution"), data.get("distribution_code"),
+            data.get("state_refund"), data.get("unemployment"),
+            data.get("charitable_cash"), data.get("charitable_noncash"),
+            data.get("hsa_distributions"), data.get("hsa_contributions"),
+            data.get("fed_withheld"),
+        ))
+
+    return {
+        "ok": True,
+        "doc_type": doc_type,
+        "doc_type_label": _DOC_TYPE_LABELS.get(doc_type, doc_type),
+        "tax_year": tax_year,
+        "issuer": data.get("issuer"),
+        "data": data,
+    }
+
+
+@router.get("/docs/{year}")
+async def list_tax_docs(year: int, _user: str = Depends(get_current_user)):
+    """List all uploaded tax documents for a given year."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tax_docs WHERE tax_year = ? ORDER BY doc_type, issuer",
+            (year,)
+        ).fetchall()
+    docs = []
+    for r in rows:
+        d = dict(r)
+        d["doc_type_label"] = _DOC_TYPE_LABELS.get(d["doc_type"], d["doc_type"])
+        d.pop("parsed_data", None)  # don't send raw JSON to frontend
+        docs.append(d)
+    return docs
+
+
+@router.delete("/docs/{doc_id}")
+async def delete_tax_doc(doc_id: int, _user: str = Depends(get_current_user)):
+    """Remove an uploaded tax document."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM tax_docs WHERE id = ?", (doc_id,))
+    return {"ok": True}
+
+
+@router.get("/draft/{year}")
+async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
+    """Calculate a complete draft 1040 from all uploaded documents for the year.
+
+    Aggregates W-2s, 1099s, 1098s, and charitable giving to produce
+    line-by-line figures for a complete federal return.
+    """
+    STANDARD_DEDUCTIONS = {2024: 29200, 2025: 30000}
+    CHILD_CREDIT_PER_CHILD = 2000
+    NUM_CHILDREN = 2
+    BRACKETS = {
+        2025: _BRACKETS_2025_MFJ,
+        2024: [
+            (23200, 0.10), (94300, 0.12), (201050, 0.22),
+            (383900, 0.24), (487450, 0.32), (731200, 0.35),
+            (float("inf"), 0.37),
+        ],
+    }
+
+    with get_db() as conn:
+        docs = conn.execute(
+            "SELECT * FROM tax_docs WHERE tax_year = ?", (year,)
+        ).fetchall()
+        # Also pull actual filed return if available (for comparison)
+        filed = conn.execute(
+            "SELECT * FROM tax_returns WHERE tax_year = ?", (year,)
+        ).fetchone()
+
+    docs = [dict(d) for d in docs]
+    filed = dict(filed) if filed else None
+
+    def _sum(field):
+        return sum((d.get(field) or 0) for d in docs)
+
+    # ── Income ────────────────────────────────────────────────────────────────
+    wages = _sum("w2_wages")
+    interest = _sum("interest_income")
+    ordinary_div = _sum("ordinary_dividends")
+    qualified_div = _sum("qualified_dividends")
+    cap_gains = _sum("net_cap_gains") + _sum("cap_gains_dist")
+    retirement_dist = _sum("taxable_distribution")
+    state_refund = _sum("state_refund")  # only taxable if itemized prior year
+    unemployment = _sum("unemployment")
+
+    total_income = wages + interest + ordinary_div + cap_gains + retirement_dist + unemployment
+
+    # ── Adjustments ───────────────────────────────────────────────────────────
+    # HSA deduction: employee contributions (contributions - employer portion)
+    hsa_contributions = _sum("hsa_contributions")
+    hsa_employer = _sum("w2_hsa_employer")
+    hsa_deduction = max(0, hsa_contributions - hsa_employer)
+    adjustments = hsa_deduction
+    agi = total_income - adjustments
+
+    # ── Deductions ────────────────────────────────────────────────────────────
+    std_ded = STANDARD_DEDUCTIONS.get(year, 30000)
+    mortgage_interest = _sum("mortgage_interest") + _sum("mortgage_points")
+    charitable_cash = _sum("charitable_cash")
+    charitable_noncash = _sum("charitable_noncash")
+    property_taxes = _sum("property_taxes")
+    # SALT capped at $10,000
+    salt = min(10000, property_taxes + _sum("w2_state_withheld"))
+    total_itemized = mortgage_interest + charitable_cash + charitable_noncash + salt
+
+    if total_itemized > std_ded:
+        deduction_method = "itemized"
+        deduction_amount = total_itemized
+    else:
+        deduction_method = "standard"
+        deduction_amount = std_ded
+
+    taxable_income = max(0, agi - deduction_amount)
+
+    # ── Tax calculation ───────────────────────────────────────────────────────
+    brackets = BRACKETS.get(year, _BRACKETS_2025_MFJ)
+    gross_tax = _calc_tax(taxable_income, brackets)
+    child_credit = min(NUM_CHILDREN * CHILD_CREDIT_PER_CHILD, gross_tax)
+    net_tax = max(0, gross_tax - child_credit)
+
+    # ── Withholding ───────────────────────────────────────────────────────────
+    w2_withheld = _sum("w2_fed_withheld")
+    other_withheld = sum(
+        (d.get("fed_withheld") or 0) for d in docs
+        if d.get("doc_type") != "w2"
+    )
+    total_withheld = w2_withheld + other_withheld
+
+    # ── Result ────────────────────────────────────────────────────────────────
+    delta = total_withheld - net_tax
+    refund = round(delta) if delta >= 0 else None
+    owed = round(-delta) if delta < 0 else None
+    effective_rate = round(net_tax / agi * 100, 2) if agi > 0 else None
+
+    doc_summary = {}
+    for d in docs:
+        dt = d["doc_type"]
+        doc_summary.setdefault(dt, []).append(d.get("issuer") or d.get("source_file") or dt)
+
+    return {
+        "year": year,
+        "has_docs": len(docs) > 0,
+        "doc_summary": doc_summary,
+        "income": {
+            "wages": round(wages, 2),
+            "interest": round(interest, 2),
+            "ordinary_dividends": round(ordinary_div, 2),
+            "qualified_dividends": round(qualified_div, 2),
+            "capital_gains": round(cap_gains, 2),
+            "retirement_distributions": round(retirement_dist, 2),
+            "unemployment": round(unemployment, 2),
+            "total": round(total_income, 2),
+        },
+        "adjustments": round(adjustments, 2),
+        "agi": round(agi, 2),
+        "deductions": {
+            "method": deduction_method,
+            "amount": round(deduction_amount, 2),
+            "standard_deduction": std_ded,
+            "itemized_breakdown": {
+                "mortgage_interest": round(mortgage_interest, 2),
+                "salt": round(salt, 2),
+                "charitable_cash": round(charitable_cash, 2),
+                "charitable_noncash": round(charitable_noncash, 2),
+                "total": round(total_itemized, 2),
+            },
+        },
+        "taxable_income": round(taxable_income, 2),
+        "gross_tax": round(gross_tax, 2),
+        "child_tax_credit": child_credit,
+        "net_tax": round(net_tax, 2),
+        "withholding": {
+            "w2_withheld": round(w2_withheld, 2),
+            "other_withheld": round(other_withheld, 2),
+            "total": round(total_withheld, 2),
+        },
+        "refund": refund,
+        "owed": owed,
+        "effective_rate": effective_rate,
+        "filed_return": filed,
+    }
