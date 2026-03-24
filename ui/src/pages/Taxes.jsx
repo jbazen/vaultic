@@ -4,7 +4,7 @@
  * Sage is the primary interface for tax questions and planning.
  */
 import { useState, useEffect, useRef } from "react";
-import { getTaxSummary, uploadTaxPdf, getPaystubsYtd, uploadPaystub } from "../api.js";
+import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub } from "../api.js";
 
 // Currency formatter
 function fmt(v) {
@@ -43,7 +43,7 @@ export default function Taxes() {
 
   useEffect(() => {
     loadSummary();
-    getPaystubsYtd().then(setPaystubs).catch(() => {});
+    getPaystubs().then(setPaystubs).catch(() => {});
   }, []);
 
   // Color for refund (green) vs owed (red)
@@ -79,7 +79,7 @@ export default function Taxes() {
     }
     setStubMsg(results.join(" · "));
     setStubUploading(false);
-    getPaystubsYtd().then(setPaystubs).catch(() => {});
+    getPaystubs().then(setPaystubs).catch(() => {});
     if (stubInputRef.current) stubInputRef.current.value = "";
   }
 
