@@ -4,7 +4,7 @@
  * Sage is the primary interface for tax questions and planning.
  */
 import { useState, useEffect, useRef } from "react";
-import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub } from "../api.js";
+import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub, getTaxProjection, getW4s, uploadW4 } from "../api.js";
 
 // Currency formatter
 function fmt(v) {
@@ -34,6 +34,12 @@ export default function Taxes() {
   const [stubMsg, setStubMsg] = useState(null);
   const stubInputRef = useRef(null);
 
+  const [projection, setProjection] = useState(null);
+  const [w4s, setW4s] = useState([]);
+  const [w4Uploading, setW4Uploading] = useState(false);
+  const [w4Msg, setW4Msg] = useState(null);
+  const w4InputRef = useRef(null);
+
   function loadSummary() {
     getTaxSummary()
       .then(setSummary)
@@ -44,6 +50,8 @@ export default function Taxes() {
   useEffect(() => {
     loadSummary();
     getPaystubs().then(setPaystubs).catch(() => {});
+    getTaxProjection(2025).then(setProjection).catch(() => {});
+    getW4s().then(setW4s).catch(() => {});
   }, []);
 
   // Color for refund (green) vs owed (red)
@@ -57,6 +65,27 @@ export default function Taxes() {
     if (row.refund > 0) return `+${fmt(row.refund)}`;
     if (row.owed > 0) return `-${fmt(row.owed)}`;
     return "—";
+  }
+
+  async function handleW4Upload(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setW4Uploading(true);
+    setW4Msg(null);
+    const results = [];
+    for (const file of files) {
+      try {
+        const res = await uploadW4(file);
+        if (res.ok) results.push(`${res.employer}: parsed`);
+        else results.push(`${file.name}: ${res.detail || "parse failed"}`);
+      } catch (err) {
+        results.push(`${file.name}: ${err.message}`);
+      }
+    }
+    setW4Msg(results.join(" · "));
+    setW4Uploading(false);
+    getW4s().then(setW4s).catch(() => {});
+    if (w4InputRef.current) w4InputRef.current.value = "";
   }
 
   async function handleStubUpload(e) {
@@ -292,6 +321,96 @@ export default function Taxes() {
               </div>
             );
           })()}
+
+          {/* 2025 Tax Projection */}
+          {projection && (
+            <div className="card" style={{ marginBottom: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>2025 Tax Projection</div>
+              <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 16 }}>
+                Based on YTD data as of {projection.as_of_pay_date} · {Math.round((projection.year_fraction_elapsed || 0) * 100)}% through the year
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 16 }}>
+                {[
+                  { label: "Projected Gross", value: fmt(projection.proj_gross) },
+                  { label: "Deduction", value: fmt(projection.deduction_amount), sub: projection.deduction_method?.includes("itemized") ? "ITEM" : "STD" },
+                  { label: "Taxable Income", value: fmt(projection.taxable_income) },
+                  { label: "Est. Tax Owed", value: fmt(projection.net_tax) },
+                  { label: "Proj. Withheld", value: fmt(projection.proj_federal_withheld) },
+                  {
+                    label: projection.refund ? "Est. Refund" : "Est. Owed",
+                    value: projection.refund ? `+${fmt(projection.refund)}` : `-${fmt(projection.owed)}`,
+                    color: projection.refund ? "#34d399" : "#f87171",
+                    highlight: true,
+                  },
+                ].map(item => (
+                  <div key={item.label} style={{
+                    background: "var(--bg3)",
+                    borderRadius: 10,
+                    padding: "12px 14px",
+                    border: item.highlight ? `1px solid ${item.color || "var(--accent)"}` : "1px solid var(--border)",
+                  }}>
+                    <div style={{ fontSize: 11, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>
+                      {item.label}
+                      {item.sub && <span style={{ marginLeft: 6, color: "#a78bfa", fontSize: 10 }}>{item.sub}</span>}
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 18, color: item.color || "inherit" }}>{item.value}</div>
+                  </div>
+                ))}
+              </div>
+              {projection.effective_rate && (
+                <div style={{ fontSize: 13, color: "var(--text2)" }}>
+                  Projected effective rate: <strong style={{ color: "#f59e0b" }}>{projection.effective_rate}%</strong>
+                  {" · "}Child tax credit applied: <strong>{fmt(projection.child_tax_credit)}</strong>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* W-4s on file */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>W-4s on File</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {w4Msg && <span style={{ fontSize: 12, color: "var(--text2)" }}>{w4Msg}</span>}
+                <input ref={w4InputRef} type="file" accept=".pdf" multiple style={{ display: "none" }} onChange={handleW4Upload} />
+                <button
+                  onClick={() => w4InputRef.current?.click()}
+                  disabled={w4Uploading}
+                  style={{ padding: "6px 14px", borderRadius: 8, background: "#7c3aed", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: w4Uploading ? "not-allowed" : "pointer", opacity: w4Uploading ? 0.7 : 1, whiteSpace: "nowrap" }}
+                >
+                  {w4Uploading ? "Parsing…" : "Upload W-4"}
+                </button>
+              </div>
+            </div>
+            {w4s.length === 0 ? (
+              <div style={{ color: "var(--text2)", fontSize: 14, textAlign: "center", padding: "16px 0" }}>
+                No W-4s uploaded yet. Upload your current W-4s to enable the withholding optimizer.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
+                      {["Employer", "Filing Status", "Dependents Credit", "Extra/Period", "Effective Date"].map(h => (
+                        <th key={h} style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {w4s.map(w => (
+                      <tr key={w.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                        <td style={{ padding: "12px 12px", fontWeight: 600 }}>{w.employer || "—"}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", textTransform: "capitalize" }}>{(w.filing_status || "—").replace(/_/g, " ")}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(w.dependents_amount)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: w.extra_withholding > 0 ? "#34d399" : "inherit" }}>{w.extra_withholding > 0 ? fmt(w.extra_withholding) : "—"}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--text2)" }}>{w.effective_date || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
 
           {/* Paystubs — YTD summary */}
           <div className="card" style={{ marginBottom: 20 }}>

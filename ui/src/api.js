@@ -697,6 +697,28 @@ export async function uploadTaxPdf(file) {
   return res.json();
 }
 
+export async function getTaxProjection(year) {
+  const res = await apiFetch(`/api/tax/projection/${year}`);
+  return res.json();
+}
+
+export async function getW4s() {
+  const res = await apiFetch("/api/tax/w4s");
+  return res.json();
+}
+
+export async function uploadW4(file) {
+  const token = localStorage.getItem("vaultic_token");
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/tax/upload-w4", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  return res.json();
+}
+
 export async function getPaystubs() {
   const res = await apiFetch("/api/paystubs");
   return res.json();

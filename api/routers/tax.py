@@ -228,3 +228,228 @@ async def parse_tax_pdf(
         ))
 
     return {"ok": True, "tax_year": tax_year, "data": data}
+
+
+# ── W-4 endpoints ─────────────────────────────────────────────────────────────
+
+@router.post("/upload-w4")
+async def upload_w4(
+    file: UploadFile = File(...),
+    _user: str = Depends(get_current_user),
+):
+    """Upload and parse a W-4 PDF. Stores withholding elections in w4s table."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    text_pages = []
+    suffix = Path(file.filename).suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    try:
+        with pdfplumber.open(tmp_path) as pdf:
+            for page in pdf.pages[:3]:
+                t = page.extract_text()
+                if t:
+                    text_pages.append(t)
+        full_text = "\n\n".join(text_pages)
+        if not full_text.strip():
+            raise ValueError("Could not extract text from PDF")
+
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        prompt = f"""You are a W-4 parser. Extract withholding election data from this IRS Form W-4.
+
+Return ONLY a valid JSON object (numbers without $ or commas, null for missing):
+{{
+  "employer": <employer name if shown, otherwise null>,
+  "employee_name": <employee full name>,
+  "filing_status": "single", "married_filing_jointly", or "head_of_household",
+  "multiple_jobs": <true if Step 2 checkbox is checked, else false>,
+  "dependents_amount": <Step 3 total dollar amount for dependents/credits, or null>,
+  "other_income": <Step 4a other income amount, or null>,
+  "deductions": <Step 4b deductions amount, or null>,
+  "extra_withholding": <Step 4c additional withholding per pay period, or null>,
+  "effective_date": <date signed as YYYY-MM-DD, or null>
+}}
+
+W-4 text:
+{full_text[:6000]}
+
+Return ONLY the JSON object."""
+
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        data = json.loads(raw)
+        logger.info("W-4 parsed: %s", data)
+    except Exception as e:
+        logger.error(f"W-4 parse failed: {e}")
+        raise HTTPException(status_code=422, detail=f"Could not parse W-4: {e}")
+    finally:
+        os.unlink(tmp_path)
+
+    employer = data.get("employer") or Path(file.filename).stem
+    eff_date = data.get("effective_date") or "unknown"
+
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO w4s (
+                employer, employee_name, filing_status, multiple_jobs,
+                dependents_amount, other_income, deductions,
+                extra_withholding, effective_date, source_file
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(employer, effective_date) DO UPDATE SET
+                filing_status=excluded.filing_status,
+                multiple_jobs=excluded.multiple_jobs,
+                dependents_amount=excluded.dependents_amount,
+                other_income=excluded.other_income,
+                deductions=excluded.deductions,
+                extra_withholding=excluded.extra_withholding,
+                source_file=excluded.source_file,
+                parsed_at=CURRENT_TIMESTAMP
+        """, (
+            employer, data.get("employee_name"), data.get("filing_status"),
+            1 if data.get("multiple_jobs") else 0,
+            data.get("dependents_amount"), data.get("other_income"),
+            data.get("deductions"), data.get("extra_withholding"),
+            eff_date, file.filename,
+        ))
+
+    return {"ok": True, "employer": employer, "data": data}
+
+
+@router.get("/w4s")
+async def list_w4s(_user: str = Depends(get_current_user)):
+    """Return all W-4s on file."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM w4s ORDER BY parsed_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Tax projection ─────────────────────────────────────────────────────────────
+
+# 2025 MFJ tax brackets
+_BRACKETS_2025_MFJ = [
+    (23850,   0.10),
+    (96950,   0.12),
+    (206700,  0.22),
+    (394600,  0.24),
+    (501050,  0.32),
+    (751600,  0.35),
+    (float("inf"), 0.37),
+]
+
+def _calc_tax(taxable_income: float, brackets) -> float:
+    tax = 0.0
+    prev = 0.0
+    for ceiling, rate in brackets:
+        if taxable_income <= prev:
+            break
+        chunk = min(taxable_income, ceiling) - prev
+        tax += chunk * rate
+        prev = ceiling
+    return round(tax, 2)
+
+
+@router.get("/projection/{year}")
+async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
+    """Project tax liability for the given year using YTD paystub data.
+
+    Extrapolates YTD gross and withholding to full-year figures, applies
+    the MFJ tax brackets, and estimates refund or amount owed.
+    """
+    from datetime import date as _date
+
+    if year != 2025:
+        raise HTTPException(status_code=400, detail="Projection only supported for 2025 currently")
+
+    # MFJ standard deduction and child tax credit for 2025
+    STANDARD_DEDUCTION = 30000
+    CHILD_TAX_CREDIT_PER_CHILD = 2000
+    NUM_CHILDREN = 2  # John and Milo
+
+    with get_db() as conn:
+        # Most recent paystub per employer for YTD totals
+        stubs = conn.execute("""
+            SELECT p.* FROM paystubs p
+            INNER JOIN (
+                SELECT employer, MAX(pay_date) AS latest FROM paystubs GROUP BY employer
+            ) l ON p.employer = l.employer AND p.pay_date = l.latest
+        """).fetchall()
+
+        # Prior year tax return for deduction baseline
+        prior = conn.execute(
+            "SELECT * FROM tax_returns WHERE tax_year = ?", (year - 1,)
+        ).fetchone()
+
+    if not stubs:
+        raise HTTPException(status_code=404, detail="No paystubs uploaded — cannot project")
+
+    stubs = [dict(s) for s in stubs]
+    prior = dict(prior) if prior else {}
+
+    # Sum YTD figures across all employers
+    ytd_gross = sum(s.get("ytd_gross") or 0 for s in stubs)
+    ytd_federal = sum(s.get("ytd_federal") or 0 for s in stubs)
+
+    # Determine fraction of year elapsed from most recent pay date
+    latest_pay_date_str = max(s["pay_date"] for s in stubs if s.get("pay_date"))
+    latest_pay_date = _date.fromisoformat(latest_pay_date_str)
+    year_start = _date(year, 1, 1)
+    year_end = _date(year, 12, 31)
+    days_elapsed = (latest_pay_date - year_start).days + 1
+    days_in_year = (year_end - year_start).days + 1
+    year_fraction = days_elapsed / days_in_year
+
+    # Extrapolate to full year
+    proj_gross = round(ytd_gross / year_fraction) if year_fraction > 0 else ytd_gross
+    proj_federal_withheld = round(ytd_federal / year_fraction) if year_fraction > 0 else ytd_federal
+
+    # Deduction: use prior year itemized if it beat standard, else standard
+    prior_itemized = prior.get("total_itemized") or 0
+    if prior_itemized > STANDARD_DEDUCTION:
+        deduction_method = "itemized (estimated from prior year)"
+        deduction_amount = prior_itemized  # conservative — use prior year as estimate
+    else:
+        deduction_method = "standard"
+        deduction_amount = STANDARD_DEDUCTION
+
+    # Taxable income and tax
+    taxable_income = max(0, proj_gross - deduction_amount)
+    gross_tax = _calc_tax(taxable_income, _BRACKETS_2025_MFJ)
+    child_credit = NUM_CHILDREN * CHILD_TAX_CREDIT_PER_CHILD
+    net_tax = max(0, gross_tax - child_credit)
+
+    # Result
+    delta = proj_federal_withheld - net_tax
+    refund = round(delta) if delta > 0 else None
+    owed = round(-delta) if delta < 0 else None
+    effective_rate = round(net_tax / proj_gross * 100, 2) if proj_gross > 0 else None
+
+    return {
+        "year": year,
+        "year_fraction_elapsed": round(year_fraction, 3),
+        "as_of_pay_date": latest_pay_date_str,
+        "ytd_gross": round(ytd_gross),
+        "proj_gross": proj_gross,
+        "deduction_method": deduction_method,
+        "deduction_amount": deduction_amount,
+        "taxable_income": round(taxable_income),
+        "gross_tax": gross_tax,
+        "child_tax_credit": child_credit,
+        "net_tax": round(net_tax),
+        "proj_federal_withheld": proj_federal_withheld,
+        "refund": refund,
+        "owed": owed,
+        "effective_rate": effective_rate,
+        "employers": [{"employer": s["employer"], "ytd_gross": s.get("ytd_gross"), "ytd_federal": s.get("ytd_federal"), "pay_date": s.get("pay_date")} for s in stubs],
+    }

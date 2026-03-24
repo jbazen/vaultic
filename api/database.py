@@ -457,6 +457,24 @@ MIGRATIONS = [
         parsed_at               DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(employer, pay_date)
     )""",
+
+    # w4s: one row per W-4 on file per employer.
+    # Stores key withholding elections so the W-4 optimizer knows current setup.
+    """CREATE TABLE IF NOT EXISTS w4s (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        employer            TEXT,
+        employee_name       TEXT,
+        filing_status       TEXT,
+        multiple_jobs       INTEGER DEFAULT 0,
+        dependents_amount   REAL,
+        other_income        REAL,
+        deductions          REAL,
+        extra_withholding   REAL,
+        effective_date      TEXT,
+        source_file         TEXT,
+        parsed_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(employer, effective_date)
+    )""",
 ]
 
 

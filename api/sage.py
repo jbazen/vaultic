@@ -217,6 +217,11 @@ TOOLS = [
         },
     },
     {
+        "name": "get_tax_projection",
+        "description": "Get a projected tax liability estimate for 2025 using YTD paystub data extrapolated to a full year. Returns projected gross income, deduction, taxable income, estimated tax, projected withholding, and estimated refund or amount owed. Use when the user asks about their 2025 taxes, whether they owe money, if they're on track with withholding, or wants a tax estimate.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_tax_history",
         "description": "Get the user's tax return history. Returns year-over-year income, AGI, effective tax rate, deductions, refunds/owed, and key deduction items (mortgage interest, charitable giving, SALT). Use this when the user asks about taxes, their tax history, withholding, whether they should itemize, W-4 adjustments, or any tax-related question.",
         "input_schema": {
@@ -579,6 +584,57 @@ def _call_tool(name: str, inputs: dict) -> str:
             if not result:
                 return "No paystubs have been uploaded yet."
             return str(result)
+
+        elif name == "get_tax_projection":
+            import httpx
+            try:
+                # Call our own projection endpoint internally
+                token_row = None
+                with get_db() as conn:
+                    token_row = conn.execute("SELECT token FROM auth_tokens LIMIT 1").fetchone()
+                # Just compute inline to avoid circular HTTP call
+                from api.routers.tax import _calc_tax, _BRACKETS_2025_MFJ
+                from datetime import date as _date
+                STANDARD_DEDUCTION = 30000
+                CHILD_CREDIT = 4000
+                with get_db() as conn:
+                    stubs = conn.execute("""
+                        SELECT p.* FROM paystubs p
+                        INNER JOIN (
+                            SELECT employer, MAX(pay_date) AS latest FROM paystubs GROUP BY employer
+                        ) l ON p.employer = l.employer AND p.pay_date = l.latest
+                    """).fetchall()
+                    prior = conn.execute("SELECT * FROM tax_returns WHERE tax_year = 2024").fetchone()
+                if not stubs:
+                    return "No paystubs uploaded yet — ask the user to upload a recent paystub from the Tax page."
+                stubs = [dict(s) for s in stubs]
+                prior = dict(prior) if prior else {}
+                ytd_gross = sum(s.get("ytd_gross") or 0 for s in stubs)
+                ytd_federal = sum(s.get("ytd_federal") or 0 for s in stubs)
+                latest_date = max(s["pay_date"] for s in stubs if s.get("pay_date"))
+                ld = _date.fromisoformat(latest_date)
+                frac = ((ld - _date(2025, 1, 1)).days + 1) / 365
+                frac = max(0.01, min(frac, 1.0))
+                proj_gross = round(ytd_gross / frac)
+                proj_withheld = round(ytd_federal / frac)
+                prior_itemized = prior.get("total_itemized") or 0
+                deduction = prior_itemized if prior_itemized > STANDARD_DEDUCTION else STANDARD_DEDUCTION
+                taxable = max(0, proj_gross - deduction)
+                gross_tax = _calc_tax(taxable, _BRACKETS_2025_MFJ)
+                net_tax = max(0, gross_tax - CHILD_CREDIT)
+                delta = proj_withheld - net_tax
+                return str({
+                    "year": 2025, "as_of": latest_date,
+                    "proj_gross": proj_gross, "deduction": deduction,
+                    "taxable_income": round(taxable), "net_tax": round(net_tax),
+                    "proj_withheld": proj_withheld,
+                    "refund": round(delta) if delta > 0 else None,
+                    "owed": round(-delta) if delta < 0 else None,
+                    "effective_rate": round(net_tax / proj_gross * 100, 2) if proj_gross else None,
+                    "note": "Projection based on YTD paystub data extrapolated to full year. Deduction estimated from prior year Schedule A if itemized > standard."
+                })
+            except Exception as e:
+                return f"Could not compute projection: {e}"
 
         elif name == "get_tax_history":
             year = inputs.get("year")
