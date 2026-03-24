@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.dependencies import get_current_user, get_client_ip
-from api.routers import auth, plaid, accounts, net_worth, manual, sage, pdf, crypto, budget, funds, sheet, push
+from api.routers import auth, plaid, accounts, net_worth, manual, sage, pdf, crypto, budget, funds, sheet, push, tax
 from api import security_log
 
 logging.basicConfig(level=logging.INFO)
@@ -132,6 +132,7 @@ app.include_router(sheet.router, dependencies=[Depends(get_current_user)])
 # GET /api/push/vapid-public-key is intentionally public (needed pre-login).
 # Auth is enforced per-endpoint inside the push router.
 app.include_router(push.router)
+app.include_router(tax.router, prefix="/api/tax", dependencies=[Depends(get_current_user)])
 
 
 @app.get("/api/health")

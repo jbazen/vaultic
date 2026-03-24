@@ -161,6 +161,19 @@ export default function SageChat() {
   const manualRec = useRef(null);      // for the manual mic button
   const awakeWhisperRef = useRef(null); // {recorder, audioContext, stream, rafId} — Whisper capture after wake word
 
+  // ── sage:prompt — pre-fill and open from other pages (e.g. Tax quick-prompts) ──
+
+  useEffect(() => {
+    function handleSagePrompt(e) {
+      setInput(e.detail || "");
+      setOpen(true);
+      // Focus the input after the panel opens on next tick
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+    window.addEventListener("sage:prompt", handleSagePrompt);
+    return () => window.removeEventListener("sage:prompt", handleSagePrompt);
+  }, []);
+
   // ── Persist session ──────────────────────────────────────────────────────────
 
   useEffect(() => {

@@ -669,6 +669,34 @@ export async function sendTestPush() {
   return res.json();
 }
 
+// ─── Tax ──────────────────────────────────────────────────────────────────────
+export async function getTaxReturns() {
+  const res = await apiFetch("/api/tax/returns");
+  return res.json();
+}
+
+export async function getTaxReturn(year) {
+  const res = await apiFetch(`/api/tax/returns/${year}`);
+  return res.json();
+}
+
+export async function getTaxSummary() {
+  const res = await apiFetch("/api/tax/summary");
+  return res.json();
+}
+
+export async function uploadTaxPdf(file) {
+  const token = localStorage.getItem("vaultic_token");
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/tax/parse-pdf", {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  return res.json();
+}
+
 /**
  * Exchange the stored device_token for a fresh JWT.
  *

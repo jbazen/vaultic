@@ -373,6 +373,64 @@ MIGRATIONS = [
     # account transfers, credits, and other non-spending items that Sage can't
     # reliably categorize and that the user wants to permanently dismiss.
     "ALTER TABLE transactions ADD COLUMN budget_deleted INTEGER DEFAULT 0",
+    # ── Tax module ─────────────────────────────────────────────────────────────
+    # tax_returns: one row per tax year, storing all key 1040 line items parsed
+    # from uploaded PDFs via Claude Haiku. UNIQUE on tax_year so re-importing
+    # a corrected PDF uses ON CONFLICT DO UPDATE to overwrite the prior parse.
+    """CREATE TABLE IF NOT EXISTS tax_returns (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        tax_year        INTEGER NOT NULL UNIQUE,
+        filing_status   TEXT DEFAULT 'married_filing_jointly',
+        -- Income
+        wages_w2        REAL,
+        taxable_interest REAL,
+        qualified_dividends REAL,
+        ordinary_dividends REAL,
+        capital_gains   REAL,
+        ira_distributions REAL,
+        other_income    REAL,
+        total_income    REAL,
+        adjustments_to_income REAL,
+        agi             REAL,
+        -- Deductions
+        deduction_method TEXT,
+        deduction_amount REAL,
+        qbi_deduction   REAL,
+        taxable_income  REAL,
+        -- Tax & Credits
+        total_tax       REAL,
+        child_tax_credit REAL,
+        other_credits   REAL,
+        total_credits   REAL,
+        -- Payments & Result
+        w2_withheld     REAL,
+        total_payments  REAL,
+        refund          REAL,
+        owed            REAL,
+        effective_rate  REAL,
+        -- Itemized deduction breakdown
+        salt_deduction  REAL,
+        mortgage_interest REAL,
+        charitable_cash REAL,
+        charitable_noncash REAL,
+        mortgage_insurance REAL,
+        total_itemized  REAL,
+        -- Metadata
+        source_file     TEXT,
+        parsed_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+        notes           TEXT
+    )""",
+    # tax_documents: stores metadata about uploaded tax document files.
+    # parsed_data holds the raw JSON returned by Claude for audit/debug purposes.
+    """CREATE TABLE IF NOT EXISTS tax_documents (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        tax_year        INTEGER,
+        doc_type        TEXT NOT NULL,
+        filename        TEXT NOT NULL,
+        file_path       TEXT NOT NULL,
+        parsed_data     TEXT,
+        uploaded_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 

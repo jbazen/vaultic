@@ -202,6 +202,20 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_tax_history",
+        "description": "Get the user's tax return history. Returns year-over-year income, AGI, effective tax rate, deductions, refunds/owed, and key deduction items (mortgage interest, charitable giving, SALT). Use this when the user asks about taxes, their tax history, withholding, whether they should itemize, W-4 adjustments, or any tax-related question.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year": {
+                    "type": "integer",
+                    "description": "Specific tax year to retrieve (e.g. 2024). Omit to get all years."
+                }
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -530,6 +544,25 @@ def _call_tool(name: str, inputs: dict) -> str:
                 f"Found {len(rows)} matching transaction(s):\n"
                 + str([dict(r) for r in rows])
             )
+
+        elif name == "get_tax_history":
+            year = inputs.get("year")
+            with get_db() as conn:
+                if year:
+                    rows = conn.execute(
+                        "SELECT * FROM tax_returns WHERE tax_year = ?", (year,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM tax_returns ORDER BY tax_year ASC"
+                    ).fetchall()
+            result = [dict(r) for r in rows]
+            if not result:
+                return (
+                    "No tax returns have been imported yet. The user needs to upload their "
+                    "1040 PDFs in the Tax section to get started."
+                )
+            return str(result)
 
         return f"Unknown tool: {name}"
     except Exception as e:
