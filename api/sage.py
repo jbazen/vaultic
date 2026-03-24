@@ -15,35 +15,54 @@ logger = logging.getLogger("vaultic.sage")
 NOTES_PATH = Path(__file__).parent.parent / "data" / "sage_notes.md"
 MODEL = "claude-haiku-4-5-20251001"
 
-SYSTEM_PROMPT = """You are Sage — a personal CFO, wealth-building advisor, and financial thought partner. You are a man. You live inside Vaultic, the user's personal financial command center.
+SYSTEM_PROMPT = """You are Sage — a personal CFO, wealth-building advisor, tax expert, and financial thought partner. You are a man. You live inside Vaultic, the user's personal financial command center.
 
-You have direct, real-time access to their complete financial picture through your tools. Before answering any question about their finances, call the relevant tools to get current data — never make up numbers.
+You have direct, real-time access to their complete financial picture through your tools. Before answering any question about their finances, ALWAYS call the relevant tools to get current data — never make up numbers or estimate when you can look it up.
 
 You also have full internet access via web_search and fetch_page. Use these to:
 - Look up current stock prices, crypto prices, market data
-- Research tax rules, contribution limits, IRS guidelines
+- Research current tax law, IRS rules, contribution limits, bracket thresholds
 - Find current mortgage rates, CD rates, HYSA rates
 - Research any financial topic the user asks about
 - Get news about their holdings or institutions
 
-Your personality:
-- Direct and confident — give specific advice, not generic disclaimers
-- Proactive — notice things the user hasn't asked about yet
-- Educational — explain the "why" behind your recommendations
-- Personal — always use their actual numbers, not hypotheticals
+## Tax expertise
+You are their personal tax advisor. You know their complete tax history (2019-2024) and have access to all uploaded tax documents for the current year. When answering tax questions:
+- Always call get_tax_history first to see their actual historical numbers
+- Call get_draft_return for the current year if they've uploaded documents
+- Call get_paystubs for YTD income and withholding data
+- Call get_tax_projection for a full-year estimate
+- Use web_search to verify current IRS rules, limits, and brackets — tax law changes every year
+- Give specific, actionable advice: exact dollar amounts, which lines to change on their W-4, whether to itemize
+- Proactively flag things they haven't asked about: over-withholding, missed deductions, opportunities
 
-Your financial tools cover:
+Their tax profile:
+- Filing status: Married Filing Jointly (Jason + Heather)
+- Dependents: two sons, John and Milo (child tax credit eligible)
+- Income: high W-2 earners (~$280k+), Jason is Software Developer, Heather is Stay-at-Home Parent
+- Location: Phoenix, AZ
+- Always itemized deductions 2019-2024 (mortgage interest + SALT + charitable giving consistently beat standard)
+- Consistently over-withholding — large refunds every year ($7k-$13k range)
+- Accounts: Vanguard/Voya/Insperity 401ks, Rocket Mortgage, Health Equity/Optum HSA
+
+## Your personality
+- Direct and confident — give specific advice, not "consult a tax professional" disclaimers
+- Proactive — notice things they haven't asked about (over-withholding, deduction opportunities, etc.)
+- Educational — explain the why behind your recommendations
+- Personal — always use their actual numbers, never hypotheticals
+
+## Financial tools
 - All bank accounts, credit cards, mortgage (via Plaid)
 - 401k accounts: Vanguard, Voya, Insperity
-- Brokerage: Robinhood
-- Crypto: Coinbase, River (coming soon)
-- Manual entries: home value, car value, credit score
-- NFS/Investor360 accounts (Parker Financial IRAs, college fund) — may be entered manually
-- Net worth history and trends
+- Brokerage: Robinhood; Crypto: Coinbase
+- Manual entries: home value ($655k), car, credit score
+- Parker Financial IRAs and college fund
+- Full budget and transaction history
+- Tax returns 2019-2024, current-year documents, paystubs, W-4s, draft return
 
-On every new conversation, read your notes first — they contain important context about the user's goals, situation, and preferences. Update your notes whenever you learn something worth remembering long-term.
+On every new conversation, read your notes first — they contain important context about the user's goals and preferences. Update notes whenever you learn something worth remembering.
 
-Keep responses concise but substantive. Use their actual numbers. Be the trusted financial advisor they can ask anything."""
+Keep responses concise but substantive. Use their actual numbers. Be the trusted financial advisor and tax expert they never have to pay for."""
 
 TOOLS = [
     {
@@ -212,6 +231,19 @@ TOOLS = [
                     "type": "boolean",
                     "description": "If true, return only the most recent paystub per employer (which has the YTD totals). Default true."
                 }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "optimize_w4",
+        "description": "Calculate optimal W-4 withholding adjustments. Given a target refund/owed amount, computes what Step 4c (extra withholding per paycheck) should be set to on the employee's W-4. Uses actual draft return or projection data. Use when the user asks about adjusting withholding, W-4 changes, or wants to stop over/under withholding.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_refund": {"type": "number", "description": "Desired refund at filing (e.g. 0 for break-even, 500 for small refund). Default 0."},
+                "year": {"type": "integer", "description": "Tax year to optimize for. Default 2025."},
+                "pay_periods_remaining": {"type": "integer", "description": "Pay periods left in the year. If omitted, calculated from current date."},
             },
             "required": [],
         },
@@ -595,6 +627,94 @@ def _call_tool(name: str, inputs: dict) -> str:
             if not result:
                 return "No paystubs have been uploaded yet."
             return str(result)
+
+        elif name == "optimize_w4":
+            from datetime import date as _date
+            from api.routers.tax import _calc_tax, _BRACKETS_2025_MFJ
+            target_refund = inputs.get("target_refund", 0)
+            year = inputs.get("year", 2025)
+            pay_periods_remaining = inputs.get("pay_periods_remaining")
+
+            with get_db() as conn:
+                stubs = conn.execute("""
+                    SELECT p.* FROM paystubs p
+                    INNER JOIN (SELECT employer, MAX(pay_date) AS latest FROM paystubs GROUP BY employer) l
+                    ON p.employer = l.employer AND p.pay_date = l.latest
+                """).fetchall()
+                docs = conn.execute("SELECT * FROM tax_docs WHERE tax_year = ?", (year,)).fetchall()
+                w4s = conn.execute("SELECT * FROM w4s").fetchall()
+
+            stubs = [dict(s) for s in stubs]
+            docs = [dict(d) for d in docs]
+            w4s = [dict(w) for w in w4s]
+
+            if not stubs:
+                return "No paystubs uploaded — need paystub data to calculate W-4 optimization."
+
+            def _sum(rows, field): return sum((r.get(field) or 0) for r in rows)
+
+            # Get projected figures
+            ytd_gross = _sum(stubs, "ytd_gross")
+            ytd_federal = _sum(stubs, "ytd_federal")
+            latest_date = max(s["pay_date"] for s in stubs if s.get("pay_date"))
+            ld = _date.fromisoformat(latest_date)
+            frac = max(0.01, ((ld - _date(year, 1, 1)).days + 1) / 365)
+            proj_gross = ytd_gross / frac
+
+            # Deduction
+            std = {2024: 29200, 2025: 30000}.get(year, 30000)
+            if docs:
+                mortgage = _sum(docs, "mortgage_interest") + _sum(docs, "mortgage_points")
+                salt = min(10000, _sum(docs, "property_taxes") + _sum(docs, "w2_state_withheld"))
+                charity = _sum(docs, "charitable_cash") + _sum(docs, "charitable_noncash")
+                itemized = mortgage + salt + charity
+                ded = itemized if itemized > std else std
+            else:
+                ded = std
+
+            taxable = max(0, proj_gross - ded)
+            brackets = _BRACKETS_2025_MFJ if year == 2025 else [
+                (23200, 0.10), (94300, 0.12), (201050, 0.22),
+                (383900, 0.24), (487450, 0.32), (731200, 0.35), (float("inf"), 0.37),
+            ]
+            net_tax = max(0, _calc_tax(taxable, brackets) - 4000)
+
+            # How much total withholding is needed
+            needed_total = net_tax - target_refund
+            proj_withheld = ytd_federal / frac
+
+            # Gap between projected withholding and needed
+            gap = needed_total - proj_withheld  # positive = need more, negative = over-withholding
+
+            # Pay periods remaining
+            if not pay_periods_remaining:
+                days_left = ((_date(year, 12, 31) - ld).days)
+                pay_periods_remaining = max(1, round(days_left / 14))  # assume bi-weekly
+
+            extra_per_period = round(gap / pay_periods_remaining, 2) if pay_periods_remaining > 0 else 0
+
+            current_extra = sum(w.get("extra_withholding") or 0 for w in w4s)
+
+            return str({
+                "year": year,
+                "projected_annual_income": round(proj_gross),
+                "projected_tax_liability": round(net_tax),
+                "projected_withholding": round(proj_withheld),
+                "current_over_under": round(proj_withheld - net_tax),
+                "target_refund": target_refund,
+                "additional_needed_total": round(gap),
+                "pay_periods_remaining": pay_periods_remaining,
+                "recommended_extra_withholding_per_period": extra_per_period,
+                "current_extra_withholding_on_w4": current_extra,
+                "w4_step_4c_change": round(extra_per_period - current_extra, 2),
+                "note": (
+                    f"To get a ~${abs(int(target_refund))} {'refund' if target_refund >= 0 else 'payment'} at filing, "
+                    f"{'increase' if extra_per_period > current_extra else 'decrease'} Step 4c on your W-4 "
+                    f"by ${abs(round(extra_per_period - current_extra, 2))}/paycheck. "
+                    f"Currently {'over-withholding' if proj_withheld > net_tax else 'under-withholding'} "
+                    f"by ${abs(round(proj_withheld - net_tax))} annually."
+                )
+            })
 
         elif name == "get_draft_return":
             from api.routers.tax import get_draft_return as _draft

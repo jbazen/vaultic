@@ -644,12 +644,14 @@ export default function Taxes() {
             <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Ask Sage</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {[
+                "Prepare my 2025 taxes — walk me through everything",
                 "Should we itemize or take standard in 2025?",
+                "Should Jason adjust his W-4? What should it say?",
                 "Are we on track with withholding this year?",
                 "How has our effective tax rate changed over the years?",
-                "What can we do to reduce our tax bill?",
-                "Should Jason adjust his W-4?",
+                "What can we do to reduce our 2025 tax bill?",
                 "How much more charitable giving would benefit us?",
+                "Compare our 2024 vs 2025 situation",
               ].map(q => (
                 <button
                   key={q}
