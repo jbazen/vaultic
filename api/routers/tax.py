@@ -28,7 +28,7 @@ def _parse_tax_pdf_with_ai(pdf_path: str) -> dict:
     # Extract text from first 10 pages (covers 1040 + Schedule A + Schedule 1)
     text_pages = []
     with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages[:10]:
+        for page in pdf.pages[:15]:
             t = page.extract_text()
             if t:
                 text_pages.append(t)
@@ -56,7 +56,7 @@ Return ONLY a valid JSON object with these exact fields (use null for missing va
   "total_income": <total income line>,
   "adjustments_to_income": <Schedule 1 adjustments>,
   "agi": <adjusted gross income>,
-  "deduction_method": "itemized" or "standard",
+  "deduction_method": "itemized" if Schedule A is attached and the itemized total was used, otherwise "standard" — look for the Schedule A page and its total; if Schedule A total matches the deduction line, it is itemized,
   "deduction_amount": <line 12 or 9 depending on year - total deduction taken>,
   "qbi_deduction": <qualified business income deduction if any>,
   "taxable_income": <taxable income line>,
@@ -77,7 +77,7 @@ Return ONLY a valid JSON object with these exact fields (use null for missing va
 }}
 
 Tax return text:
-{full_text[:12000]}
+{full_text[:16000]}
 
 Return ONLY the JSON object, no explanation."""
 
@@ -95,7 +95,24 @@ Return ONLY the JSON object, no explanation."""
             raw = raw[4:]
         raw = raw.strip()
 
+    logger.info("Tax PDF raw AI response: %s", raw)
     data = json.loads(raw)
+    logger.info("Tax PDF parsed data: %s", data)
+
+    # MFJ standard deduction by year — if deduction_amount doesn't match, it's itemized.
+    MFJ_STANDARD = {2019: 24400, 2020: 24800, 2021: 25100, 2022: 25900, 2023: 27700, 2024: 29200}
+    year = data.get("tax_year")
+    ded = data.get("deduction_amount")
+    if year and ded:
+        std = MFJ_STANDARD.get(year)
+        if std and abs(ded - std) > 50:
+            # Deduction amount doesn't match standard — must be itemized
+            data["deduction_method"] = "itemized"
+            logger.info("Tax %s: deduction %s != std %s → forcing itemized", year, ded, std)
+
+    # Also override if Schedule A total is present
+    if data.get("total_itemized") and data["total_itemized"] > 0:
+        data["deduction_method"] = "itemized"
 
     # Calculate effective rate
     if data.get("total_tax") and data.get("agi") and data["agi"] > 0:
