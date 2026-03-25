@@ -126,20 +126,28 @@ async def get_entry_history(entry_id: int, days: int = 1825, _user: str = Depend
         from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="days must be 1–3650")
     with get_db() as conn:
-        # Look up the entry name so we can query snapshots by name (snapshots are
-        # keyed by name rather than entry_id, since delete-before-insert on re-import
-        # would orphan snapshots if they referenced the old entry row's id).
-        row = conn.execute("SELECT name FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
+        row = conn.execute(
+            "SELECT name, account_number FROM manual_entries WHERE id = ?", (entry_id,)
+        ).fetchone()
         if not row:
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Entry not found")
-        name = row["name"]
-        rows = conn.execute("""
-            SELECT snapped_at, value AS current
-            FROM manual_entry_snapshots
-            WHERE name = ? AND snapped_at >= date('now', '-' || ? || ' days')
-            ORDER BY snapped_at ASC
-        """, (name, days)).fetchall()
+        # Match snapshots by account_number when available — survives renames and
+        # PDF name variations. Fall back to name for entries without account numbers.
+        if row["account_number"]:
+            rows = conn.execute("""
+                SELECT snapped_at, value AS current
+                FROM manual_entry_snapshots
+                WHERE account_number = ? AND snapped_at >= date('now', '-' || ? || ' days')
+                ORDER BY snapped_at ASC
+            """, (row["account_number"], days)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT snapped_at, value AS current
+                FROM manual_entry_snapshots
+                WHERE name = ? AND snapped_at >= date('now', '-' || ? || ' days')
+                ORDER BY snapped_at ASC
+            """, (row["name"], days)).fetchall()
     return [dict(r) for r in rows]
 
 

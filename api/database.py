@@ -559,6 +559,16 @@ MIGRATIONS = [
     "ALTER TABLE manual_holdings ADD COLUMN estimated_annual_income REAL",
     "ALTER TABLE manual_holdings ADD COLUMN estimated_yield_pct REAL",
 
+    # account_number as a first-class indexed column on all manual account tables.
+    # Stored normalized (uppercase, non-alphanumeric stripped) so B37-601959 == B37601959.
+    # Used for matching across re-imports regardless of display name changes.
+    "ALTER TABLE manual_entries ADD COLUMN account_number TEXT",
+    "ALTER TABLE manual_entry_snapshots ADD COLUMN account_number TEXT",
+    "ALTER TABLE manual_holdings_snapshots ADD COLUMN account_number TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_manual_entries_acct ON manual_entries(account_number)",
+    "CREATE INDEX IF NOT EXISTS idx_manual_entry_snaps_acct ON manual_entry_snapshots(account_number)",
+    "CREATE INDEX IF NOT EXISTS idx_manual_holdings_snaps_acct ON manual_holdings_snapshots(account_number)",
+
     # vault_documents: every uploaded file stored in the document vault.
     # The actual file lives at file_path on the server filesystem.
     # category covers both tax and non-tax documents.

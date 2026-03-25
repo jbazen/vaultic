@@ -208,11 +208,28 @@ class SaveParsedRequest(BaseModel):
     entries: list[dict]
 
 
+def _normalize_acct(raw) -> str | None:
+    """Normalize an account number for matching: uppercase, strip all non-alphanumeric.
+    B37-601959, B37601959, B37 601959 all become B37601959."""
+    import re
+    if not raw:
+        return None
+    return re.sub(r"[^A-Z0-9]", "", str(raw).upper()) or None
+
+
 @router.post("/save")
 async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_user)):
     """Save confirmed parsed entries as manual entries, including holdings and activity summary.
-    Replaces any existing manual entry with the same name to prevent duplicates
-    when re-importing an updated statement."""
+
+    Matching priority (most → least reliable):
+      1. Normalized account_number (strips hyphens/spaces so B37-601959 == B37601959)
+      2. Entry name (fallback for accounts without account numbers)
+
+    Historical vs current:
+      If the statement's period_end date is older than the latest snapshot already stored
+      for this account, it's treated as historical: only snapshots are written, the main
+      manual_entries record (current balance shown on dashboard) is left untouched.
+    """
     from datetime import date, datetime as dt
     today = date.today().isoformat()
     saved = 0
@@ -225,7 +242,6 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             return None
 
     def _parse_date(raw):
-        """Parse a date string in any common format to YYYY-MM-DD, or return None."""
         if not raw:
             return None
         for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d"):
@@ -241,86 +257,134 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             category = str(e.get("category", "other_asset"))
             value = float(e.get("value", 0))
             notes = str(e.get("notes", ""))[:200]
-            summary = e.get("activity_summary")
+            summary = e.get("activity_summary") or {}
             summary_json = json.dumps(summary) if summary else None
             if not name:
                 continue
 
-            # Delete existing entry with same name OR same account_number so re-imports don't
-            # double-count in net worth. Account_number match handles name variations across
-            # different PDF formats for the same account.
-            # ON DELETE CASCADE removes stale holdings; history is preserved in snapshots tables.
-            conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
-            acct_num = (summary or {}).get("account_number")
+            acct_num = _normalize_acct(summary.get("account_number"))
+
+            # Resolve snapshot date from statement period_end. Falls back to today.
+            snapshot_date = today
+            raw_date = summary.get("period_end") or summary.get("ending_date")
+            parsed_date = _parse_date(raw_date)
+            if parsed_date:
+                snapshot_date = parsed_date
+
+            # Find existing entry: account_number first (robust to renames and PDF name
+            # variations), then name as fallback.
+            existing = None
+            if acct_num:
+                existing = conn.execute(
+                    "SELECT id, name, account_number FROM manual_entries WHERE account_number = ?",
+                    (acct_num,)
+                ).fetchone()
+            if not existing:
+                existing = conn.execute(
+                    "SELECT id, name, account_number FROM manual_entries WHERE name = ?",
+                    (name,)
+                ).fetchone()
+
+            # Determine if this is a historical import: period_end <= latest snapshot
+            # already stored for this account. If so, only write snapshots — don't
+            # overwrite the current balance on the dashboard.
+            is_historical = False
+            if existing:
+                latest_snap = conn.execute(
+                    """SELECT MAX(snapped_at) FROM manual_entry_snapshots
+                       WHERE (account_number = ? AND account_number IS NOT NULL)
+                          OR (account_number IS NULL AND name = ?)""",
+                    (acct_num, existing["name"])
+                ).fetchone()[0]
+                if latest_snap and snapshot_date <= latest_snap:
+                    is_historical = True
+
+            if is_historical:
+                # Use the existing entry's stable id and name for all snapshot writes.
+                entry_id = existing["id"]
+                canonical_name = existing["name"]
+            else:
+                # Delete old entry by account_number or name, then insert fresh.
+                if existing:
+                    conn.execute("DELETE FROM manual_entries WHERE id = ?", (existing["id"],))
+                else:
+                    conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
+                cursor = conn.execute(
+                    """INSERT INTO manual_entries
+                       (name, category, value, notes, summary_json, account_number, entered_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (name, category, value, notes, summary_json, acct_num, today)
+                )
+                entry_id = cursor.lastrowid
+                canonical_name = name
+                saved += 1
+
+            # Account-level balance snapshot — always written, keyed by account_number
+            # when available so renames don't orphan history.
+            # Delete any existing row for same account+date under a different name first.
             if acct_num:
                 conn.execute(
-                    "DELETE FROM manual_entries WHERE json_extract(summary_json, '$.account_number') = ?",
-                    (acct_num,)
+                    "DELETE FROM manual_entry_snapshots WHERE account_number = ? AND snapped_at = ?",
+                    (acct_num, snapshot_date)
                 )
-            cursor = conn.execute(
-                "INSERT INTO manual_entries (name, category, value, notes, summary_json, entered_at) VALUES (?,?,?,?,?,?)",
-                (name, category, value, notes, summary_json, today)
-            )
-            entry_id = cursor.lastrowid
-            saved += 1
-
-            # Determine snapshot date from the statement period_end field (new prompt)
-            # or ending_balance date fields (old prompt). Falls back to today.
-            snapshot_date = today
-            if summary:
-                raw = summary.get("period_end") or summary.get("ending_date")
-                parsed = _parse_date(raw)
-                if parsed:
-                    snapshot_date = parsed
-
-            # Account-level balance snapshot (for net worth / performance chart history)
             conn.execute("""
-                INSERT INTO manual_entry_snapshots (name, category, value, snapped_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(name, snapped_at) DO UPDATE SET value = excluded.value
-            """, (name, category, value, snapshot_date))
+                INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(name, snapped_at) DO UPDATE SET
+                    value = excluded.value,
+                    account_number = excluded.account_number
+            """, (canonical_name, acct_num, category, value, snapshot_date))
 
-            # Holdings — current snapshot (replaces previous holdings for this entry)
             holdings = e.get("holdings") or []
-            for h in holdings:
-                h_name = str(h.get("name", ""))[:200]
-                if not h_name:
-                    continue
-                conn.execute("""
-                    INSERT INTO manual_holdings
-                        (manual_entry_id, name, ticker, asset_class, shares, price, value,
-                         pct_assets, principal, gain_loss_dollars, gain_loss_pct,
-                         avg_unit_cost, estimated_annual_income, estimated_yield_pct, notes)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (
-                    entry_id, h_name,
-                    h.get("ticker") or None,
-                    h.get("asset_class") or None,
-                    _f(h, "shares"), _f(h, "price"), _f(h, "value"),
-                    _f(h, "pct_assets"),
-                    _f(h, "cost") or _f(h, "principal"),   # support both field names
-                    _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"),
-                    _f(h, "avg_unit_cost"),
-                    _f(h, "estimated_annual_income"),
-                    _f(h, "estimated_yield_pct"),
-                    str(h.get("notes", "") or "")[:200] or None,
-                ))
 
-            # Holdings snapshot — append-only dated record so we keep full history
-            # even after re-importing a newer statement overwrites manual_holdings.
+            # Current holdings — only written/replaced when this is the most recent statement.
+            if not is_historical:
+                for h in holdings:
+                    h_name = str(h.get("name", ""))[:200]
+                    if not h_name:
+                        continue
+                    conn.execute("""
+                        INSERT INTO manual_holdings
+                            (manual_entry_id, name, ticker, asset_class, shares, price, value,
+                             pct_assets, principal, gain_loss_dollars, gain_loss_pct,
+                             avg_unit_cost, estimated_annual_income, estimated_yield_pct, notes)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, (
+                        entry_id, h_name,
+                        h.get("ticker") or None,
+                        h.get("asset_class") or None,
+                        _f(h, "shares"), _f(h, "price"), _f(h, "value"),
+                        _f(h, "pct_assets"),
+                        _f(h, "cost") or _f(h, "principal"),
+                        _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"),
+                        _f(h, "avg_unit_cost"),
+                        _f(h, "estimated_annual_income"),
+                        _f(h, "estimated_yield_pct"),
+                        str(h.get("notes", "") or "")[:200] or None,
+                    ))
+
+            # Holdings snapshots — always written, append-only dated history.
+            # Delete any row for same account+date+holding under a different entry_name first.
             for h in holdings:
                 h_name = str(h.get("name", ""))[:200]
                 if not h_name:
                     continue
+                if acct_num:
+                    conn.execute(
+                        """DELETE FROM manual_holdings_snapshots
+                           WHERE account_number = ? AND snapped_at = ? AND holding_name = ?""",
+                        (acct_num, snapshot_date, h_name)
+                    )
                 conn.execute("""
                     INSERT INTO manual_holdings_snapshots
-                        (entry_name, snapped_at, holding_name, ticker, asset_class,
+                        (entry_name, account_number, snapped_at, holding_name, ticker, asset_class,
                          shares, price, value, cost, avg_unit_cost,
                          gain_loss_dollars, gain_loss_pct, pct_assets,
                          estimated_annual_income, estimated_yield_pct)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(entry_name, snapped_at, holding_name)
                     DO UPDATE SET
+                        account_number=excluded.account_number,
                         shares=excluded.shares, price=excluded.price, value=excluded.value,
                         cost=excluded.cost, avg_unit_cost=excluded.avg_unit_cost,
                         gain_loss_dollars=excluded.gain_loss_dollars,
@@ -329,7 +393,7 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                         estimated_annual_income=excluded.estimated_annual_income,
                         estimated_yield_pct=excluded.estimated_yield_pct
                 """, (
-                    name, snapshot_date, h_name,
+                    canonical_name, acct_num, snapshot_date, h_name,
                     h.get("ticker") or None,
                     h.get("asset_class") or None,
                     _f(h, "shares"), _f(h, "price"), _f(h, "value"),
