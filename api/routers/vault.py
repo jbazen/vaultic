@@ -3,12 +3,15 @@ Document Vault — stores and organizes all uploaded financial documents.
 Every uploaded PDF (tax docs, paystubs, W-4s, 1040s, investment statements)
 is saved here. Files persist year-over-year and can be downloaded at any time.
 """
+import io
+import json
 import os
-import shutil
 import logging
 from datetime import datetime
 from pathlib import Path
 
+import anthropic
+import pdfplumber
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
@@ -50,6 +53,86 @@ EXPECTED_DOCS = [
     {"category": "giving_statement", "issuer": None,              "description": "Charitable giving statement"},
     {"category": "5498_sa",          "issuer": "Health Equity",   "description": "5498-SA — HSA contributions"},
 ]
+
+
+def _parse_vault_metadata(file_bytes: bytes) -> dict:
+    """
+    Read the first 5 pages of a PDF and ask Claude Haiku to extract key metadata.
+    Returns a dict with any subset of: account_name, account_holder, account_number,
+    institution, period_end (YYYY-MM-DD), doc_type (matching CATEGORY_LABELS keys),
+    suggested_name (clean display name for the file).
+    Returns {} on any failure — caller falls back to manual fields.
+    """
+    try:
+        pages = []
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages[:5]:
+                t = page.extract_text()
+                if t:
+                    pages.append(t)
+        full_text = "\n\n".join(pages)
+        if not full_text.strip():
+            return {}
+
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        prompt = f"""You are a financial document classifier. Analyze this PDF text and extract metadata.
+
+Return ONLY a valid JSON object. Use null for any field not found.
+
+{{
+  "account_holder": <full name of account owner, e.g. "Heather A Bazen">,
+  "account_name": <account/product name, e.g. "Premiere Select Roth IRA">,
+  "account_number": <account number, masked is fine, e.g. "B37-601959">,
+  "institution": <financial institution name, e.g. "Parker Financial" or "Chase">,
+  "period_end": <statement end date as YYYY-MM-DD, e.g. "2025-03-31">,
+  "doc_type": <one of: investment_statement | bank_statement | tax_return | w2 | 1099_int | 1099_div | 1099_b | 1099_r | 1099_g | 1098 | giving_statement | 1098_sa | 5498_sa | w4 | paystub | insurance | other>
+}}
+
+PDF text (first 5 pages):
+{full_text[:6000]}
+
+Return ONLY the JSON object."""
+
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        return json.loads(raw)
+    except Exception as exc:
+        logger.warning("Vault metadata parse failed: %s", exc)
+        return {}
+
+
+def _smart_filename(meta: dict, original: str) -> str:
+    """Build a clean display filename from parsed metadata."""
+    parts = []
+    if meta.get("account_holder"):
+        # Shorten "Heather A Bazen" → "Heather Bazen"
+        name_parts = meta["account_holder"].split()
+        short = f"{name_parts[0]} {name_parts[-1]}" if len(name_parts) > 1 else name_parts[0]
+        parts.append(short)
+    if meta.get("account_name"):
+        parts.append(meta["account_name"])
+    if meta.get("account_number"):
+        parts.append(meta["account_number"])
+    if meta.get("period_end"):
+        try:
+            parts.append(meta["period_end"][:7])  # YYYY-MM
+        except Exception:
+            pass
+    if parts:
+        safe = " - ".join(parts)
+        # Keep only safe filename chars
+        safe = "".join(c if c.isalnum() or c in " -_." else "_" for c in safe)
+        return safe.strip() + ".pdf"
+    return original
 
 
 def vault_path(year: int, category: str, filename: str) -> Path:
@@ -320,22 +403,69 @@ async def get_deduction_tracker(year: int, _user: str = Depends(get_current_user
 @router.post("/upload")
 async def upload_to_vault(
     file: UploadFile = File(...),
-    year: int = Form(...),
-    category: str = Form(...),
+    year: int = Form(0),
+    category: str = Form("other"),
     issuer: str = Form(None),
     description: str = Form(None),
+    auto_parse: bool = Form(False),
     _user: str = Depends(get_current_user),
 ):
-    """Upload any document directly to the vault without parsing."""
+    """Upload any document to the vault. When auto_parse=true (default), Claude reads
+    the PDF and fills in year, category, account name, and renames the file automatically."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
-    if category not in CATEGORY_LABELS:
-        raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
 
     file_bytes = await file.read()
+    display_name = file.filename
+    meta = {}
+
+    if auto_parse:
+        meta = _parse_vault_metadata(file_bytes)
+        logger.info("Vault auto-parse meta: %s", meta)
+
+        # Use detected doc_type as category if not explicitly set
+        if not category or category == "other":
+            detected = meta.get("doc_type", "other")
+            category = detected if detected in CATEGORY_LABELS else "other"
+
+        # Use detected period_end year if year not explicitly set
+        if not year and meta.get("period_end"):
+            try:
+                year = int(meta["period_end"][:4])
+            except Exception:
+                pass
+
+        # Fill issuer from institution
+        if not issuer and meta.get("institution"):
+            issuer = meta["institution"]
+
+        # Build description from account info
+        if not description:
+            desc_parts = []
+            if meta.get("account_name"):
+                desc_parts.append(meta["account_name"])
+            if meta.get("account_number"):
+                desc_parts.append(meta["account_number"])
+            if meta.get("period_end"):
+                try:
+                    dt = datetime.strptime(meta["period_end"], "%Y-%m-%d")
+                    desc_parts.append(dt.strftime("%B %Y"))
+                except Exception:
+                    desc_parts.append(meta["period_end"][:7])
+            if desc_parts:
+                description = " — ".join(desc_parts)
+
+        # Generate smart display filename
+        display_name = _smart_filename(meta, file.filename)
+
+    if not year:
+        year = datetime.now().year
+    if category not in CATEGORY_LABELS:
+        category = "other"
+
     with get_db() as conn:
         vault_id = save_to_vault(
-            conn, year, category, file.filename,
+            conn, year, category, display_name,
             file_bytes, issuer=issuer, description=description, parsed=False,
         )
     return {
@@ -344,6 +474,8 @@ async def upload_to_vault(
         "year": year,
         "category": category,
         "category_label": CATEGORY_LABELS[category],
+        "display_name": display_name,
+        "detected": meta if auto_parse else {},
     }
 
 

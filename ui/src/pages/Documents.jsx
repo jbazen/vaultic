@@ -60,6 +60,7 @@ export default function Documents() {
   const [uploadCategory, setUploadCategory] = useState("other");
   const [uploadIssuer, setUploadIssuer] = useState("");
   const [uploadDesc, setUploadDesc] = useState("");
+  const [autoRename, setAutoRename] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState(null);
   const fileInputRef = useRef(null);
@@ -99,9 +100,14 @@ export default function Documents() {
     const results = [];
     for (const file of files) {
       try {
-        const res = await uploadToVault(file, uploadYear, uploadCategory, uploadIssuer || null, uploadDesc || null);
-        if (res.ok) results.push(`${res.category_label}: saved`);
-        else results.push(`${file.name}: ${res.detail || "failed"}`);
+        const res = await uploadToVault(file, uploadYear, uploadCategory, uploadIssuer || null, uploadDesc || null, autoRename);
+        if (res.ok) {
+          const label = res.category_label || uploadCategory;
+          const name = res.display_name || file.name;
+          results.push(autoRename ? `${name} → ${label} (${res.year})` : `${label}: saved`);
+        } else {
+          results.push(`${file.name}: ${res.detail || "failed"}`);
+        }
       } catch (err) {
         results.push(`${file.name}: ${err.message}`);
       }
@@ -304,45 +310,77 @@ export default function Documents() {
             <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 20 }}>Upload Document</div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div>
-                <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>YEAR</label>
-                <input
-                  type="number"
-                  value={uploadYear}
-                  onChange={e => setUploadYear(Number(e.target.value))}
-                  style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
-                />
+              {/* Smart rename toggle */}
+              <div
+                onClick={() => setAutoRename(v => !v)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+                  borderRadius: 8, cursor: "pointer",
+                  background: autoRename ? "rgba(79,142,247,0.1)" : "var(--bg3)",
+                  border: `1px solid ${autoRename ? "var(--accent)" : "var(--border)"}`,
+                }}
+              >
+                <div style={{
+                  width: 36, height: 20, borderRadius: 10, position: "relative",
+                  background: autoRename ? "var(--accent)" : "var(--border)", transition: "background 0.2s",
+                }}>
+                  <div style={{
+                    position: "absolute", top: 2, left: autoRename ? 18 : 2, width: 16, height: 16,
+                    borderRadius: "50%", background: "#fff", transition: "left 0.2s",
+                  }} />
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>Smart rename & auto-categorize</div>
+                  <div style={{ fontSize: 11, color: "var(--text2)" }}>
+                    Sage reads the PDF and fills in name, type, year, and account details automatically
+                  </div>
+                </div>
               </div>
-              <div>
-                <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>DOCUMENT TYPE</label>
-                <select
-                  value={uploadCategory}
-                  onChange={e => setUploadCategory(e.target.value)}
-                  style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14 }}
-                >
-                  {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>ISSUER (optional)</label>
-                <input
-                  type="text"
-                  value={uploadIssuer}
-                  onChange={e => setUploadIssuer(e.target.value)}
-                  placeholder="e.g. Chase, Vanguard, Rocket Mortgage"
-                  style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>DESCRIPTION (optional)</label>
-                <input
-                  type="text"
-                  value={uploadDesc}
-                  onChange={e => setUploadDesc(e.target.value)}
-                  placeholder="e.g. Parker Financial Q4 2024 Statement"
-                  style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
-                />
-              </div>
+
+              {/* Manual fields — shown when smart rename is off */}
+              {!autoRename && (
+                <>
+                  <div>
+                    <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>YEAR</label>
+                    <input
+                      type="number"
+                      value={uploadYear}
+                      onChange={e => setUploadYear(Number(e.target.value))}
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>DOCUMENT TYPE</label>
+                    <select
+                      value={uploadCategory}
+                      onChange={e => setUploadCategory(e.target.value)}
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14 }}
+                    >
+                      {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>ISSUER (optional)</label>
+                    <input
+                      type="text"
+                      value={uploadIssuer}
+                      onChange={e => setUploadIssuer(e.target.value)}
+                      placeholder="e.g. Chase, Vanguard, Rocket Mortgage"
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "var(--text2)", display: "block", marginBottom: 4 }}>DESCRIPTION (optional)</label>
+                    <input
+                      type="text"
+                      value={uploadDesc}
+                      onChange={e => setUploadDesc(e.target.value)}
+                      placeholder="e.g. Parker Financial Q4 2024 Statement"
+                      style={{ width: "100%", padding: "8px 12px", borderRadius: 8, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 14, boxSizing: "border-box" }}
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             {uploadMsg && (

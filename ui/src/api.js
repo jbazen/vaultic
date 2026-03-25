@@ -718,14 +718,15 @@ export async function getDeductionTracker(year) {
   return res.json();
 }
 
-export async function uploadToVault(file, year, category, issuer, description) {
+export async function uploadToVault(file, year, category, issuer, description, autoRename = false) {
   const token = localStorage.getItem("vaultic_token");
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("year", year);
-  formData.append("category", category);
+  formData.append("year", year || 0);
+  formData.append("category", category || "other");
   if (issuer) formData.append("issuer", issuer);
   if (description) formData.append("description", description);
+  formData.append("auto_parse", autoRename ? "true" : "false");
   const res = await fetch("/api/vault/upload", {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
