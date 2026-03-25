@@ -824,6 +824,12 @@ export async function uploadPaystub(file) {
   return res.json();
 }
 
+// ── Market Rates ──────────────────────────────────────────────────────────────
+export async function getMarketRates() {
+  const res = await apiFetch("/api/market/rates");
+  return res.json(); // { rates: [{label, value, source}], cached }
+}
+
 /**
  * Exchange the stored device_token for a fresh JWT.
  *

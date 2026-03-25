@@ -4,6 +4,7 @@ import {
   getAccounts, getManualEntries, getRecentTransactions,
   getPlaidItems, removePlaidItem, renameAccount, renameManualEntry,
   updateAccountNotes, syncCoinbase, getPortfolioPerformance,
+  getMarketRates,
 } from "../api.js";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, AreaChart, Area, XAxis, YAxis } from "recharts";
 import NetWorthChart from "../components/NetWorthChart.jsx";
@@ -588,13 +589,14 @@ export default function Dashboard() {
   const [transactions, setTransactions] = useState([]);
   const [plaidItems, setPlaidItems] = useState([]);
   const [portfolioPerf, setPortfolioPerf] = useState([]);
+  const [marketRates, setMarketRates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
 
   async function load() {
     try {
-      const [nwData, hist, accts, manual, txns, items, perf] = await Promise.all([
+      const [nwData, hist, accts, manual, txns, items, perf, rates] = await Promise.all([
         getNetWorthLatest(),
         getNetWorthHistory(1825),
         getAccounts(),
@@ -602,6 +604,7 @@ export default function Dashboard() {
         getRecentTransactions(20),
         getPlaidItems(),
         getPortfolioPerformance(1825),
+        getMarketRates().catch(() => ({ rates: [] })),
       ]);
       setNw(nwData);
       setHistory(hist);
@@ -610,6 +613,7 @@ export default function Dashboard() {
       setTransactions(txns);
       setPlaidItems(items);
       setPortfolioPerf(perf);
+      setMarketRates(rates?.rates ?? []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -730,9 +734,9 @@ export default function Dashboard() {
           })}
         </div>
 
-        {/* Credit score, home value, car value — compact inline row in hero */}
-        {(creditScore || homeValue || carValue) && (
-          <div style={{ display: "flex", gap: 28, flexWrap: "wrap", paddingTop: 14, marginTop: 10, borderTop: "1px solid var(--border)" }}>
+        {/* Credit score, home value, car value + market rates — compact inline row */}
+        {(creditScore || homeValue || carValue || marketRates.length > 0) && (
+          <div style={{ display: "flex", gap: 28, flexWrap: "wrap", alignItems: "flex-start", paddingTop: 14, marginTop: 10, borderTop: "1px solid var(--border)" }}>
             {creditScore && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>Credit Score</div>
@@ -755,6 +759,20 @@ export default function Dashboard() {
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>🚗 Car</div>
                 <span style={{ fontSize: 22, fontWeight: 700, color: "#fbbf24" }}>{fmt(carValue.value)}</span>
               </div>
+            )}
+            {/* Market rates — separated by a vertical rule when other items are present */}
+            {marketRates.length > 0 && (
+              <>
+                {(creditScore || homeValue || carValue) && (
+                  <div style={{ width: 1, background: "var(--border)", alignSelf: "stretch", margin: "0 4px" }} />
+                )}
+                {marketRates.map(r => (
+                  <div key={r.label}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>{r.label}</div>
+                    <span style={{ fontSize: 22, fontWeight: 700, color: "#22d3ee" }}>{r.value.toFixed(2)}%</span>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         )}
