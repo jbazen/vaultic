@@ -177,17 +177,31 @@ async def parse_tax_pdf(
         tmp.write(file_bytes)
         tmp_path = tmp.name
 
+    parse_error = None
+    data = {}
     try:
         data = _parse_tax_pdf_with_ai(tmp_path)
     except Exception as e:
         logger.error(f"Tax PDF parse failed: {e}")
-        raise HTTPException(status_code=422, detail=f"Could not parse PDF: {e}")
+        parse_error = str(e)
     finally:
         os.unlink(tmp_path)
 
     tax_year = data.get("tax_year")
+
+    # Always vault the file
+    from api.routers.vault import save_to_vault as _save_to_vault
+    _vault_year = tax_year or datetime.now().year
+    with get_db() as conn:
+        _save_to_vault(conn, _vault_year, "tax_return", file.filename, file_bytes,
+                       issuer="IRS",
+                       description=f"{_vault_year} Form 1040" if tax_year else "Tax Return (parse failed)",
+                       parsed=not bool(parse_error))
+
+    if parse_error:
+        raise HTTPException(status_code=422, detail=f"File saved to vault but could not parse: {parse_error}")
     if not tax_year:
-        raise HTTPException(status_code=422, detail="Could not determine tax year from PDF")
+        raise HTTPException(status_code=422, detail="File saved to vault but could not determine tax year")
 
     with get_db() as conn:
         conn.execute("""
@@ -227,11 +241,6 @@ async def parse_tax_pdf(
             data.get("charitable_noncash"), data.get("mortgage_insurance"),
             data.get("total_itemized"), file.filename,
         ))
-        # Save to document vault
-        from api.routers.vault import save_to_vault
-        save_to_vault(conn, tax_year, "tax_return", file.filename, file_bytes,
-                      issuer="IRS", description=f"{tax_year} Form 1040", parsed=True)
-
     return {"ok": True, "tax_year": tax_year, "data": data}
 
 
@@ -591,16 +600,30 @@ async def upload_tax_doc(
         tmp.write(doc_file_bytes)
         tmp_path = tmp.name
 
+    parse_error = None
+    data = {}
     try:
         data = _parse_tax_doc_with_ai(tmp_path)
     except Exception as e:
         logger.error(f"Tax doc parse failed: {e}")
-        raise HTTPException(status_code=422, detail=f"Could not parse document: {e}")
+        parse_error = str(e)
     finally:
         os.unlink(tmp_path)
 
     doc_type = data.get("doc_type")
     tax_year = data.get("tax_year")
+
+    # Always vault the file regardless of parse success
+    from api.routers.vault import save_to_vault
+    vault_year = tax_year or datetime.now().year
+    with get_db() as conn:
+        save_to_vault(conn, vault_year, doc_type or "other", file.filename, doc_file_bytes,
+                      issuer=data.get("issuer"),
+                      description=_DOC_TYPE_LABELS.get(doc_type, "Tax Document") if doc_type else "Tax Document (parse failed)",
+                      parsed=not bool(parse_error))
+
+    if parse_error:
+        raise HTTPException(status_code=422, detail=f"File saved to vault but could not parse: {parse_error}")
     if not doc_type or not tax_year:
         raise HTTPException(status_code=422, detail="Could not determine document type or tax year")
 
@@ -635,11 +658,6 @@ async def upload_tax_doc(
             data.get("hsa_distributions"), data.get("hsa_contributions"),
             data.get("fed_withheld"),
         ))
-        from api.routers.vault import save_to_vault
-        save_to_vault(conn, tax_year, doc_type, file.filename, doc_file_bytes,
-                      issuer=data.get("issuer"),
-                      description=_DOC_TYPE_LABELS.get(doc_type, doc_type),
-                      parsed=True)
 
     return {
         "ok": True,

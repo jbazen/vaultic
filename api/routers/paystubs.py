@@ -123,16 +123,29 @@ async def upload_paystub(
         tmp.write(stub_file_bytes)
         tmp_path = tmp.name
 
+    parse_error = None
+    data = {}
     try:
         data = _parse_paystub_with_ai(tmp_path)
     except Exception as e:
         logger.error(f"Paystub PDF parse failed: {e}")
-        raise HTTPException(status_code=422, detail=f"Could not parse paystub: {e}")
+        parse_error = str(e)
     finally:
         os.unlink(tmp_path)
 
+    # Always vault the file
+    pay_year = int(data["pay_date"][:4]) if data.get("pay_date") else __import__("datetime").datetime.now().year
+    from api.routers.vault import save_to_vault
+    with get_db() as conn:
+        save_to_vault(conn, pay_year, "paystub", file.filename, stub_file_bytes,
+                      issuer=data.get("employer"),
+                      description=f"Pay stub — {data.get('employer', '')} {data.get('pay_date', '')}".strip(" —"),
+                      parsed=not bool(parse_error))
+
+    if parse_error:
+        raise HTTPException(status_code=422, detail=f"File saved to vault but could not parse: {parse_error}")
     if not data.get("pay_date"):
-        raise HTTPException(status_code=422, detail="Could not determine pay date from paystub")
+        raise HTTPException(status_code=422, detail="File saved to vault but could not determine pay date")
 
     with get_db() as conn:
         conn.execute("""
@@ -165,11 +178,4 @@ async def upload_paystub(
             data.get("ytd_social_security"), data.get("ytd_medicare"),
             data.get("ytd_net"), file.filename,
         ))
-        pay_year = int(data["pay_date"][:4]) if data.get("pay_date") else __import__("datetime").datetime.now().year
-        from api.routers.vault import save_to_vault
-        save_to_vault(conn, pay_year, "paystub", file.filename, stub_file_bytes,
-                      issuer=data.get("employer"),
-                      description=f"Pay stub — {data.get('employer')} {data.get('pay_date', '')}",
-                      parsed=True)
-
     return {"ok": True, "pay_date": data.get("pay_date"), "employer": data.get("employer"), "data": data}

@@ -52,6 +52,7 @@ export default function Documents() {
   const [checklist, setChecklist] = useState(null);
   const [deductions, setDeductions] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [filesOnly, setFilesOnly] = useState(false);
 
   // Upload modal state
   const [showUpload, setShowUpload] = useState(false);
@@ -117,7 +118,9 @@ export default function Documents() {
     reload(selectedYear);
   }
 
-  const grouped = groupByCategory(docs);
+  const filteredDocs = filesOnly ? docs.filter(d => d.has_file) : docs;
+  const grouped = groupByCategory(filteredDocs);
+  const fileCount = docs.filter(d => d.has_file).length;
 
   return (
     <div>
@@ -125,7 +128,7 @@ export default function Documents() {
         <div>
           <h2>Document Vault</h2>
           <p style={{ color: "var(--text2)", fontSize: 14, marginTop: 4 }}>
-            All financial documents stored securely · {docs.length} document{docs.length !== 1 ? "s" : ""} for {selectedYear}
+            {fileCount} PDF{fileCount !== 1 ? "s" : ""} stored · {docs.length - fileCount} data-only · {selectedYear}
           </p>
         </div>
         <button
@@ -136,8 +139,8 @@ export default function Documents() {
         </button>
       </div>
 
-      {/* Year selector */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+      {/* Year selector + filter */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
         {years.map(y => (
           <button
             key={y}
@@ -152,6 +155,19 @@ export default function Documents() {
             {y}
           </button>
         ))}
+        <div style={{ marginLeft: "auto" }}>
+          <button
+            onClick={() => setFilesOnly(f => !f)}
+            style={{
+              padding: "6px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer",
+              background: filesOnly ? "#f59e0b" : "var(--bg3)",
+              color: filesOnly ? "#000" : "var(--text2)",
+              border: filesOnly ? "none" : "1px solid var(--border)",
+            }}
+          >
+            {filesOnly ? "📄 PDFs only" : "📄 PDFs only"}
+          </button>
+        </div>
       </div>
 
       {loading ? (
