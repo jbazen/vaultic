@@ -305,8 +305,14 @@ export default function Documents() {
 
       {/* Upload modal */}
       {showUpload && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-          <div style={{ background: "var(--bg2)", borderRadius: 14, padding: 28, width: "100%", maxWidth: 460, border: "1px solid var(--border)" }}>
+        <div
+          onClick={() => !uploading && setShowUpload(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: "var(--bg2)", borderRadius: 14, padding: 28, width: "100%", maxWidth: 460, border: "1px solid var(--border)", maxHeight: "90vh", overflowY: "auto" }}
+          >
             <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 20 }}>Upload Document</div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -384,7 +390,9 @@ export default function Documents() {
             </div>
 
             {uploadMsg && (
-              <div style={{ marginTop: 12, fontSize: 13, color: "var(--text2)" }}>{uploadMsg}</div>
+              <div style={{ marginTop: 12, fontSize: 13, color: "var(--text2)", maxHeight: 200, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {uploadMsg.split(" · ").map((line, i) => <div key={i} style={{ padding: "3px 0", borderBottom: i < uploadMsg.split(" · ").length - 1 ? "1px solid var(--border)" : "none" }}>{line}</div>)}
+              </div>
             )}
 
             <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
