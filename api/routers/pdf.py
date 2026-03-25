@@ -370,17 +370,23 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                 )
                 logger.warning("PDF save: no match for %s acct=%s", name, acct_num)
 
-            # Historical: period_end <= latest snapshot already stored for this account.
-            # Only write snapshots — leave the dashboard balance untouched.
+            # Historical: snapshot_date is older than the most recent data we already
+            # have for this account. Uses the later of (entered_at, latest snapshot date)
+            # as the cutoff so we catch the case where the current entry was imported
+            # from a portfolio summary that created no dated snapshot.
             is_historical = False
             if existing:
+                entered_at = conn.execute(
+                    "SELECT entered_at FROM manual_entries WHERE id=?", (existing["id"],)
+                ).fetchone()["entered_at"]
                 latest_snap = conn.execute(
                     """SELECT MAX(snapped_at) FROM manual_entry_snapshots
                        WHERE (account_number = ? AND account_number IS NOT NULL)
                           OR (account_number IS NULL AND name = ?)""",
                     (acct_num, existing["name"])
                 ).fetchone()[0]
-                if latest_snap and snapshot_date < latest_snap:
+                cutoff = max(filter(None, [entered_at, latest_snap]))
+                if snapshot_date < cutoff:
                     is_historical = True
 
             if is_historical:
