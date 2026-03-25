@@ -15,58 +15,79 @@ from api import security_log
 logger = logging.getLogger("vaultic.pdf")
 router = APIRouter(prefix="/api/pdf", tags=["pdf"])
 
-PARSE_PROMPT = """You are a financial data extractor. Extract ALL data from this PDF financial statement.
+PARSE_PROMPT = """You are a financial data extractor. Extract ALL data from this PDF financial statement. Capture every number — missing data can never be recovered later.
 
 Return ONLY a JSON array with this exact structure (no explanation, no markdown):
 [
   {
-    "name": "Account or portfolio name",
+    "name": "Account or portfolio name — use the exact name from the PDF",
     "category": "one of: invested | liquid | real_estate | vehicles | crypto | other_asset | other_liability",
     "value": 12345.67,
-    "notes": "institution, account type, account number (masked), as-of date",
+    "notes": "institution name, account type, account number (masked ok), as-of date",
     "activity_summary": {
-      "beginning_balance": 598640.01,
-      "beginning_date": "1/1/2026",
-      "additions_withdrawals": 2800.00,
-      "net_change": -15325.26,
-      "ending_balance": 586114.75,
-      "ending_date": "3/16/2026",
-      "twr_pct": -2.54
+      "account_holder": "Heather A Bazen",
+      "account_number": "B37-601959",
+      "institution": "Parker Financial / NFS",
+      "period_start": "2026-02-01",
+      "period_end": "2026-02-28",
+      "beginning_balance": 150715.45,
+      "ending_balance": 151965.11,
+      "additions_withdrawals": 0.00,
+      "misc_corporate_actions": 0.00,
+      "period_income": 0.04,
+      "period_fees": 0.00,
+      "net_change": 1249.62,
+      "ytd_beginning_balance": 148170.79,
+      "ytd_additions_withdrawals": 0.00,
+      "ytd_income": 0.40,
+      "ytd_fees": -333.38,
+      "ytd_change_in_value": 4127.30,
+      "ytd_contributions": 0.00,
+      "ytd_distributions": 0.00,
+      "total_cost_basis": 124446.91,
+      "total_estimated_annual_income": 1081.07,
+      "total_gain_loss_dollars": 26890.92
     },
     "holdings": [
       {
-        "name": "Security, fund, or asset category name — use the EXACT name from the PDF (e.g. 'Large-Cap Growth', 'Vanguard 500 Index')",
-        "ticker": "VTSAX or null",
+        "name": "EXACT fund/security name from PDF",
+        "ticker": "FXAIX",
         "asset_class": "equities | fixed_income | cash | alternatives | other",
-        "shares": 123.456,
-        "price": 45.67,
-        "value": 5641.23,
-        "pct_assets": 12.5,
-        "principal": 5000.00,
-        "gain_loss_dollars": 641.23,
-        "gain_loss_pct": 12.82,
-        "notes": "any other relevant detail or null"
+        "shares": 129.121,
+        "price": 239.33,
+        "value": 30902.53,
+        "cost": 27630.30,
+        "avg_unit_cost": 213.99,
+        "gain_loss_dollars": 3272.23,
+        "gain_loss_pct": null,
+        "pct_assets": null,
+        "estimated_annual_income": 341.91,
+        "estimated_yield_pct": 1.10,
+        "notes": null
+      }
+    ],
+    "activity": [
+      {
+        "date": "2026-02-27",
+        "type": "reinvestment | buy | sell | dividend | interest | fee | transfer | other",
+        "description": "Advisory Retirement Sweep Program Net Int Reinvest",
+        "ticker": null,
+        "quantity": 0.04,
+        "amount": -0.04
       }
     ]
   }
 ]
 
 Rules:
-- Create ONE entry per account or per asset category allocation section, whichever is more detailed
-- If the PDF shows both a portfolio-level 'Asset Category Allocation' section AND individual accounts, create:
-  * One entry for the overall portfolio with the asset category allocation as holdings (e.g. 'Large-Cap Growth', 'Large-Cap Blend', etc.)
-  * Separate entries for each individual account
-- activity_summary: fill in ONLY if the PDF has a period summary (beginning balance, net change, TWR, etc.); otherwise use null
-- holdings: use [] if no detailed holdings visible; use the EXACT names from the PDF — do NOT normalize or rename them
-- asset_class mappings: equities (stocks/ETFs/equity funds/any -Cap or Foreign or Emerging category), fixed_income (bonds/bond funds), cash (money market/cash equivalents), alternatives (infrastructure/real estate funds/commodities), other
-- Use positive values for assets; positive for liabilities (category determines sign)
-- invested = 401k, IRA, brokerage, mutual funds, investment accounts
-- liquid = checking, savings, money market, HSA
-- other_liability = loans, credit cards, mortgages
-- Include statement date in notes if visible
-- Skip zero-balance entries unless intentional
-- Use null for numeric fields not present in the PDF
-- If a value is a range, use the midpoint"""
+- Create ONE entry per individual account. If the PDF shows a portfolio-level summary AND individual accounts, create entries for each individual account only (skip the rolled-up portfolio entry to avoid double-counting).
+- activity_summary: capture ALL numeric fields visible — current period AND year-to-date. Use null only if the field genuinely does not appear in the PDF.
+- holdings: extract EVERY holding shown. Use the EXACT name from the PDF — do NOT normalize or rename. Include avg_unit_cost (shown as "Average Unit Cost $X.XX" per fund), estimated_yield_pct (shown as "Estimated Yield X.XX%"), and estimated_annual_income.
+- activity: capture every transaction listed in the Activity section (buy, sell, dividend, reinvestment, fee, transfer, etc.)
+- asset_class: equities (stocks/ETFs/equity mutual funds/any growth/value/blend/cap/international category), fixed_income (bonds/bond funds), cash (money market/bank sweep/cash equivalents), alternatives (infrastructure/real estate funds/commodities), other
+- category: invested = 401k/IRA/brokerage/mutual funds; liquid = checking/savings/money market/HSA; other_liability = loans/credit cards/mortgages
+- Use positive values for assets. Use null for any numeric field not present in the PDF.
+- Skip zero-balance holdings. Include statement date in notes."""
 
 
 def _salvage_json(raw: str) -> list:
@@ -192,9 +213,28 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
     """Save confirmed parsed entries as manual entries, including holdings and activity summary.
     Replaces any existing manual entry with the same name to prevent duplicates
     when re-importing an updated statement."""
-    from datetime import date
+    from datetime import date, datetime as dt
     today = date.today().isoformat()
     saved = 0
+
+    def _f(obj, k):
+        v = obj.get(k)
+        try:
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_date(raw):
+        """Parse a date string in any common format to YYYY-MM-DD, or return None."""
+        if not raw:
+            return None
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y/%m/%d"):
+            try:
+                return dt.strptime(str(raw), fmt).date().isoformat()
+            except ValueError:
+                continue
+        return None
+
     with get_db() as conn:
         for e in body.entries:
             name = str(e.get("name", ""))[:100]
@@ -205,8 +245,9 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             summary_json = json.dumps(summary) if summary else None
             if not name:
                 continue
+
             # Delete existing entry with same name so re-imports don't double-count in net worth.
-            # ON DELETE CASCADE removes stale holdings; history is preserved in manual_entry_snapshots.
+            # ON DELETE CASCADE removes stale holdings; history is preserved in snapshots tables.
             conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
             cursor = conn.execute(
                 "INSERT INTO manual_entries (name, category, value, notes, summary_json, entered_at) VALUES (?,?,?,?,?,?)",
@@ -215,69 +256,81 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             entry_id = cursor.lastrowid
             saved += 1
 
-            # Determine snapshot date from the PDF statement period.
-            # Use ending_date from activity_summary so that uploading a historical
-            # PDF (e.g. a January statement uploaded today) records the correct
-            # historical date rather than today — this lets users build up a full
-            # performance history by uploading PDFs from past months/years.
-            # Falls back to today if no statement date is found in the PDF.
+            # Determine snapshot date from the statement period_end field (new prompt)
+            # or ending_balance date fields (old prompt). Falls back to today.
             snapshot_date = today
             if summary:
-                for date_field in ("ending_date", "beginning_date"):
-                    raw_date = summary.get(date_field)
-                    if raw_date:
-                        # PDF dates come in various formats: "3/16/2026", "2026-03-16", etc.
-                        try:
-                            from datetime import datetime
-                            for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%Y/%m/%d"):
-                                try:
-                                    snapshot_date = datetime.strptime(str(raw_date), fmt).date().isoformat()
-                                    break
-                                except ValueError:
-                                    continue
-                            break  # Stop after first successful date_field
-                        except Exception:
-                            pass  # Fall back to today
+                raw = summary.get("period_end") or summary.get("ending_date")
+                parsed = _parse_date(raw)
+                if parsed:
+                    snapshot_date = parsed
 
-            # Append a balance snapshot for performance chart history.
-            # ON CONFLICT updates value so re-importing the same statement period
-            # reflects any corrected figures without duplicating rows.
+            # Account-level balance snapshot (for net worth / performance chart history)
             conn.execute("""
                 INSERT INTO manual_entry_snapshots (name, category, value, snapped_at)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(name, snapped_at) DO UPDATE SET value = excluded.value
             """, (name, category, value, snapshot_date))
 
-            # Save holdings if present
+            # Holdings — current snapshot (replaces previous holdings for this entry)
             holdings = e.get("holdings") or []
             for h in holdings:
                 h_name = str(h.get("name", ""))[:200]
                 if not h_name:
                     continue
-                def _f(k):
-                    v = h.get(k)
-                    try:
-                        return float(v) if v is not None else None
-                    except (TypeError, ValueError):
-                        return None
                 conn.execute("""
                     INSERT INTO manual_holdings
                         (manual_entry_id, name, ticker, asset_class, shares, price, value,
-                         pct_assets, principal, gain_loss_dollars, gain_loss_pct, notes)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                         pct_assets, principal, gain_loss_dollars, gain_loss_pct,
+                         avg_unit_cost, estimated_annual_income, estimated_yield_pct, notes)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (
-                    entry_id,
-                    h_name,
+                    entry_id, h_name,
                     h.get("ticker") or None,
                     h.get("asset_class") or None,
-                    _f("shares"),
-                    _f("price"),
-                    _f("value"),
-                    _f("pct_assets"),
-                    _f("principal"),
-                    _f("gain_loss_dollars"),
-                    _f("gain_loss_pct"),
+                    _f(h, "shares"), _f(h, "price"), _f(h, "value"),
+                    _f(h, "pct_assets"),
+                    _f(h, "cost") or _f(h, "principal"),   # support both field names
+                    _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"),
+                    _f(h, "avg_unit_cost"),
+                    _f(h, "estimated_annual_income"),
+                    _f(h, "estimated_yield_pct"),
                     str(h.get("notes", "") or "")[:200] or None,
+                ))
+
+            # Holdings snapshot — append-only dated record so we keep full history
+            # even after re-importing a newer statement overwrites manual_holdings.
+            for h in holdings:
+                h_name = str(h.get("name", ""))[:200]
+                if not h_name:
+                    continue
+                conn.execute("""
+                    INSERT INTO manual_holdings_snapshots
+                        (entry_name, snapped_at, holding_name, ticker, asset_class,
+                         shares, price, value, cost, avg_unit_cost,
+                         gain_loss_dollars, gain_loss_pct, pct_assets,
+                         estimated_annual_income, estimated_yield_pct)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(entry_name, snapped_at, holding_name)
+                    DO UPDATE SET
+                        shares=excluded.shares, price=excluded.price, value=excluded.value,
+                        cost=excluded.cost, avg_unit_cost=excluded.avg_unit_cost,
+                        gain_loss_dollars=excluded.gain_loss_dollars,
+                        gain_loss_pct=excluded.gain_loss_pct,
+                        pct_assets=excluded.pct_assets,
+                        estimated_annual_income=excluded.estimated_annual_income,
+                        estimated_yield_pct=excluded.estimated_yield_pct
+                """, (
+                    name, snapshot_date, h_name,
+                    h.get("ticker") or None,
+                    h.get("asset_class") or None,
+                    _f(h, "shares"), _f(h, "price"), _f(h, "value"),
+                    _f(h, "cost") or _f(h, "principal"),
+                    _f(h, "avg_unit_cost"),
+                    _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"),
+                    _f(h, "pct_assets"),
+                    _f(h, "estimated_annual_income"),
+                    _f(h, "estimated_yield_pct"),
                 ))
 
     security_log.log_server_event(f"PDF_SAVED  user={_user}  entries={saved}")

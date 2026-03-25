@@ -528,6 +528,37 @@ MIGRATIONS = [
         parsed_at           DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
 
+    # manual_holdings_snapshots: append-only dated holdings snapshots.
+    # Every PDF import writes one row per holding per statement date so we keep
+    # full historical holdings data — what was held, at what price, cost basis,
+    # gain/loss — for every month we have a statement for.
+    # UNIQUE on (entry_name, snapped_at, holding_name) so re-importing the same
+    # statement period overwrites rather than duplicates.
+    """CREATE TABLE IF NOT EXISTS manual_holdings_snapshots (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        entry_name              TEXT NOT NULL,
+        snapped_at              DATE NOT NULL,
+        holding_name            TEXT NOT NULL,
+        ticker                  TEXT,
+        asset_class             TEXT,
+        shares                  REAL,
+        price                   REAL,
+        value                   REAL,
+        cost                    REAL,
+        avg_unit_cost           REAL,
+        gain_loss_dollars       REAL,
+        gain_loss_pct           REAL,
+        pct_assets              REAL,
+        estimated_annual_income REAL,
+        estimated_yield_pct     REAL,
+        created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(entry_name, snapped_at, holding_name)
+    )""",
+    # Add new holding-level fields to manual_holdings (current-snapshot table)
+    "ALTER TABLE manual_holdings ADD COLUMN avg_unit_cost REAL",
+    "ALTER TABLE manual_holdings ADD COLUMN estimated_annual_income REAL",
+    "ALTER TABLE manual_holdings ADD COLUMN estimated_yield_pct REAL",
+
     # vault_documents: every uploaded file stored in the document vault.
     # The actual file lives at file_path on the server filesystem.
     # category covers both tax and non-tax documents.
