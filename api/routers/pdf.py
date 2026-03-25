@@ -271,29 +271,15 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             if parsed_date:
                 snapshot_date = parsed_date
 
-            # Find existing entry — three-tier priority:
-            # 1. Normalized account_number exact match (most reliable)
-            # 2. Last-4 digits of account_number in existing entry name (e.g. "xxxx1959")
-            #    — self-healing: writes full account_number back so tier-1 matches next time
-            # 3. Entry name exact match (fallback for entries without account numbers)
+            # Find existing entry — two-tier priority:
+            # 1. Normalized account_number exact match (most reliable, survives renames)
+            # 2. Entry name exact match (fallback for entries without account numbers)
             existing = None
             if acct_num:
                 existing = conn.execute(
                     "SELECT id, name, account_number FROM manual_entries WHERE account_number = ?",
                     (acct_num,)
                 ).fetchone()
-            if not existing and acct_num and len(acct_num) >= 4:
-                last4 = acct_num[-4:]
-                existing = conn.execute(
-                    "SELECT id, name, account_number FROM manual_entries WHERE name LIKE ? AND category = ?",
-                    (f"%{last4}%", category)
-                ).fetchone()
-                if existing:
-                    # Write full account_number back so future imports hit tier-1 directly
-                    conn.execute(
-                        "UPDATE manual_entries SET account_number = ? WHERE id = ?",
-                        (acct_num, existing["id"])
-                    )
             if not existing:
                 existing = conn.execute(
                     "SELECT id, name, account_number FROM manual_entries WHERE name = ?",
