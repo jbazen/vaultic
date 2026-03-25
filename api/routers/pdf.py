@@ -208,31 +208,116 @@ class SaveParsedRequest(BaseModel):
     entries: list[dict]
 
 
+import re as _re
+
 def _normalize_acct(raw) -> str | None:
-    """Normalize an account number for matching: uppercase, strip all non-alphanumeric.
-    B37-601959, B37601959, B37 601959 all become B37601959."""
-    import re
+    """Uppercase, strip all non-alphanumeric. B37-601959 == B37601959 == B37 601959."""
     if not raw:
         return None
-    return re.sub(r"[^A-Z0-9]", "", str(raw).upper()) or None
+    return _re.sub(r"[^A-Z0-9]", "", str(raw).upper()) or None
+
+
+def _norm_str(s) -> str | None:
+    """Lowercase + collapse whitespace for fuzzy string comparison."""
+    if not s:
+        return None
+    return " ".join(str(s).lower().split())
+
+
+def _find_existing(conn, acct_num: str | None, summary: dict, name: str, category: str):
+    """
+    Find an existing manual_entries row using multi-point matching.
+    Returns (row, tier) where tier is 1–4, or (None, None) if no match.
+
+    Tier 1 — normalized account_number exact match.
+              Most reliable; survives renames, institution format changes.
+
+    Tier 2 — institution + account_holder + last-4 of account_number.
+              Three independent fields; collision is essentially impossible.
+              Works across different PDF name formats for the same account.
+
+    Tier 3 — institution + account_holder + category, only when exactly
+              one candidate exists (unambiguous). Handles PDFs that don't
+              print the full account number.
+
+    Tier 4 — display name exact match. Fallback for simple manual entries
+              (home value, car, credit score) that have no account numbers.
+
+    On any match below Tier 1, writes the normalized account_number back
+    to the entry (self-healing) so the next import uses Tier 1 directly.
+    """
+    # Tier 1: exact account_number
+    if acct_num:
+        row = conn.execute(
+            "SELECT id, name, account_number, summary_json FROM manual_entries WHERE account_number = ?",
+            (acct_num,)
+        ).fetchone()
+        if row:
+            return row, 1
+
+    # Tiers 2 & 3 require institution + account_holder from the incoming summary
+    inc_inst   = _norm_str(summary.get("institution"))
+    inc_holder = _norm_str(summary.get("account_holder"))
+
+    if inc_inst and inc_holder:
+        candidates = conn.execute(
+            "SELECT id, name, account_number, summary_json FROM manual_entries WHERE category = ?",
+            (category,)
+        ).fetchall()
+
+        tier2, tier3 = [], []
+        for row in candidates:
+            sj = json.loads(row["summary_json"]) if row["summary_json"] else {}
+            row_inst   = _norm_str(sj.get("institution"))
+            row_holder = _norm_str(sj.get("account_holder"))
+            if not row_inst or not row_holder:
+                continue
+            # Institution fuzzy: "parker financial / nfs" contains "nfs" and vice-versa
+            inst_match   = inc_inst in row_inst or row_inst in inc_inst
+            holder_match = inc_holder == row_holder
+            if not (inst_match and holder_match):
+                continue
+
+            tier3.append(row)
+
+            # Tier 2: also require last-4 of account_number to match
+            if acct_num and len(acct_num) >= 4:
+                last4 = acct_num[-4:]
+                row_acct = _normalize_acct(row["account_number"]) or ""
+                if row_acct.endswith(last4):
+                    tier2.append(row)
+
+        def _heal(row):
+            if acct_num and not row["account_number"]:
+                conn.execute("UPDATE manual_entries SET account_number=? WHERE id=?",
+                             (acct_num, row["id"]))
+
+        if len(tier2) == 1:
+            _heal(tier2[0])
+            return tier2[0], 2
+        if len(tier3) == 1:
+            _heal(tier3[0])
+            return tier3[0], 3
+
+    # Tier 4: display name exact match
+    row = conn.execute(
+        "SELECT id, name, account_number, summary_json FROM manual_entries WHERE name = ?",
+        (name,)
+    ).fetchone()
+    if row:
+        return row, 4
+
+    return None, None
 
 
 @router.post("/save")
 async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_user)):
-    """Save confirmed parsed entries as manual entries, including holdings and activity summary.
-
-    Matching priority (most → least reliable):
-      1. Normalized account_number (strips hyphens/spaces so B37-601959 == B37601959)
-      2. Entry name (fallback for accounts without account numbers)
-
-    Historical vs current:
-      If the statement's period_end date is older than the latest snapshot already stored
-      for this account, it's treated as historical: only snapshots are written, the main
-      manual_entries record (current balance shown on dashboard) is left untouched.
-    """
+    """Save confirmed parsed entries. Matching uses normalized account_number with
+    multi-point fallbacks. Historical imports only write snapshots."""
     from datetime import date, datetime as dt
     today = date.today().isoformat()
     saved = 0
+    warnings = []
 
     def _f(obj, k):
         v = obj.get(k)
@@ -267,28 +352,26 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             # Resolve snapshot date from statement period_end. Falls back to today.
             snapshot_date = today
             raw_date = summary.get("period_end") or summary.get("ending_date")
-            parsed_date = _parse_date(raw_date)
-            if parsed_date:
-                snapshot_date = parsed_date
+            if _parse_date(raw_date):
+                snapshot_date = _parse_date(raw_date)
 
-            # Find existing entry — two-tier priority:
-            # 1. Normalized account_number exact match (most reliable, survives renames)
-            # 2. Entry name exact match (fallback for entries without account numbers)
-            existing = None
-            if acct_num:
-                existing = conn.execute(
-                    "SELECT id, name, account_number FROM manual_entries WHERE account_number = ?",
-                    (acct_num,)
-                ).fetchone()
-            if not existing:
-                existing = conn.execute(
-                    "SELECT id, name, account_number FROM manual_entries WHERE name = ?",
-                    (name,)
-                ).fetchone()
+            # Multi-point match against existing entries
+            existing, match_tier = _find_existing(conn, acct_num, summary, name, category)
 
-            # Determine if this is a historical import: period_end <= latest snapshot
-            # already stored for this account. If so, only write snapshots — don't
-            # overwrite the current balance on the dashboard.
+            # If no match found but the PDF had enough identifying info, flag it.
+            # This surfaces potential duplicates rather than silently creating new entries.
+            if not existing and (acct_num or (summary.get("institution") and summary.get("account_holder"))):
+                warnings.append(
+                    f"No existing account matched '{name}' "
+                    f"(acct={acct_num or 'unknown'}, "
+                    f"institution={summary.get('institution') or '?'}, "
+                    f"holder={summary.get('account_holder') or '?'}) — "
+                    f"created new entry. Verify this is not a duplicate."
+                )
+                logger.warning("PDF save: no match for %s acct=%s", name, acct_num)
+
+            # Historical: period_end <= latest snapshot already stored for this account.
+            # Only write snapshots — leave the dashboard balance untouched.
             is_historical = False
             if existing:
                 latest_snap = conn.execute(
@@ -297,19 +380,15 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                           OR (account_number IS NULL AND name = ?)""",
                     (acct_num, existing["name"])
                 ).fetchone()[0]
-                if latest_snap and snapshot_date <= latest_snap:
+                if latest_snap and snapshot_date < latest_snap:
                     is_historical = True
 
             if is_historical:
-                # Use the existing entry's stable id and name for all snapshot writes.
                 entry_id = existing["id"]
                 canonical_name = existing["name"]
             else:
-                # Delete old entry by account_number or name, then insert fresh.
                 if existing:
                     conn.execute("DELETE FROM manual_entries WHERE id = ?", (existing["id"],))
-                else:
-                    conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
                 cursor = conn.execute(
                     """INSERT INTO manual_entries
                        (name, category, value, notes, summary_json, account_number, entered_at)
@@ -320,25 +399,24 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                 canonical_name = name
                 saved += 1
 
-            # Account-level balance snapshot — always written, keyed by account_number
-            # when available so renames don't orphan history.
-            # Delete any existing row for same account+date under a different name first.
+            # Account-level balance snapshot — keyed by account_number when available
+            # so renames don't orphan history. Clear any same-account/same-date row
+            # stored under a different name before inserting.
             if acct_num:
                 conn.execute(
-                    "DELETE FROM manual_entry_snapshots WHERE account_number = ? AND snapped_at = ?",
+                    "DELETE FROM manual_entry_snapshots WHERE account_number=? AND snapped_at=?",
                     (acct_num, snapshot_date)
                 )
             conn.execute("""
                 INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?,?,?,?,?)
                 ON CONFLICT(name, snapped_at) DO UPDATE SET
-                    value = excluded.value,
-                    account_number = excluded.account_number
+                    value=excluded.value, account_number=excluded.account_number
             """, (canonical_name, acct_num, category, value, snapshot_date))
 
             holdings = e.get("holdings") or []
 
-            # Current holdings — only written/replaced when this is the most recent statement.
+            # Current holdings replaced only when this is the most recent statement.
             if not is_historical:
                 for h in holdings:
                     h_name = str(h.get("name", ""))[:200]
@@ -352,20 +430,16 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """, (
                         entry_id, h_name,
-                        h.get("ticker") or None,
-                        h.get("asset_class") or None,
-                        _f(h, "shares"), _f(h, "price"), _f(h, "value"),
-                        _f(h, "pct_assets"),
+                        h.get("ticker") or None, h.get("asset_class") or None,
+                        _f(h, "shares"), _f(h, "price"), _f(h, "value"), _f(h, "pct_assets"),
                         _f(h, "cost") or _f(h, "principal"),
                         _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"),
-                        _f(h, "avg_unit_cost"),
-                        _f(h, "estimated_annual_income"),
+                        _f(h, "avg_unit_cost"), _f(h, "estimated_annual_income"),
                         _f(h, "estimated_yield_pct"),
                         str(h.get("notes", "") or "")[:200] or None,
                     ))
 
-            # Holdings snapshots — always written, append-only dated history.
-            # Delete any row for same account+date+holding under a different entry_name first.
+            # Holdings snapshots — append-only, always written regardless of historical.
             for h in holdings:
                 h_name = str(h.get("name", ""))[:200]
                 if not h_name:
@@ -373,38 +447,31 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                 if acct_num:
                     conn.execute(
                         """DELETE FROM manual_holdings_snapshots
-                           WHERE account_number = ? AND snapped_at = ? AND holding_name = ?""",
+                           WHERE account_number=? AND snapped_at=? AND holding_name=?""",
                         (acct_num, snapshot_date, h_name)
                     )
                 conn.execute("""
                     INSERT INTO manual_holdings_snapshots
                         (entry_name, account_number, snapped_at, holding_name, ticker, asset_class,
-                         shares, price, value, cost, avg_unit_cost,
-                         gain_loss_dollars, gain_loss_pct, pct_assets,
-                         estimated_annual_income, estimated_yield_pct)
+                         shares, price, value, cost, avg_unit_cost, gain_loss_dollars,
+                         gain_loss_pct, pct_assets, estimated_annual_income, estimated_yield_pct)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(entry_name, snapped_at, holding_name)
-                    DO UPDATE SET
+                    ON CONFLICT(entry_name, snapped_at, holding_name) DO UPDATE SET
                         account_number=excluded.account_number,
                         shares=excluded.shares, price=excluded.price, value=excluded.value,
                         cost=excluded.cost, avg_unit_cost=excluded.avg_unit_cost,
                         gain_loss_dollars=excluded.gain_loss_dollars,
-                        gain_loss_pct=excluded.gain_loss_pct,
-                        pct_assets=excluded.pct_assets,
+                        gain_loss_pct=excluded.gain_loss_pct, pct_assets=excluded.pct_assets,
                         estimated_annual_income=excluded.estimated_annual_income,
                         estimated_yield_pct=excluded.estimated_yield_pct
                 """, (
                     canonical_name, acct_num, snapshot_date, h_name,
-                    h.get("ticker") or None,
-                    h.get("asset_class") or None,
+                    h.get("ticker") or None, h.get("asset_class") or None,
                     _f(h, "shares"), _f(h, "price"), _f(h, "value"),
-                    _f(h, "cost") or _f(h, "principal"),
-                    _f(h, "avg_unit_cost"),
-                    _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"),
-                    _f(h, "pct_assets"),
-                    _f(h, "estimated_annual_income"),
-                    _f(h, "estimated_yield_pct"),
+                    _f(h, "cost") or _f(h, "principal"), _f(h, "avg_unit_cost"),
+                    _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"), _f(h, "pct_assets"),
+                    _f(h, "estimated_annual_income"), _f(h, "estimated_yield_pct"),
                 ))
 
-    security_log.log_server_event(f"PDF_SAVED  user={_user}  entries={saved}")
-    return {"status": "saved", "count": saved}
+    security_log.log_server_event(f"PDF_SAVED  user={_user}  entries={saved}  warnings={len(warnings)}")
+    return {"status": "saved", "count": saved, "warnings": warnings}
