@@ -246,9 +246,17 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             if not name:
                 continue
 
-            # Delete existing entry with same name so re-imports don't double-count in net worth.
+            # Delete existing entry with same name OR same account_number so re-imports don't
+            # double-count in net worth. Account_number match handles name variations across
+            # different PDF formats for the same account.
             # ON DELETE CASCADE removes stale holdings; history is preserved in snapshots tables.
             conn.execute("DELETE FROM manual_entries WHERE name = ?", (name,))
+            acct_num = (summary or {}).get("account_number")
+            if acct_num:
+                conn.execute(
+                    "DELETE FROM manual_entries WHERE json_extract(summary_json, '$.account_number') = ?",
+                    (acct_num,)
+                )
             cursor = conn.execute(
                 "INSERT INTO manual_entries (name, category, value, notes, summary_json, entered_at) VALUES (?,?,?,?,?,?)",
                 (name, category, value, notes, summary_json, today)
