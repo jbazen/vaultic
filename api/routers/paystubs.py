@@ -117,9 +117,10 @@ async def upload_paystub(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
+    stub_file_bytes = await file.read()
     suffix = Path(file.filename).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(stub_file_bytes)
         tmp_path = tmp.name
 
     try:
@@ -164,5 +165,11 @@ async def upload_paystub(
             data.get("ytd_social_security"), data.get("ytd_medicare"),
             data.get("ytd_net"), file.filename,
         ))
+        pay_year = int(data["pay_date"][:4]) if data.get("pay_date") else __import__("datetime").datetime.now().year
+        from api.routers.vault import save_to_vault
+        save_to_vault(conn, pay_year, "paystub", file.filename, stub_file_bytes,
+                      issuer=data.get("employer"),
+                      description=f"Pay stub — {data.get('employer')} {data.get('pay_date', '')}",
+                      parsed=True)
 
     return {"ok": True, "pay_date": data.get("pay_date"), "employer": data.get("employer"), "data": data}

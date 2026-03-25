@@ -527,6 +527,25 @@ MIGRATIONS = [
         fed_withheld        REAL,
         parsed_at           DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+
+    # vault_documents: every uploaded file stored in the document vault.
+    # The actual file lives at file_path on the server filesystem.
+    # category covers both tax and non-tax documents.
+    """CREATE TABLE IF NOT EXISTS vault_documents (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        year            INTEGER NOT NULL,
+        category        TEXT NOT NULL,
+        category_label  TEXT,
+        issuer          TEXT,
+        description     TEXT,
+        original_name   TEXT NOT NULL,
+        file_path       TEXT NOT NULL,
+        file_size       INTEGER,
+        parsed          INTEGER DEFAULT 0,
+        related_id      INTEGER,
+        related_table   TEXT,
+        uploaded_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 

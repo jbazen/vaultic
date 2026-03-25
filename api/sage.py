@@ -236,6 +236,17 @@ TOOLS = [
         },
     },
     {
+        "name": "get_vault_documents",
+        "description": "List all documents stored in the document vault, optionally filtered by year. Shows what financial documents have been uploaded (tax returns, W-2s, 1099s, paystubs, investment statements, etc.) and what's missing from the checklist.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "Filter by tax year. Omit for all years."}
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "optimize_w4",
         "description": "Calculate optimal W-4 withholding adjustments. Given a target refund/owed amount, computes what Step 4c (extra withholding per paycheck) should be set to on the employee's W-4. Uses actual draft return or projection data. Use when the user asks about adjusting withholding, W-4 changes, or wants to stop over/under withholding.",
         "input_schema": {
@@ -627,6 +638,22 @@ def _call_tool(name: str, inputs: dict) -> str:
             if not result:
                 return "No paystubs have been uploaded yet."
             return str(result)
+
+        elif name == "get_vault_documents":
+            year = inputs.get("year")
+            with get_db() as conn:
+                if year:
+                    rows = conn.execute(
+                        "SELECT year, category, category_label, issuer, description, original_name, uploaded_at FROM vault_documents WHERE year = ? ORDER BY category",
+                        (year,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT year, category, category_label, issuer, description, original_name, uploaded_at FROM vault_documents ORDER BY year DESC, category"
+                    ).fetchall()
+            if not rows:
+                return f"No documents in vault{' for ' + str(year) if year else ''}."
+            return str([dict(r) for r in rows])
 
         elif name == "optimize_w4":
             from datetime import date as _date

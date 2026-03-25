@@ -6,6 +6,7 @@ import os
 import json
 import logging
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import anthropic
@@ -170,10 +171,10 @@ async def parse_tax_pdf(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
-    # Save to temp file
+    file_bytes = await file.read()
     suffix = Path(file.filename).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(file_bytes)
         tmp_path = tmp.name
 
     try:
@@ -226,6 +227,10 @@ async def parse_tax_pdf(
             data.get("charitable_noncash"), data.get("mortgage_insurance"),
             data.get("total_itemized"), file.filename,
         ))
+        # Save to document vault
+        from api.routers.vault import save_to_vault
+        save_to_vault(conn, tax_year, "tax_return", file.filename, file_bytes,
+                      issuer="IRS", description=f"{tax_year} Form 1040", parsed=True)
 
     return {"ok": True, "tax_year": tax_year, "data": data}
 
@@ -242,9 +247,10 @@ async def upload_w4(
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
     text_pages = []
+    w4_file_bytes = await file.read()
     suffix = Path(file.filename).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(w4_file_bytes)
         tmp_path = tmp.name
 
     try:
@@ -323,6 +329,10 @@ Return ONLY the JSON object."""
             data.get("deductions"), data.get("extra_withholding"),
             eff_date, file.filename,
         ))
+        from api.routers.vault import save_to_vault
+        w4_year = int(eff_date[:4]) if eff_date and eff_date[:4].isdigit() else datetime.now().year
+        save_to_vault(conn, w4_year, "w4", file.filename, w4_file_bytes,
+                      issuer=employer, description=f"W-4 — {employer}", parsed=True)
 
     return {"ok": True, "employer": employer, "data": data}
 
@@ -575,9 +585,10 @@ async def upload_tax_doc(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
+    doc_file_bytes = await file.read()
     suffix = Path(file.filename).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(doc_file_bytes)
         tmp_path = tmp.name
 
     try:
@@ -624,6 +635,11 @@ async def upload_tax_doc(
             data.get("hsa_distributions"), data.get("hsa_contributions"),
             data.get("fed_withheld"),
         ))
+        from api.routers.vault import save_to_vault
+        save_to_vault(conn, tax_year, doc_type, file.filename, doc_file_bytes,
+                      issuer=data.get("issuer"),
+                      description=_DOC_TYPE_LABELS.get(doc_type, doc_type),
+                      parsed=True)
 
     return {
         "ok": True,
