@@ -129,7 +129,16 @@ export default function PDFImport() {
               {error}
             </div>
           )}
-          <div className="card" style={{ marginTop: 24 }}>
+          <div className="card" style={{ marginTop: 24, borderColor: "var(--yellow)", background: "rgba(251,191,36,0.05)" }}>
+            <div style={{ fontWeight: 700, marginBottom: 6, color: "var(--yellow)" }}>Parser limits — read before uploading</div>
+            <ul style={{ color: "var(--text2)", fontSize: 13, lineHeight: 2, margin: 0, paddingLeft: 20 }}>
+              <li><strong style={{ color: "var(--text)" }}>30-page cap</strong> — only the first 30 pages are read; anything after is silently ignored</li>
+              <li><strong style={{ color: "var(--text)" }}>~15,000 character limit</strong> on text sent to Sage — dense statements may lose detail</li>
+              <li>Large multi-account PDFs (100+ pages) will produce incomplete results — split into per-account PDFs first</li>
+              <li>This uploader parses data into your accounts/balances — it does <strong style={{ color: "var(--text)" }}>not</strong> store the PDF file itself</li>
+            </ul>
+          </div>
+          <div className="card" style={{ marginTop: 16 }}>
             <div style={{ fontWeight: 600, marginBottom: 8 }}>Tips for best results</div>
             <ul style={{ color: "var(--text2)", fontSize: 13, lineHeight: 2, margin: 0, paddingLeft: 20 }}>
               <li>Use the most recent statement PDF from your investment portal</li>
