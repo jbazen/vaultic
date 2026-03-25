@@ -257,12 +257,16 @@ export default function Documents() {
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                      <button
-                        onClick={() => downloadVaultDoc(doc.id, doc.original_name)}
-                        style={{ padding: "4px 12px", borderRadius: 6, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 12, cursor: "pointer" }}
-                      >
-                        ↓ Download
-                      </button>
+                      {doc.has_file ? (
+                        <button
+                          onClick={() => downloadVaultDoc(doc.id, doc.original_name)}
+                          style={{ padding: "4px 12px", borderRadius: 6, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 12, cursor: "pointer" }}
+                        >
+                          ↓ Download
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: 11, color: "var(--text2)", padding: "4px 8px" }}>data only</span>
+                      )}
                       <button
                         onClick={() => handleDelete(doc.id)}
                         style={{ padding: "4px 8px", borderRadius: 6, background: "none", border: "none", color: "#f87171", fontSize: 16, cursor: "pointer" }}

@@ -92,12 +92,116 @@ def save_to_vault(
     return cur.lastrowid
 
 
+def backfill_vault(conn):
+    """Create vault records for existing parsed data that predates the vault.
+    Files won't be downloadable (no PDF stored), but they show up in the vault
+    and satisfy the checklist. Safe to call multiple times — skips duplicates.
+    """
+    # tax_docs → vault
+    rows = conn.execute("SELECT * FROM tax_docs").fetchall()
+    for r in rows:
+        r = dict(r)
+        existing = conn.execute(
+            "SELECT id FROM vault_documents WHERE related_table='tax_docs' AND related_id=?",
+            (r["id"],)
+        ).fetchone()
+        if not existing:
+            label = CATEGORY_LABELS.get(r.get("doc_type", ""), r.get("doc_type", "other"))
+            conn.execute("""
+                INSERT OR IGNORE INTO vault_documents
+                (year, category, category_label, issuer, description, original_name,
+                 file_path, file_size, parsed, related_id, related_table)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                r.get("tax_year"), r.get("doc_type", "other"), label,
+                r.get("issuer"), label,
+                r.get("source_file") or f"{label}.pdf",
+                "", 0, 1, r["id"], "tax_docs",
+            ))
+
+    # paystubs → vault
+    rows = conn.execute("SELECT * FROM paystubs").fetchall()
+    for r in rows:
+        r = dict(r)
+        existing = conn.execute(
+            "SELECT id FROM vault_documents WHERE related_table='paystubs' AND related_id=?",
+            (r["id"],)
+        ).fetchone()
+        if not existing:
+            pay_year = int(r["pay_date"][:4]) if r.get("pay_date") else 0
+            if pay_year:
+                conn.execute("""
+                    INSERT OR IGNORE INTO vault_documents
+                    (year, category, category_label, issuer, description, original_name,
+                     file_path, file_size, parsed, related_id, related_table)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    pay_year, "paystub", "Pay Stub", r.get("employer"),
+                    f"Pay stub — {r.get('employer')} {r.get('pay_date', '')}",
+                    r.get("source_file") or "paystub.pdf",
+                    "", 0, 1, r["id"], "paystubs",
+                ))
+
+    # w4s → vault
+    rows = conn.execute("SELECT * FROM w4s").fetchall()
+    for r in rows:
+        r = dict(r)
+        existing = conn.execute(
+            "SELECT id FROM vault_documents WHERE related_table='w4s' AND related_id=?",
+            (r["id"],)
+        ).fetchone()
+        if not existing:
+            eff = r.get("effective_date", "")
+            w4_year = int(eff[:4]) if eff and eff[:4].isdigit() else datetime.now().year
+            conn.execute("""
+                INSERT OR IGNORE INTO vault_documents
+                (year, category, category_label, issuer, description, original_name,
+                 file_path, file_size, parsed, related_id, related_table)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                w4_year, "w4", "W-4 Withholding", r.get("employer"),
+                f"W-4 — {r.get('employer')}",
+                r.get("source_file") or "w4.pdf",
+                "", 0, 1, r["id"], "w4s",
+            ))
+
+    # tax_returns (filed 1040s) → vault
+    rows = conn.execute("SELECT * FROM tax_returns").fetchall()
+    for r in rows:
+        r = dict(r)
+        existing = conn.execute(
+            "SELECT id FROM vault_documents WHERE related_table='tax_returns' AND related_id=?",
+            (r["id"],)
+        ).fetchone()
+        if not existing:
+            conn.execute("""
+                INSERT OR IGNORE INTO vault_documents
+                (year, category, category_label, issuer, description, original_name,
+                 file_path, file_size, parsed, related_id, related_table)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                r.get("tax_year"), "tax_return", "Tax Return (1040)", "IRS",
+                f"{r.get('tax_year')} Form 1040",
+                r.get("source_file") or f"1040_{r.get('tax_year')}.pdf",
+                "", 0, 1, r["id"], "tax_returns",
+            ))
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
+
+@router.post("/backfill")
+async def trigger_backfill(_user: str = Depends(get_current_user)):
+    """Backfill vault records from existing parsed data (tax_docs, paystubs, w4s, tax_returns)."""
+    with get_db() as conn:
+        backfill_vault(conn)
+    return {"ok": True}
+
 
 @router.get("/years")
 async def list_years(_user: str = Depends(get_current_user)):
-    """Return all years that have documents in the vault."""
+    """Return all years that have documents in the vault. Auto-backfills on first call."""
     with get_db() as conn:
+        backfill_vault(conn)
         rows = conn.execute(
             "SELECT DISTINCT year FROM vault_documents ORDER BY year DESC"
         ).fetchall()
@@ -108,14 +212,18 @@ async def list_years(_user: str = Depends(get_current_user)):
 async def list_documents(year: int, _user: str = Depends(get_current_user)):
     """Return all vault documents for a year, grouped by category."""
     with get_db() as conn:
+        backfill_vault(conn)
         rows = conn.execute(
             "SELECT * FROM vault_documents WHERE year = ? ORDER BY category, uploaded_at DESC",
             (year,)
         ).fetchall()
-    docs = [dict(r) for r in rows]
-    # Remove file_path from response (internal detail)
-    for d in docs:
+    has_file = {}
+    docs = []
+    for r in rows:
+        d = dict(r)
+        d["has_file"] = bool(d.get("file_path") and Path(d["file_path"]).exists())
         d.pop("file_path", None)
+        docs.append(d)
     return docs
 
 
