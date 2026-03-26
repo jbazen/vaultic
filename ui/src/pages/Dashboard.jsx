@@ -664,8 +664,8 @@ export default function Dashboard() {
   const sortManual = arr => [...arr].sort((a, b) =>
     (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name)
   );
-  const manualInvested = sortManual(manualEntries.filter(e => e.category === "invested" && e.account_number));
-  const manualInvestedOther = manualEntries.filter(e => e.category === "invested" && !e.account_number);
+  const manualInvested = sortManual(manualEntries.filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth)));
+  const manualInvestedOther = manualEntries.filter(e => e.category === "invested" && !e.account_number && !e.exclude_from_net_worth);
   const manualLiquid = sortManual(manualEntries.filter(e => e.category === "liquid"));
 
   // Consolidated allocation across all manual investment holdings
