@@ -2055,7 +2055,7 @@ export default function Budget() {
               padding: "5px 16px", borderRadius: 20, fontSize: 12, fontWeight: 600,
               background: "rgba(34,197,94,0.12)", color: "#22c55e",
             }}>
-              ✓ Zero-based budget achieved
+              ✓ The Budget is balanced
             </span>
           ) : remainingToBudget > 0 ? (
             <span style={{
