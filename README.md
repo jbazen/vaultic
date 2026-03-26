@@ -137,6 +137,100 @@ vaultic/
 
 ## Architecture
 
+### System Architecture Diagram
+
+```mermaid
+flowchart TB
+
+    subgraph USER["👤  User"]
+        Browser["🖥️ Browser / PWA\nReact 18 + Vite"]
+        SagePanel["🔮 Sage Panel\nfloating chat · voice"]
+        PlaidLink["🏦 Plaid Link UI\nOAuth flow"]
+        PDFui["📄 PDF Importer\ndrag & drop · preview"]
+    end
+
+    subgraph ORACLE["☁️  Oracle Cloud — A1 ARM · Ubuntu 22.04"]
+        nginx["🔀 nginx\nTLS · reverse proxy\nclient_max_body_size 25m\nproxy_read_timeout 180s"]
+        FastAPI["⚡ FastAPI / Uvicorn\nPython 3.12\nJWT · bcrypt · TOTP 2FA\nrate limiting"]
+        SageBE["🧠 Sage Engine\nClaude Haiku tool-use loop\n/api/sage/chat"]
+        Scheduler["⏰ APScheduler\ndaily 2am sync"]
+        PDFRouter["📥 PDF Router\npdfplumber → Claude Sonnet\n4-tier account matching\nhistorical snapshot logic"]
+        SQLite[("🗄️ SQLite WAL\ndata/vaultic.db")]
+        Litestream["🔄 Litestream\nWAL replication\nwraps uvicorn in start.sh"]
+    end
+
+    subgraph EXT["🌐  External Services & APIs"]
+        Plaid["🏦 Plaid API\nnon-OAuth + OAuth pending\nFernet-encrypted tokens"]
+        CoinbaseAPI["₿ Coinbase\nAdvanced Trade API"]
+        Haiku["🤖 Claude Haiku\nclaude-haiku-4-5-20251001\nSage advisor · tool-use"]
+        Sonnet["📑 Claude Sonnet\nclaude-sonnet-4-6\nPDF statement parser"]
+        OpenAI["🔊 OpenAI TTS\ntts-1 · fable voice · 1.2×"]
+        Tavily["🔍 Tavily Search\nweb_search for Sage\ninclude_answer: true"]
+        GSheets["📊 Google Sheets API\nFund Financials\nread-only · 10+ yrs history"]
+        R2["☁️ Cloudflare R2\nvaultic-backup bucket\n7-day WAL retention"]
+        GitHub["🐙 GitHub Actions\nCI/CD → SSH deploy\n→ restart systemd service"]
+    end
+
+    subgraph SOURCES["💳  Data Sources"]
+        Chase["🏛️ Chase\nchecking · savings\nmoney market · credit cards"]
+        Vanguard["📈 Vanguard\n401k"]
+        Rocket["🏠 Rocket Mortgage\nPlaid OAuth — pending"]
+        HealthEq["🏥 HealthEquity HSA\nPlaid OAuth — pending"]
+        Parker["📋 Parker Financial\nNFS / Investor360\n5 accounts + portfolio summary\nPDF statements only"]
+        CoinbaseAcct["₿ Coinbase Account\ncrypto holdings"]
+        Manual["✏️ Manual Entries\nhome · car · credit score\nOptum HSA · custom assets"]
+    end
+
+    %% User → nginx
+    Browser   --> nginx
+    SagePanel --> nginx
+    PlaidLink --> nginx
+    PDFui     --> nginx
+
+    %% nginx → FastAPI
+    nginx --> FastAPI
+
+    %% FastAPI internal wiring
+    FastAPI --> SageBE
+    FastAPI --> PDFRouter
+    FastAPI --> Scheduler
+    FastAPI <--> SQLite
+    FastAPI --> GSheets
+
+    %% DB backup
+    SQLite    --> Litestream
+    Litestream --> R2
+
+    %% Deploy
+    GitHub --> FastAPI
+
+    %% Sage calls
+    SageBE --> Haiku
+    SageBE --> Tavily
+    SageBE --> OpenAI
+
+    %% PDF calls
+    PDFui     --> PDFRouter
+    PDFRouter --> Sonnet
+    PDFRouter --> Manual
+
+    %% Scheduler → data APIs
+    Scheduler --> Plaid
+    Scheduler --> CoinbaseAPI
+
+    %% Plaid → institutions
+    Plaid --> Chase
+    Plaid --> Vanguard
+    Plaid --> Rocket
+    Plaid --> HealthEq
+
+    %% Coinbase → account
+    CoinbaseAPI --> CoinbaseAcct
+
+    %% PDF source
+    Parker --> PDFui
+```
+
 ### Request Flow
 
 ```
