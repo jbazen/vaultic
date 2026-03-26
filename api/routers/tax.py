@@ -12,6 +12,7 @@ from pathlib import Path
 import anthropic
 import pdfplumber
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
 
 from api.database import get_db
 from api.dependencies import get_current_user
@@ -833,4 +834,294 @@ async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
         "owed": owed,
         "effective_rate": effective_rate,
         "filed_return": filed,
+    }
+
+
+# ── W-4 Multi-Job Optimization Wizard ─────────────────────────────────────────
+
+# Federal tax brackets by year and filing status.
+# Each entry: list of (ceiling, rate) tuples in ascending order.
+_BRACKETS = {
+    2025: {
+        "married_filing_jointly": [
+            (23850, 0.10), (96950, 0.12), (206700, 0.22),
+            (394600, 0.24), (501050, 0.32), (751600, 0.35), (float("inf"), 0.37),
+        ],
+        "single": [
+            (11925, 0.10), (48475, 0.12), (103350, 0.22),
+            (197300, 0.24), (250525, 0.32), (375800, 0.35), (float("inf"), 0.37),
+        ],
+        "head_of_household": [
+            (17000, 0.10), (64850, 0.12), (103350, 0.22),
+            (197300, 0.24), (250500, 0.32), (375800, 0.35), (float("inf"), 0.37),
+        ],
+    },
+    2024: {
+        "married_filing_jointly": [
+            (23200, 0.10), (94300, 0.12), (201050, 0.22),
+            (383900, 0.24), (487450, 0.32), (731200, 0.35), (float("inf"), 0.37),
+        ],
+        "single": [
+            (11600, 0.10), (47150, 0.12), (100525, 0.22),
+            (191950, 0.24), (243725, 0.32), (365600, 0.35), (float("inf"), 0.37),
+        ],
+        "head_of_household": [
+            (16550, 0.10), (63100, 0.12), (100500, 0.22),
+            (191950, 0.24), (243700, 0.32), (365600, 0.35), (float("inf"), 0.37),
+        ],
+    },
+}
+
+_STANDARD_DEDUCTIONS = {
+    2025: {"married_filing_jointly": 30000, "single": 15000, "head_of_household": 22500},
+    2024: {"married_filing_jointly": 29200, "single": 14600, "head_of_household": 21900},
+}
+
+_PAY_PERIODS = {"weekly": 52, "biweekly": 26, "semimonthly": 24, "monthly": 12}
+
+_CHILD_CREDIT_PER_CHILD = 2000  # up to $2,000 per qualifying child (both 2024 and 2025)
+
+
+class _W4Job(BaseModel):
+    employer: str
+    annual_income: float
+    pay_frequency: str = "biweekly"          # weekly | biweekly | semimonthly | monthly
+    current_extra_per_period: float = 0.0    # current Step 4c value per period
+
+
+class W4WizardInput(BaseModel):
+    year: int = 2025
+    filing_status: str = "married_filing_jointly"
+    num_children: int = 2
+    other_credits: float = 0.0      # non-child credits (education, EV, etc.)
+    other_income: float = 0.0       # non-job income not subject to withholding
+    extra_deductions: float = 0.0   # deductions above standard (mortgage interest, charitable…)
+    jobs: list[_W4Job]
+
+
+def _marginal_rate(taxable_income: float, brackets: list) -> float:
+    """Return the marginal rate that applies to the last dollar of taxable_income."""
+    prev = 0.0
+    for ceiling, rate in brackets:
+        if taxable_income <= ceiling:
+            return rate
+        prev = ceiling
+    return brackets[-1][1]
+
+
+@router.get("/w4-wizard/prefill")
+async def w4_wizard_prefill(_user: str = Depends(get_current_user)):
+    """Return pre-fill data for the W-4 wizard from the latest paystub per employer.
+
+    Annualizes YTD gross from the most recent paystub so the wizard form
+    can start with real numbers instead of blanks.
+    """
+    from datetime import date as _date
+
+    with get_db() as conn:
+        stubs = conn.execute("""
+            SELECT p.* FROM paystubs p
+            INNER JOIN (
+                SELECT employer, MAX(pay_date) AS latest FROM paystubs GROUP BY employer
+            ) l ON p.employer = l.employer AND p.pay_date = l.latest
+        """).fetchall()
+        w4s = conn.execute("SELECT * FROM w4s ORDER BY parsed_at DESC").fetchall()
+
+    stubs = [dict(s) for s in stubs]
+    w4s_by_employer = {}
+    for w in w4s:
+        wd = dict(w)
+        emp = (wd.get("employer") or "").strip().lower()
+        if emp not in w4s_by_employer:
+            w4s_by_employer[emp] = wd
+
+    jobs = []
+    for s in stubs:
+        ytd_gross = s.get("ytd_gross") or 0
+        pay_date = s.get("pay_date")
+        annual_income = ytd_gross
+
+        # Annualize from YTD if we have a pay date
+        if pay_date and ytd_gross:
+            try:
+                pd = _date.fromisoformat(pay_date)
+                year_start = _date(pd.year, 1, 1)
+                year_end = _date(pd.year, 12, 31)
+                days_elapsed = (pd - year_start).days + 1
+                days_in_year = (year_end - year_start).days + 1
+                frac = days_elapsed / days_in_year
+                if frac > 0:
+                    annual_income = round(ytd_gross / frac)
+            except Exception:
+                pass
+
+        # Pull current extra withholding from most recent W-4 on file for this employer
+        emp_key = (s.get("employer") or "").strip().lower()
+        current_extra = 0.0
+        w4_match = w4s_by_employer.get(emp_key)
+        if w4_match:
+            # W-4 extra_withholding is per-period already
+            current_extra = float(w4_match.get("extra_withholding") or 0)
+
+        jobs.append({
+            "employer": s.get("employer") or "Unknown",
+            "annual_income": annual_income,
+            "pay_frequency": "biweekly",   # default — user can correct
+            "current_extra_per_period": current_extra,
+            "ytd_gross": round(ytd_gross),
+            "pay_date": pay_date,
+        })
+
+    return {"jobs": jobs}
+
+
+@router.post("/w4-wizard")
+async def w4_wizard(body: W4WizardInput, _user: str = Depends(get_current_user)):
+    """Calculate optimal W-4 Step 4c (extra withholding per period) for each job.
+
+    How the math works
+    ------------------
+    Each employer withholds federal income tax based ONLY on the income they pay.
+    With multiple jobs, each employer independently applies the standard deduction
+    and (if Step 3 is filled in) the dependent credit — causing double-counting.
+    The result is under-withholding: you owe at filing.
+
+    The wizard calculates:
+      1. Total household tax on combined income.
+      2. What each employer would withhold in isolation (single-job simulation).
+      3. The gap between those two numbers.
+      4. How to distribute the gap as extra withholding (Step 4c) across jobs.
+
+    Dependent credits are recommended only on the HIGHEST-paying job to avoid
+    double-claiming. Extra withholding is distributed proportionally to income so
+    no single paycheck is hit harder than necessary.
+    """
+    year = body.year
+    fs = body.filing_status
+    jobs = body.jobs
+
+    if not jobs:
+        raise HTTPException(status_code=400, detail="At least one job required")
+
+    brackets = _BRACKETS.get(year, _BRACKETS[2025]).get(fs)
+    if not brackets:
+        raise HTTPException(status_code=400, detail=f"Unsupported filing status: {fs}")
+
+    std_deduction = _STANDARD_DEDUCTIONS.get(year, _STANDARD_DEDUCTIONS[2025]).get(fs, 30000)
+    dependent_credits = min(body.num_children * _CHILD_CREDIT_PER_CHILD, 2000 * body.num_children)
+
+    # ── Step 1: Total household tax ───────────────────────────────────────────
+    total_job_income = sum(j.annual_income for j in jobs)
+    total_income = total_job_income + body.other_income
+
+    # Deduction: standard + any user-provided extra (mortgage interest, charitable, etc.)
+    total_deduction = std_deduction + body.extra_deductions
+    taxable_income = max(0.0, total_income - total_deduction)
+
+    gross_tax = _calc_tax(taxable_income, brackets)
+    total_credits = dependent_credits + body.other_credits
+    net_tax = max(0.0, gross_tax - total_credits)
+    effective_rate = round(net_tax / total_income * 100, 2) if total_income > 0 else 0
+    marginal_rate = _marginal_rate(taxable_income, brackets) * 100
+
+    # ── Step 2: Per-job withholding in isolation ──────────────────────────────
+    # Sort jobs by income descending so we know which is "highest" for dependent claim
+    sorted_jobs = sorted(jobs, key=lambda j: j.annual_income, reverse=True)
+
+    job_auto_withholding = []
+    for idx, job in enumerate(sorted_jobs):
+        # Only the highest-income job claims dependent credits (Step 3)
+        credits_this_job = dependent_credits if idx == 0 else 0.0
+        job_taxable = max(0.0, job.annual_income - std_deduction)
+        job_gross_tax = _calc_tax(job_taxable, brackets)
+        job_net_tax = max(0.0, job_gross_tax - credits_this_job)
+        job_auto_withholding.append(job_net_tax)
+
+    total_auto_withheld = sum(job_auto_withholding)
+
+    # ── Step 3: Gap and distribution ─────────────────────────────────────────
+    # Positive gap → under-withheld → need more Step 4c
+    # Negative gap → over-withheld → can reduce withholding
+    gap = net_tax - total_auto_withheld
+
+    # Distribute gap proportionally to each job's share of total income
+    recommendations = []
+    for idx, job in enumerate(sorted_jobs):
+        periods = _PAY_PERIODS.get(job.pay_frequency, 26)
+        income_share = job.annual_income / total_job_income if total_job_income > 0 else 1.0
+        extra_annual_needed = gap * income_share
+        extra_per_period_needed = extra_annual_needed / periods if periods > 0 else 0
+
+        # Net recommended = needed on top of whatever is currently in Step 4c
+        total_recommended_per_period = max(0.0, round(extra_per_period_needed, 2))
+        change = round(total_recommended_per_period - job.current_extra_per_period, 2)
+
+        # Step 3 dependent credit recommendation
+        claim_dependents_here = idx == 0  # only on highest-paying job
+        recommended_step3 = dependent_credits if claim_dependents_here else 0.0
+
+        recommendations.append({
+            "employer": job.employer,
+            "annual_income": job.annual_income,
+            "pay_frequency": job.pay_frequency,
+            "pay_periods": periods,
+            "auto_withheld_annual": round(job_auto_withholding[idx], 2),
+            "extra_annual_needed": round(extra_annual_needed, 2),
+            "current_extra_per_period": job.current_extra_per_period,
+            "recommended_extra_per_period": total_recommended_per_period,
+            "change_per_period": change,
+            "recommended_step3_dependents": recommended_step3,
+            "claim_dependents_here": claim_dependents_here,
+        })
+
+    # ── Step 4: Notes ─────────────────────────────────────────────────────────
+    notes = []
+    if gap > 500:
+        notes.append(f"Without changes you are on track to owe ~${round(gap):,} at filing.")
+    elif gap < -500:
+        notes.append(f"Without changes you are on track for a ~${round(-gap):,} refund. "
+                     "Consider reducing withholding to keep more money each paycheck.")
+    else:
+        notes.append("Your current withholding is close to your projected tax liability.")
+
+    if body.extra_deductions == 0 and body.other_income == 0:
+        notes.append("Add mortgage interest, charitable contributions, and other non-job income "
+                     "for a more accurate calculation.")
+
+    if gap > 0:
+        notes.append("Enter the recommended Step 4c amount on your W-4 for each employer. "
+                     "Claim dependents (Step 3) only on your highest-paying job.")
+
+    # Current annual withholding from Step 4c already in place
+    current_extra_annual = sum(
+        j.current_extra_per_period * _PAY_PERIODS.get(j.pay_frequency, 26)
+        for j in jobs
+    )
+
+    return {
+        "year": year,
+        "filing_status": fs,
+        "household": {
+            "total_income": round(total_income, 2),
+            "total_deduction": round(total_deduction, 2),
+            "deduction_method": "itemized" if body.extra_deductions > 0 else "standard",
+            "taxable_income": round(taxable_income, 2),
+            "gross_tax": round(gross_tax, 2),
+            "dependent_credits": round(dependent_credits, 2),
+            "other_credits": round(body.other_credits, 2),
+            "net_tax": round(net_tax, 2),
+            "effective_rate_pct": effective_rate,
+            "marginal_rate_pct": marginal_rate,
+        },
+        "withholding": {
+            "auto_withheld_annual": round(total_auto_withheld, 2),
+            "current_extra_annual": round(current_extra_annual, 2),
+            "total_currently_withheld": round(total_auto_withheld + current_extra_annual, 2),
+            "gap": round(gap, 2),       # positive = owe, negative = refund
+            "gap_after_changes": round(gap - sum(
+                r["extra_annual_needed"] for r in recommendations
+            ), 2),
+        },
+        "recommendations": recommendations,
+        "notes": notes,
     }

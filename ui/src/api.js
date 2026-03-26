@@ -791,6 +791,16 @@ export async function getW4s() {
   return res.json();
 }
 
+export async function getW4WizardPrefill() {
+  const res = await apiFetch("/api/tax/w4-wizard/prefill");
+  return res.json();
+}
+
+export async function runW4Wizard(input) {
+  const res = await apiFetch("/api/tax/w4-wizard", { method: "POST", body: JSON.stringify(input) });
+  return res.json();
+}
+
 export async function uploadW4(file) {
   const token = localStorage.getItem("vaultic_token");
   const formData = new FormData();

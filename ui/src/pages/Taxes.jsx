@@ -4,7 +4,7 @@
  * Sage is the primary interface for tax questions and planning.
  */
 import { useState, useEffect, useRef } from "react";
-import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub, getTaxProjection, getW4s, uploadW4, uploadTaxDoc, getTaxDocs, deleteTaxDoc, getDraftReturn } from "../api.js";
+import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub, getTaxProjection, getW4s, uploadW4, uploadTaxDoc, getTaxDocs, deleteTaxDoc, getDraftReturn, getW4WizardPrefill, runW4Wizard } from "../api.js";
 
 // Currency formatter
 function fmt(v) {
@@ -39,6 +39,17 @@ export default function Taxes() {
   const [w4Uploading, setW4Uploading] = useState(false);
   const [w4Msg, setW4Msg] = useState(null);
   const w4InputRef = useRef(null);
+
+  // W-4 Wizard
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardJobs, setWizardJobs] = useState([]);
+  const [wizardYear, setWizardYear] = useState(2025);
+  const [wizardNumChildren, setWizardNumChildren] = useState(2);
+  const [wizardOtherIncome, setWizardOtherIncome] = useState(0);
+  const [wizardExtraDeductions, setWizardExtraDeductions] = useState(0);
+  const [wizardOtherCredits, setWizardOtherCredits] = useState(0);
+  const [wizardResult, setWizardResult] = useState(null);
+  const [wizardLoading, setWizardLoading] = useState(false);
 
   const [taxYear, setTaxYear] = useState(2025);
   const [taxDocs, setTaxDocs] = useState([]);
@@ -102,6 +113,42 @@ export default function Taxes() {
     await deleteTaxDoc(id).catch(() => {});
     getTaxDocs(taxYear).then(setTaxDocs).catch(() => {});
     getDraftReturn(taxYear).then(setDraftReturn).catch(() => {});
+  }
+
+  async function openWizard() {
+    setWizardResult(null);
+    setWizardOpen(true);
+    try {
+      const prefill = await getW4WizardPrefill();
+      setWizardJobs((prefill.jobs || []).map(j => ({
+        employer: j.employer,
+        annual_income: j.annual_income,
+        pay_frequency: "biweekly",
+        current_extra_per_period: j.current_extra_per_period || 0,
+      })));
+    } catch {
+      setWizardJobs([{ employer: "", annual_income: 0, pay_frequency: "biweekly", current_extra_per_period: 0 }]);
+    }
+  }
+
+  async function runWizard() {
+    setWizardLoading(true);
+    setWizardResult(null);
+    try {
+      const result = await runW4Wizard({
+        year: wizardYear,
+        filing_status: "married_filing_jointly",
+        num_children: wizardNumChildren,
+        other_income: wizardOtherIncome,
+        extra_deductions: wizardExtraDeductions,
+        other_credits: wizardOtherCredits,
+        jobs: wizardJobs,
+      });
+      setWizardResult(result);
+    } catch (err) {
+      setWizardResult({ error: err.message });
+    }
+    setWizardLoading(false);
   }
 
   async function handleW4Upload(e) {
@@ -526,9 +573,15 @@ export default function Taxes() {
           <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
               <div style={{ fontWeight: 700, fontSize: 16 }}>W-4s on File</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 {w4Msg && <span style={{ fontSize: 12, color: "var(--text2)" }}>{w4Msg}</span>}
                 <input ref={w4InputRef} type="file" accept=".pdf" multiple style={{ display: "none" }} onChange={handleW4Upload} />
+                <button
+                  onClick={openWizard}
+                  style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(52,211,153,0.15)", color: "#34d399", border: "1px solid #34d399", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                >
+                  ✦ W-4 Optimizer
+                </button>
                 <button
                   onClick={() => w4InputRef.current?.click()}
                   disabled={w4Uploading}
@@ -674,6 +727,221 @@ export default function Taxes() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── W-4 Optimizer Wizard Modal ───────────────────────────────────── */}
+      {wizardOpen && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+          display: "flex", alignItems: "flex-start", justifyContent: "center",
+          zIndex: 1000, padding: "40px 16px", overflowY: "auto",
+        }} onClick={e => e.target === e.currentTarget && setWizardOpen(false)}>
+          <div style={{
+            background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14,
+            width: "100%", maxWidth: 700, padding: 28,
+          }}>
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 18 }}>W-4 Withholding Optimizer</div>
+                <div style={{ color: "var(--text2)", fontSize: 13, marginTop: 3 }}>
+                  Calculates the exact extra withholding (Step 4c) to enter on each employer's W-4 so you neither owe nor over-withhold at filing.
+                </div>
+              </div>
+              <button onClick={() => setWizardOpen(false)} style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 22, cursor: "pointer", padding: 4 }}>✕</button>
+            </div>
+
+            {/* Inputs — household */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+              <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                Tax Year
+                <select value={wizardYear} onChange={e => setWizardYear(Number(e.target.value))}
+                  style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }}>
+                  <option value={2025}>2025</option>
+                  <option value={2024}>2024</option>
+                </select>
+              </label>
+              <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                Qualifying Children
+                <input type="number" min={0} value={wizardNumChildren}
+                  onChange={e => setWizardNumChildren(Number(e.target.value))}
+                  style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }} />
+              </label>
+              <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                Other Non-Job Income (annual)
+                <input type="number" min={0} value={wizardOtherIncome}
+                  onChange={e => setWizardOtherIncome(Number(e.target.value))}
+                  placeholder="Interest, dividends, side income…"
+                  style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }} />
+              </label>
+              <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                Extra Deductions Above Standard
+                <input type="number" min={0} value={wizardExtraDeductions}
+                  onChange={e => setWizardExtraDeductions(Number(e.target.value))}
+                  placeholder="Mortgage interest, charitable…"
+                  style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }} />
+              </label>
+              <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                Other Credits (annual)
+                <input type="number" min={0} value={wizardOtherCredits}
+                  onChange={e => setWizardOtherCredits(Number(e.target.value))}
+                  placeholder="Education, EV, solar…"
+                  style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }} />
+              </label>
+            </div>
+
+            {/* Jobs */}
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>Income Sources</div>
+            {wizardJobs.map((job, i) => (
+              <div key={i} style={{ background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "end" }}>
+                  <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                    Employer
+                    <input value={job.employer} onChange={e => {
+                      const j = [...wizardJobs]; j[i] = { ...j[i], employer: e.target.value }; setWizardJobs(j);
+                    }} style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg2)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }} />
+                  </label>
+                  <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                    Annual Income
+                    <input type="number" min={0} value={job.annual_income} onChange={e => {
+                      const j = [...wizardJobs]; j[i] = { ...j[i], annual_income: Number(e.target.value) }; setWizardJobs(j);
+                    }} style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg2)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }} />
+                  </label>
+                  <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4 }}>
+                    Pay Frequency
+                    <select value={job.pay_frequency} onChange={e => {
+                      const j = [...wizardJobs]; j[i] = { ...j[i], pay_frequency: e.target.value }; setWizardJobs(j);
+                    }} style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg2)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }}>
+                      <option value="weekly">Weekly (52×)</option>
+                      <option value="biweekly">Biweekly (26×)</option>
+                      <option value="semimonthly">Semimonthly (24×)</option>
+                      <option value="monthly">Monthly (12×)</option>
+                    </select>
+                  </label>
+                  <button onClick={() => setWizardJobs(wizardJobs.filter((_, idx) => idx !== i))}
+                    style={{ background: "rgba(248,113,113,0.15)", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "7px 10px", cursor: "pointer", fontSize: 13, alignSelf: "end" }}>✕</button>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4, maxWidth: 200 }}>
+                    Current Step 4c (extra/period)
+                    <input type="number" min={0} step={0.01} value={job.current_extra_per_period} onChange={e => {
+                      const j = [...wizardJobs]; j[i] = { ...j[i], current_extra_per_period: Number(e.target.value) }; setWizardJobs(j);
+                    }} style={{ padding: "7px 10px", borderRadius: 6, background: "var(--bg2)", border: "1px solid var(--border)", color: "var(--text)", fontSize: 13 }} />
+                  </label>
+                </div>
+              </div>
+            ))}
+            <button onClick={() => setWizardJobs([...wizardJobs, { employer: "", annual_income: 0, pay_frequency: "biweekly", current_extra_per_period: 0 }])}
+              style={{ background: "none", border: "1px dashed var(--border)", color: "var(--text2)", borderRadius: 8, padding: "8px 16px", cursor: "pointer", fontSize: 13, width: "100%", marginBottom: 20 }}>
+              + Add Income Source
+            </button>
+
+            {/* Calculate button */}
+            <button onClick={runWizard} disabled={wizardLoading || wizardJobs.length === 0}
+              style={{ width: "100%", padding: "11px", borderRadius: 8, background: "#34d399", color: "#0d2b1e", border: "none", fontWeight: 700, fontSize: 15, cursor: wizardLoading ? "not-allowed" : "pointer", opacity: wizardLoading ? 0.7 : 1, marginBottom: 24 }}>
+              {wizardLoading ? "Calculating…" : "Calculate Optimal Withholding"}
+            </button>
+
+            {/* Results */}
+            {wizardResult && !wizardResult.error && (
+              <div>
+                {/* Household summary */}
+                <div style={{ background: "var(--bg3)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
+                    {wizardResult.year} Household Summary — {(wizardResult.filing_status || "").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                    {[
+                      ["Total Income", fmt(wizardResult.household.total_income)],
+                      ["Deduction", fmt(wizardResult.household.total_deduction)],
+                      ["Taxable Income", fmt(wizardResult.household.taxable_income)],
+                      ["Gross Tax", fmt(wizardResult.household.gross_tax)],
+                      ["Credits", fmt(wizardResult.household.dependent_credits + wizardResult.household.other_credits)],
+                      ["Net Tax Owed", fmt(wizardResult.household.net_tax)],
+                      ["Effective Rate", wizardResult.household.effective_rate_pct + "%"],
+                      ["Marginal Rate", wizardResult.household.marginal_rate_pct + "%"],
+                    ].map(([label, value]) => (
+                      <div key={label}>
+                        <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>{label}</div>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Withholding gap */}
+                {(() => {
+                  const gap = wizardResult.withholding.gap;
+                  const isOwe = gap > 0;
+                  return (
+                    <div style={{
+                      background: isOwe ? "rgba(248,113,113,0.1)" : "rgba(52,211,153,0.1)",
+                      border: `1px solid ${isOwe ? "#f87171" : "#34d399"}`,
+                      borderRadius: 10, padding: 16, marginBottom: 16, textAlign: "center",
+                    }}>
+                      <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 4 }}>
+                        {isOwe ? "Projected to Owe at Filing (without changes)" : "Projected Refund (without changes)"}
+                      </div>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: isOwe ? "#f87171" : "#34d399" }}>
+                        {isOwe ? "-" : "+"}{fmt(Math.abs(gap))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Per-job recommendations */}
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Recommended W-4 Changes</div>
+                {wizardResult.recommendations.map((rec, i) => (
+                  <div key={i} style={{ background: "var(--bg3)", border: "1px solid var(--border)", borderRadius: 10, padding: 16, marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{rec.employer}</div>
+                        <div style={{ fontSize: 12, color: "var(--text2)" }}>{fmt(rec.annual_income)}/yr · {rec.pay_frequency} ({rec.pay_periods} pay periods)</div>
+                      </div>
+                      {rec.claim_dependents_here && (
+                        <span style={{ background: "rgba(124,58,237,0.2)", color: "#a78bfa", borderRadius: 12, padding: "3px 10px", fontSize: 11, fontWeight: 700 }}>
+                          Claim Dependents Here
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Step 3 (Dependents)</div>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.claim_dependents_here ? "#a78bfa" : "var(--text2)" }}>
+                          {rec.recommended_step3_dependents > 0 ? fmt(rec.recommended_step3_dependents) : "$0"}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Step 4c (Extra/Period)</div>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.recommended_extra_per_period > 0 ? "#fbbf24" : "#34d399" }}>
+                          {rec.recommended_extra_per_period > 0 ? fmt(rec.recommended_extra_per_period) : "$0"}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Change vs Current</div>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.change_per_period > 0 ? "#f87171" : rec.change_per_period < 0 ? "#34d399" : "var(--text2)" }}>
+                          {rec.change_per_period > 0 ? "+" : ""}{rec.change_per_period !== 0 ? fmt(rec.change_per_period) + "/period" : "No change"}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Notes */}
+                {wizardResult.notes.length > 0 && (
+                  <div style={{ background: "rgba(79,142,247,0.08)", border: "1px solid rgba(79,142,247,0.3)", borderRadius: 8, padding: 14 }}>
+                    {wizardResult.notes.map((n, i) => (
+                      <div key={i} style={{ fontSize: 13, color: "var(--text2)", marginBottom: i < wizardResult.notes.length - 1 ? 8 : 0 }}>ℹ {n}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {wizardResult?.error && (
+              <div style={{ color: "#f87171", fontSize: 13, textAlign: "center" }}>Error: {wizardResult.error}</div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
