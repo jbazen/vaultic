@@ -370,28 +370,31 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                 )
                 logger.warning("PDF save: no match for %s acct=%s", name, acct_num)
 
-            # Historical: snapshot_date is older than the most recent data we already
-            # have for this account. Uses the later of (entered_at, latest snapshot date)
-            # as the cutoff so we catch the case where the current entry was imported
-            # from a portfolio summary that created no dated snapshot.
+            # Historical: snapshot_date is older than the most recent snapshot we
+            # already have for this account. Only snapshot dates matter — entered_at
+            # reflects when the user saved, not the as-of date of the financial data,
+            # so including it in the cutoff incorrectly blocks older-but-valid statements.
             is_historical = False
             if existing:
-                entered_at = conn.execute(
-                    "SELECT entered_at FROM manual_entries WHERE id=?", (existing["id"],)
-                ).fetchone()["entered_at"]
                 latest_snap = conn.execute(
                     """SELECT MAX(snapped_at) FROM manual_entry_snapshots
                        WHERE (account_number = ? AND account_number IS NOT NULL)
                           OR (account_number IS NULL AND name = ?)""",
                     (acct_num, existing["name"])
                 ).fetchone()[0]
-                # Normalize to ISO strings — entered_at may be datetime.date (PARSE_DECLTYPES)
-                cutoff = max(filter(None, [
-                    str(entered_at)[:10] if entered_at else None,
-                    str(latest_snap)[:10] if latest_snap else None,
-                ]))
-                if snapshot_date < cutoff:
+                if latest_snap and snapshot_date < str(latest_snap)[:10]:
                     is_historical = True
+
+            # When historical, still write current holdings if the entry has none yet
+            # (e.g. manually restored entry) — empty holdings is always worse.
+            force_holdings = False
+            if is_historical and existing:
+                existing_holdings = conn.execute(
+                    "SELECT COUNT(*) FROM manual_holdings WHERE manual_entry_id=?",
+                    (existing["id"],)
+                ).fetchone()[0]
+                if existing_holdings == 0:
+                    force_holdings = True
 
             if is_historical:
                 entry_id = existing["id"]
@@ -426,8 +429,9 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
 
             holdings = e.get("holdings") or []
 
-            # Current holdings replaced only when this is the most recent statement.
-            if not is_historical:
+            # Current holdings replaced when this is the most recent statement,
+            # or when the entry has no holdings yet (force_holdings).
+            if not is_historical or force_holdings:
                 for h in holdings:
                     h_name = str(h.get("name", ""))[:200]
                     if not h_name:

@@ -660,8 +660,12 @@ export default function Dashboard() {
   const carValue = latestManual["car_value"];
   const otherAssets = manualEntries.filter(e => e.category === "other_asset");
   const liabilities = manualEntries.filter(e => e.category === "other_liability");
-  const manualInvested = manualEntries.filter(e => e.category === "invested");
-  const manualLiquid = manualEntries.filter(e => e.category === "liquid");
+  // Excluded entries (e.g. "Overall Portfolio") sort first, then alphabetical
+  const sortManual = arr => [...arr].sort((a, b) =>
+    (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name)
+  );
+  const manualInvested = sortManual(manualEntries.filter(e => e.category === "invested"));
+  const manualLiquid = sortManual(manualEntries.filter(e => e.category === "liquid"));
 
   // Consolidated allocation across all manual investment holdings
   const allHoldings = manualInvested.flatMap(e => e.holdings || []);

@@ -1097,11 +1097,13 @@ export default function Accounts() {
             Click any row to expand holdings. Use "⊘ Exclude" on consolidated portfolio summaries to avoid double-counting in net worth.
           </div>
           <div className="account-list">
-            {manualEntries.filter(e => e.category === "invested").map(entry => (
-              <ManualInvestmentCard key={entry.id} entry={entry}
-                onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
-                onToggleExclude={load} onRenamed={load} />
-            ))}
+            {[...manualEntries.filter(e => e.category === "invested")]
+              .sort((a, b) => (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name))
+              .map(entry => (
+                <ManualInvestmentCard key={entry.id} entry={entry}
+                  onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+                  onToggleExclude={load} onRenamed={load} />
+              ))}
           </div>
         </div>
       )}
