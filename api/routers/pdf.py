@@ -385,7 +385,11 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                           OR (account_number IS NULL AND name = ?)""",
                     (acct_num, existing["name"])
                 ).fetchone()[0]
-                cutoff = max(filter(None, [entered_at, latest_snap]))
+                # Normalize to ISO strings — entered_at may be datetime.date (PARSE_DECLTYPES)
+                cutoff = max(filter(None, [
+                    str(entered_at)[:10] if entered_at else None,
+                    str(latest_snap)[:10] if latest_snap else None,
+                ]))
                 if snapshot_date < cutoff:
                     is_historical = True
 
