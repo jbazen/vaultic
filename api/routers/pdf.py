@@ -1,5 +1,17 @@
-"""PDF ingestion: extract text with pdfplumber, parse with Claude Haiku."""
+"""
+PDF ingestion: extract text with pdfplumber, parse with Claude Sonnet.
+
+Flow:
+  POST /api/pdf/ingest — upload PDF → extract text → Claude Sonnet → return parsed entries
+  POST /api/pdf/save   — user confirms parsed entries → upsert manual_entries
+
+Account matching uses a 4-tier strategy (see _find_existing docstring) to reliably
+link PDF imports to existing entries across re-imports, renames, and PDF format changes.
+Historical imports (statement date older than most recent snapshot) write to the
+snapshot tables only and do not overwrite current balances.
+"""
 import os
+import re as _re
 import logging
 import json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -207,8 +219,6 @@ async def ingest_pdf(
 class SaveParsedRequest(BaseModel):
     entries: list[dict]
 
-
-import re as _re
 
 def _normalize_acct(raw) -> str | None:
     """Uppercase, strip all non-alphanumeric. B37-601959 == B37601959 == B37 601959."""

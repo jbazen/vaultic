@@ -60,7 +60,7 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 | **AI advisor** | Anthropic Claude Haiku (`claude-haiku-4-5-20251001`) |
 | **AI voice** | OpenAI TTS (`tts-1`, `fable` voice) — optional |
 | **Web search** | Tavily API (AI-optimized search for Sage) |
-| **PDF parsing** | pdfplumber + Claude Haiku extraction |
+| **PDF parsing** | pdfplumber + Claude Sonnet extraction |
 | **Auth** | JWT (PyJWT) + bcrypt password hashing |
 | **2FA** | TOTP via pyotp + QR code via qrcode |
 | **Encryption** | Fernet symmetric encryption (cryptography library) for Plaid tokens at rest |
@@ -94,7 +94,7 @@ vaultic/
 │       ├── manual.py        # /api/manual/* — CRUD for manual asset entries + holdings
 │       ├── sage.py          # /api/sage/* — chat endpoint, TTS endpoint (OpenAI fable voice)
 │       ├── crypto.py        # /api/crypto/* — Coinbase account data
-│       └── pdf.py           # /api/pdf/* — PDF ingestion (pdfplumber + Haiku), holdings + activity summary, save
+│       └── pdf.py           # /api/pdf/* — PDF ingestion (pdfplumber + Sonnet), 4-tier account matching, holdings + activity summary, historical snapshots
 ├── ui/
 │   ├── public/
 │   │   └── favicon.png      # Tab icon + sidebar logo
@@ -196,16 +196,19 @@ User message → POST /api/sage/chat (rate limited: 60/hr)
 
 ```
 User drags PDF → /api/pdf/ingest (multipart, 20MB limit, 30 pages max)
-  → pdfplumber extracts text from all pages (up to 15,000 chars)
-  → Claude Haiku parse prompt: extract per-account entries with:
+  → pdfplumber extracts text from all pages (up to 30,000 chars)
+  → Claude Sonnet parse prompt: extract per-account entries with:
       - name, category (invested/liquid/etc), value, notes
-      - activity_summary (beginning balance, net change, TWR %, date range)
-      - holdings[] (exact names, ticker, asset_class, shares, price, value, gain/loss)
+      - activity_summary (beginning balance, net change, TWR %, date range, YTD fields)
+      - holdings[] (exact names, ticker, asset_class, shares, price, value, cost, gain/loss)
+      - activity[] (individual transactions: buy, sell, dividend, reinvestment, fee, transfer)
   → if response truncated (max_tokens): _salvage_json() recovers all complete objects
   → return parsed entries to frontend for review
 User reviews/edits entries → clicks Save → /api/pdf/save
-  → DELETE existing manual_entry with same name (prevents re-import stacking)
-  → INSERT new manual_entry + all holdings rows
+  → 4-tier account matching (account_number → institution+holder+last4 → institution+holder → name)
+  → historical imports (statement date < latest snapshot) write to snapshot tables only
+  → current imports: replace existing entry + all holdings rows
+  → append-only snapshot tables: manual_entry_snapshots + manual_holdings_snapshots
   → net worth snapshot updated immediately
 ```
 
@@ -360,7 +363,7 @@ All endpoints except `/api/auth/login`, `/api/auth/verify-2fa`, and `/api/health
 ### PDF — `/api/pdf`
 | Method | Path | Description |
 |---|---|---|
-| POST | `/ingest` | Upload PDF → parse with pdfplumber + Haiku → return entries |
+| POST | `/ingest` | Upload PDF → parse with pdfplumber + Sonnet → return entries |
 | POST | `/save` | Save confirmed parsed entries as manual entries |
 
 ---
