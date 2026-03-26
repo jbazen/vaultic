@@ -168,11 +168,11 @@ async def ingest_pdf(
     try:
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=8096,
+            model="claude-sonnet-4-6",
+            max_tokens=16000,
             messages=[{
                 "role": "user",
-                "content": f"{PARSE_PROMPT}\n\n---PDF TEXT---\n{full_text[:15000]}"
+                "content": f"{PARSE_PROMPT}\n\n---PDF TEXT---\n{full_text[:30000]}"
             }]
         )
         raw = resp.content[0].text.strip()
