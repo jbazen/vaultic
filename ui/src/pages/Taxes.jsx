@@ -4,7 +4,7 @@
  * Sage is the primary interface for tax questions and planning.
  */
 import { useState, useEffect, useRef } from "react";
-import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub, getTaxProjection, getW4s, uploadW4, uploadTaxDoc, getTaxDocs, deleteTaxDoc, getDraftReturn, getW4WizardPrefill, runW4Wizard } from "../api.js";
+import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub, getTaxProjection, getW4s, uploadW4, uploadTaxDoc, getTaxDocs, deleteTaxDoc, getDraftReturn, getW4WizardPrefill, runW4Wizard, getEstimatedPayments } from "../api.js";
 
 // Currency formatter
 function fmt(v) {
@@ -40,6 +40,11 @@ export default function Taxes() {
   const [w4Msg, setW4Msg] = useState(null);
   const w4InputRef = useRef(null);
 
+  // Estimated payments (1040-ES)
+  const [estPayments, setEstPayments] = useState(null);
+  const [estOtherIncome, setEstOtherIncome] = useState(0);
+  const [estLoading, setEstLoading] = useState(false);
+
   // W-4 Wizard
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardJobs, setWizardJobs] = useState([]);
@@ -69,6 +74,7 @@ export default function Taxes() {
     loadSummary();
     getPaystubs().then(setPaystubs).catch(() => {});
     getTaxProjection(2025).then(setProjection).catch(() => {});
+    getEstimatedPayments(2025).then(setEstPayments).catch(() => {});
     getW4s().then(setW4s).catch(() => {});
     getTaxDocs(2025).then(setTaxDocs).catch(() => {});
     getDraftReturn(2025).then(setDraftReturn).catch(() => {});
@@ -568,6 +574,119 @@ export default function Taxes() {
               )}
             </div>
           )}
+
+          {/* 1040-ES Quarterly Estimated Payments */}
+          <div className="card" style={{ marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>Quarterly Estimated Payments (1040-ES)</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="number"
+                  placeholder="Other income"
+                  value={estOtherIncome || ""}
+                  onChange={e => setEstOtherIncome(Number(e.target.value) || 0)}
+                  style={{ width: 130, padding: "5px 10px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg3)", color: "inherit", fontSize: 13 }}
+                />
+                <button
+                  onClick={() => {
+                    setEstLoading(true);
+                    getEstimatedPayments(2025, estOtherIncome)
+                      .then(setEstPayments)
+                      .catch(() => {})
+                      .finally(() => setEstLoading(false));
+                  }}
+                  disabled={estLoading}
+                  style={{ padding: "5px 12px", borderRadius: 7, background: "#7c3aed", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: estLoading ? "not-allowed" : "pointer", opacity: estLoading ? 0.7 : 1 }}
+                >
+                  {estLoading ? "Calculating…" : "Recalculate"}
+                </button>
+              </div>
+            </div>
+            {!estPayments ? (
+              <div style={{ color: "var(--text2)", fontSize: 14, textAlign: "center", padding: "16px 0" }}>
+                Upload paystubs to calculate estimated quarterly payments.
+              </div>
+            ) : (
+              <>
+                {/* Status banner */}
+                {(() => {
+                  const s = estPayments.projection?.shortfall || 0;
+                  const perQtr = estPayments.recommended_per_quarter || 0;
+                  if (perQtr === 0) {
+                    return (
+                      <div style={{ background: "rgba(52,211,153,0.12)", border: "1px solid #34d399", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#34d399", fontWeight: 600 }}>
+                        ✓ Your withholding covers your projected tax — no estimated payments needed.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div style={{ background: "rgba(251,191,36,0.12)", border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#f59e0b", fontWeight: 600 }}>
+                      ⚠ Estimated payments recommended: <strong>{fmt(perQtr)}/quarter</strong>
+                      {" · "}Annual shortfall: <strong>{fmt(s)}</strong>
+                      {" · "}Method: {estPayments.recommended_method === "prior_year" ? "Prior year safe harbor" : "90% of projected tax"}
+                    </div>
+                  );
+                })()}
+
+                {/* Quarter table */}
+                <div style={{ overflowX: "auto", marginBottom: 14 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
+                        {["Quarter", "Period", "Due Date", "Amount", "Status"].map(h => (
+                          <th key={h} style={{ padding: "9px 12px", textAlign: h === "Quarter" || h === "Period" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(estPayments.quarters || []).map(q => {
+                        const statusColor = q.status === "past" ? "var(--text2)" : q.status === "current" ? "#f59e0b" : "#a78bfa";
+                        const statusLabel = q.status === "past" ? "Past" : q.status === "current" ? `Due in ${q.days_until_due}d` : `In ${q.days_until_due}d`;
+                        return (
+                          <tr key={q.quarter} style={{ borderBottom: "1px solid var(--border)", opacity: q.status === "past" ? 0.6 : 1 }}>
+                            <td style={{ padding: "10px 12px", fontWeight: 600 }}>{q.label}</td>
+                            <td style={{ padding: "10px 12px", color: "var(--text2)" }}>{q.period}</td>
+                            <td style={{ padding: "10px 12px", textAlign: "right" }}>{q.due}</td>
+                            <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>{fmt(q.amount)}</td>
+                            <td style={{ padding: "10px 12px", textAlign: "right", color: statusColor, fontWeight: 600, fontSize: 12 }}>{statusLabel}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Safe harbor detail */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                  {[
+                    { key: "safe_harbor_a", label: "Safe Harbor A", sub: "90% of projected tax" },
+                    { key: "safe_harbor_b", label: "Safe Harbor B", sub: estPayments.safe_harbor_b?.label || "Prior year" },
+                  ].map(sh => {
+                    const d = estPayments[sh.key] || {};
+                    const isRec = (sh.key === "safe_harbor_a" && estPayments.recommended_method === "current_year") ||
+                                  (sh.key === "safe_harbor_b" && estPayments.recommended_method === "prior_year");
+                    return (
+                      <div key={sh.key} style={{ background: "var(--bg3)", borderRadius: 9, padding: "11px 14px", border: isRec ? "1px solid #a78bfa" : "1px solid var(--border)" }}>
+                        <div style={{ fontSize: 11, color: isRec ? "#a78bfa" : "var(--text2)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>
+                          {sh.label}{isRec && " ✓ recommended"}
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>{sh.sub}</div>
+                        <div style={{ fontWeight: 700, fontSize: 17 }}>{fmt(d.per_quarter)}<span style={{ fontSize: 12, fontWeight: 400, color: "var(--text2)" }}>/qtr</span></div>
+                        <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>Total needed: {fmt(d.total_needed)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Notes */}
+                {(estPayments.notes || []).length > 0 && (
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "var(--text2)", lineHeight: 1.6 }}>
+                    {estPayments.notes.map((n, i) => <li key={i}>{n}</li>)}
+                  </ul>
+                )}
+              </>
+            )}
+          </div>
 
           {/* W-4s on file */}
           <div className="card" style={{ marginBottom: 20 }}>

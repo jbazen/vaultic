@@ -475,6 +475,201 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
     }
 
 
+# ── Quarterly Estimated Tax Payments (1040-ES) ────────────────────────────────
+
+# Fixed due dates for estimated payments by tax year.
+# When a date falls on a weekend/holiday the IRS moves it to the next business day.
+_EST_DUE_DATES = {
+    2025: [
+        {"quarter": 1, "label": "Q1", "period": "Jan 1 – Mar 31", "due": "2025-04-15"},
+        {"quarter": 2, "label": "Q2", "period": "Apr 1 – May 31", "due": "2025-06-16"},
+        {"quarter": 3, "label": "Q3", "period": "Jun 1 – Aug 31", "due": "2025-09-15"},
+        {"quarter": 4, "label": "Q4", "period": "Sep 1 – Dec 31", "due": "2026-01-15"},
+    ],
+    2024: [
+        {"quarter": 1, "label": "Q1", "period": "Jan 1 – Mar 31", "due": "2024-04-15"},
+        {"quarter": 2, "label": "Q2", "period": "Apr 1 – May 31", "due": "2024-06-17"},
+        {"quarter": 3, "label": "Q3", "period": "Jun 1 – Aug 31", "due": "2024-09-16"},
+        {"quarter": 4, "label": "Q4", "period": "Sep 1 – Dec 31", "due": "2025-01-15"},
+    ],
+}
+
+
+@router.get("/estimated-payments/{year}")
+async def get_estimated_payments(
+    year: int,
+    other_income: float = 0.0,  # non-W2 income not subject to withholding (optional query param)
+    _user: str = Depends(get_current_user),
+):
+    """Calculate 1040-ES quarterly estimated tax payment amounts.
+
+    Uses two IRS safe harbor methods and recommends whichever requires less
+    cash out-of-pocket while still protecting against the underpayment penalty.
+
+    Safe harbor A — Current year: pay at least 90% of this year's projected tax.
+    Safe harbor B — Prior year:   pay at least 100% of last year's tax
+                                  (110% if prior year AGI > $150k).
+
+    The recommended quarterly payment is the lower of the two safe harbor amounts
+    divided equally across the four quarters, after subtracting expected W-2
+    withholding. Equal quarterly payments are standard for W-2 households;
+    the annualized installment method (for uneven income) is not implemented.
+    """
+    from datetime import date as _date
+
+    if year not in (2024, 2025):
+        raise HTTPException(status_code=400, detail="Estimated payments only supported for 2024–2025")
+
+    today = _date.today()
+
+    # ── Pull paystub data ───────────────────────────────────────────────────
+    with get_db() as conn:
+        stubs = conn.execute("""
+            SELECT p.* FROM paystubs p
+            INNER JOIN (
+                SELECT employer, MAX(pay_date) AS latest FROM paystubs GROUP BY employer
+            ) l ON p.employer = l.employer AND p.pay_date = l.latest
+        """).fetchall()
+
+        prior = conn.execute(
+            "SELECT * FROM tax_returns WHERE tax_year = ?", (year - 1,)
+        ).fetchone()
+
+    if not stubs:
+        raise HTTPException(status_code=404, detail="No paystubs uploaded — cannot calculate")
+
+    stubs = [dict(s) for s in stubs]
+    prior = dict(prior) if prior else {}
+
+    # ── Project current year income & withholding from YTD paystubs ─────────
+    ytd_gross   = sum(s.get("ytd_gross")   or 0 for s in stubs)
+    ytd_federal = sum(s.get("ytd_federal") or 0 for s in stubs)
+
+    latest_pay_date_str = max(s["pay_date"] for s in stubs if s.get("pay_date"))
+    latest_pay_date = _date.fromisoformat(latest_pay_date_str)
+    year_start  = _date(year, 1, 1)
+    year_end    = _date(year, 12, 31)
+    days_elapsed = (latest_pay_date - year_start).days + 1
+    days_in_year = (year_end - year_start).days + 1
+    year_frac   = days_elapsed / days_in_year
+
+    proj_gross    = (ytd_gross   / year_frac) if year_frac > 0 else ytd_gross
+    proj_withheld = (ytd_federal / year_frac) if year_frac > 0 else ytd_federal
+
+    # Add any non-W2 income the user provided (crypto gains, self-employment, etc.)
+    total_proj_income = proj_gross + other_income
+
+    # Deduction — use prior year itemized if it beat standard, else standard
+    std_ded = _STANDARD_DEDUCTIONS.get(year, _STANDARD_DEDUCTIONS[2025]).get("married_filing_jointly", 30000)
+    prior_itemized = prior.get("total_itemized") or 0
+    deduction = max(std_ded, prior_itemized)
+
+    brackets = _BRACKETS.get(year, _BRACKETS[2025]).get("married_filing_jointly")
+    child_credit = 2 * 2000  # John and Milo
+
+    taxable = max(0.0, total_proj_income - deduction)
+    proj_tax = max(0.0, _calc_tax(taxable, brackets) - child_credit)
+
+    # ── Safe harbor A: 90% of current year projected tax ────────────────────
+    safe_harbor_a_total   = proj_tax * 0.90
+    safe_harbor_a_needed  = max(0.0, safe_harbor_a_total  - proj_withheld)
+    safe_harbor_a_per_qtr = round(safe_harbor_a_needed / 4, 2)
+
+    # ── Safe harbor B: 100% / 110% of prior year actual tax ─────────────────
+    prior_tax = prior.get("total_tax") or prior.get("net_tax") or 0
+    prior_agi = prior.get("agi") or 0
+    safe_harbor_b_rate   = 1.10 if prior_agi > 150000 else 1.00
+    safe_harbor_b_total  = prior_tax * safe_harbor_b_rate
+    safe_harbor_b_needed = max(0.0, safe_harbor_b_total - proj_withheld)
+    safe_harbor_b_per_qtr = round(safe_harbor_b_needed / 4, 2)
+
+    # ── Recommended method ───────────────────────────────────────────────────
+    # Choose whichever requires less cash. If no prior year data, use current year.
+    if prior_tax > 0:
+        if safe_harbor_b_per_qtr <= safe_harbor_a_per_qtr:
+            recommended_method = "prior_year"
+            recommended_per_qtr = safe_harbor_b_per_qtr
+            recommended_total   = safe_harbor_b_needed
+        else:
+            recommended_method = "current_year"
+            recommended_per_qtr = safe_harbor_a_per_qtr
+            recommended_total   = safe_harbor_a_needed
+    else:
+        recommended_method = "current_year"
+        recommended_per_qtr = safe_harbor_a_per_qtr
+        recommended_total   = safe_harbor_a_needed
+
+    # ── Quarter status: past / current / upcoming ────────────────────────────
+    quarters = []
+    for q in _EST_DUE_DATES.get(year, []):
+        due = _date.fromisoformat(q["due"])
+        if today > due:
+            status = "past"
+        elif today >= _date.fromisoformat(q["due"][:7] + "-01"):
+            status = "current"
+        else:
+            status = "upcoming"
+        quarters.append({
+            **q,
+            "amount": recommended_per_qtr,
+            "status": status,
+            "days_until_due": (due - today).days,
+        })
+
+    # ── Notes ────────────────────────────────────────────────────────────────
+    def fmt_dollars(v):
+        return f"${round(v):,}"
+
+    notes = []
+    shortfall = proj_tax - proj_withheld
+    if shortfall < 1000:
+        notes.append("Your projected withholding likely covers your tax liability — you may not need estimated payments at all (IRS de minimis threshold: owe < $1,000 after withholding).")
+    if recommended_per_qtr == 0:
+        notes.append("No estimated payments appear necessary based on current data.")
+    if other_income > 0:
+        notes.append(f"Includes ${round(other_income):,} of additional non-withheld income you provided.")
+    if not prior_tax:
+        notes.append("No prior year return on file — calculation uses current year projection only. Upload your prior year 1040 for a more conservative safe harbor estimate.")
+    if recommended_method == "prior_year":
+        notes.append(f"Using prior year safe harbor ({int(safe_harbor_b_rate*100)}% of {year-1} tax of {fmt_dollars(prior_tax)}). This locks in your payment regardless of how this year's income changes.")
+    else:
+        notes.append("Using current year method (90% of projected tax). Update after each paystub upload as your projection changes.")
+
+    return {
+        "year": year,
+        "as_of": latest_pay_date_str,
+        "projection": {
+            "proj_gross": round(proj_gross),
+            "other_income": round(other_income),
+            "total_income": round(total_proj_income),
+            "deduction": round(deduction),
+            "taxable_income": round(taxable),
+            "proj_tax": round(proj_tax),
+            "proj_withheld": round(proj_withheld),
+            "shortfall": round(shortfall),
+        },
+        "safe_harbor_a": {
+            "method": "current_year_90pct",
+            "label": "90% of projected current year tax",
+            "total_needed": round(safe_harbor_a_needed),
+            "per_quarter": safe_harbor_a_per_qtr,
+        },
+        "safe_harbor_b": {
+            "method": "prior_year",
+            "label": f"{int(safe_harbor_b_rate*100)}% of {year-1} actual tax" if prior_tax else "No prior year data",
+            "prior_year_tax": round(prior_tax),
+            "safe_harbor_rate": safe_harbor_b_rate,
+            "total_needed": round(safe_harbor_b_needed),
+            "per_quarter": safe_harbor_b_per_qtr,
+        },
+        "recommended_method": recommended_method,
+        "recommended_per_quarter": recommended_per_qtr,
+        "recommended_total": round(recommended_total),
+        "quarters": quarters,
+        "notes": notes,
+    }
+
+
 # ── Universal tax document upload ─────────────────────────────────────────────
 
 _DOC_TYPE_LABELS = {

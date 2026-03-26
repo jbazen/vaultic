@@ -776,6 +776,11 @@ export async function deleteTaxDoc(id) {
   return res.json();
 }
 
+export async function getEstimatedPayments(year, otherIncome = 0) {
+  const res = await apiFetch(`/api/tax/estimated-payments/${year}?other_income=${otherIncome}`);
+  return res.json();
+}
+
 export async function getDraftReturn(year) {
   const res = await apiFetch(`/api/tax/draft/${year}`);
   return res.json();
