@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vaultic — System Architecture</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding: 2rem 1rem 4rem;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #e6edf3;
+      margin-bottom: 0.25rem;
+      letter-spacing: 0.5px;
+    }
+
+    .subtitle {
+      text-align: center;
+      font-size: 0.8rem;
+      color: #8b949e;
+      margin-bottom: 2.5rem;
+    }
+
+    /* ── Canvas ──────────────────────────────────────────────────── */
+
+    .canvas {
+      position: relative;
+      width: 100%;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    svg.connectors {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    /* ── Swimlanes ───────────────────────────────────────────────── */
+
+    .lane {
+      border: 1px solid #21262d;
+      border-radius: 12px;
+      padding: 1rem 1rem 1.25rem;
+      margin-bottom: 1.25rem;
+      background: #161b22;
+    }
+
+    .lane-title {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+      color: #8b949e;
+      margin-bottom: 0.85rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #21262d;
+    }
+
+    .lane-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: flex-start;
+    }
+
+    /* ── Boxes ───────────────────────────────────────────────────── */
+
+    .box {
+      border-radius: 8px;
+      padding: 0.6rem 0.85rem;
+      font-size: 0.78rem;
+      font-weight: 600;
+      line-height: 1.4;
+      min-width: 110px;
+      text-align: center;
+      border: 1.5px solid transparent;
+      cursor: default;
+      transition: transform 0.15s, box-shadow 0.15s;
+      position: relative;
+    }
+
+    .box:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    }
+
+    .box .icon { font-size: 1.1rem; display: block; margin-bottom: 3px; }
+    .box .label { display: block; }
+    .box .sub {
+      display: block;
+      font-size: 0.63rem;
+      font-weight: 400;
+      opacity: 0.75;
+      margin-top: 2px;
+    }
+
+    /* colour themes */
+    .box.green  { background: #0d2b1e; border-color: #2ea043; color: #56d364; }
+    .box.blue   { background: #0d1f3a; border-color: #388bfd; color: #79c0ff; }
+    .box.purple { background: #1e1040; border-color: #a371f7; color: #d2a8ff; }
+    .box.orange { background: #2b1800; border-color: #e3710a; color: #ffa657; }
+    .box.red    { background: #2b0e0e; border-color: #f85149; color: #ff7b72; }
+    .box.teal   { background: #092a2a; border-color: #2dd4bf; color: #5eead4; }
+    .box.yellow { background: #2b2200; border-color: #d29922; color: #f0b429; }
+    .box.gray   { background: #161b22; border-color: #30363d; color: #8b949e; }
+    .box.white  { background: #1c2128; border-color: #8b949e; color: #e6edf3; }
+
+    /* ── Arrow legend ────────────────────────────────────────────── */
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.25rem 2rem;
+      justify-content: center;
+      margin-top: 1.75rem;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.7rem;
+      color: #8b949e;
+    }
+
+    .legend-line {
+      width: 32px;
+      height: 2px;
+    }
+
+    /* ── Tooltip ─────────────────────────────────────────────────── */
+
+    .tooltip {
+      position: fixed;
+      background: #1c2128;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.72rem;
+      color: #e6edf3;
+      line-height: 1.5;
+      max-width: 260px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+      z-index: 100;
+    }
+
+    .tooltip.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<h1>Vaultic — System Architecture</h1>
+<p class="subtitle">Personal financial command center · as of 2026-03-26</p>
+
+<div class="canvas" id="canvas">
+
+  <!-- ── ROW 1: USER ───────────────────────────────────────────── -->
+  <div class="lane">
+    <div class="lane-title">User</div>
+    <div class="lane-row">
+      <div class="box blue" id="b-browser"
+           data-tip="React 18 + Vite SPA. PWA-capable. Runs in the user's browser. Communicates with the backend over HTTPS REST + JSON.">
+        <span class="icon">🖥️</span>
+        <span class="label">Browser / PWA</span>
+        <span class="sub">React 18 + Vite</span>
+      </div>
+      <div class="box blue" id="b-sage-panel"
+           data-tip="Floating Sage chat panel. Always visible. Hey Sage wake-word activates voice mode. Push-to-talk. Text streaming via fetch. OpenAI TTS plays audio responses at 1.2× speed.">
+        <span class="icon">🔮</span>
+        <span class="label">Sage Panel</span>
+        <span class="sub">floating chat · voice</span>
+      </div>
+      <div class="box blue" id="b-plaidlink"
+           data-tip="Plaid Link React component. OAuth redirect flow for Chase/Rocket/HealthEquity. Non-OAuth inline MFA for Vanguard/Voya/etc. Exchanges public_token for access_token stored encrypted at rest.">
+        <span class="icon">🏦</span>
+        <span class="label">Plaid Link</span>
+        <span class="sub">account OAuth UI</span>
+      </div>
+      <div class="box blue" id="b-pdfui"
+           data-tip="PDF import UI. Drag & drop PDF upload. Preview/edit parsed entries before confirming save. Calls /api/pdf/ingest then /api/pdf/save.">
+        <span class="icon">📄</span>
+        <span class="label">PDF Importer</span>
+        <span class="sub">drag & drop · preview</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── ROW 2: ORACLE CLOUD / UBUNTU SERVER ──────────────────── -->
+  <div class="lane">
+    <div class="lane-title">Oracle Cloud — Always-Free A1 ARM Instance · Ubuntu 22.04</div>
+    <div class="lane-row">
+
+      <div class="box orange" id="b-nginx"
+           data-tip="nginx reverse proxy. Terminates TLS. Forwards /api/* to uvicorn:8000. Serves static frontend build from /dist. client_max_body_size 25m for PDF uploads. proxy_read_timeout 180s for Claude Sonnet parsing.">
+        <span class="icon">🔀</span>
+        <span class="label">nginx</span>
+        <span class="sub">TLS · reverse proxy</span>
+      </div>
+
+      <div class="box green" id="b-fastapi"
+           data-tip="FastAPI (Python 3.12) backend. JWT auth + bcrypt. TOTP 2FA. Rate limiting. APScheduler daily 2am sync. Routes: accounts, transactions, budget, manual, pdf, net-worth, sage, coinbase, sheets.">
+        <span class="icon">⚡</span>
+        <span class="label">FastAPI</span>
+        <span class="sub">Python 3.12 · uvicorn</span>
+      </div>
+
+      <div class="box green" id="b-sage-be"
+           data-tip="Sage backend route (/api/sage/chat). Tool-use loop with Claude Haiku. Tools: get_net_worth, get_accounts, get_transactions, get_budget, get_budget_history, search_budget_history, assign_transaction, auto_assign_month, web_search (Tavily), fetch_page, get_notes, update_notes. Token overflow guard: truncates old tool_result content to 800 chars before resend.">
+        <span class="icon">🧠</span>
+        <span class="label">Sage Engine</span>
+        <span class="sub">tool-use loop · /api/sage</span>
+      </div>
+
+      <div class="box green" id="b-scheduler"
+           data-tip="APScheduler cron — runs daily at 2am. Triggers Plaid transaction sync (cursor-based), Coinbase balance refresh, net worth snapshot computation. Gated behind TESTING env var to prevent test hangs.">
+        <span class="icon">⏰</span>
+        <span class="label">APScheduler</span>
+        <span class="sub">daily 2am sync</span>
+      </div>
+
+      <div class="box green" id="b-pdf-router"
+           data-tip="POST /api/pdf/ingest: pdfplumber text extraction (30 pages, 30k chars) → Claude Sonnet parse prompt → _salvage_json recovery. POST /api/pdf/save: 4-tier account matching (account_number → institution+holder+last4 → institution+holder → name). pre_existing_ids guard prevents Tier 3 intra-batch false positives. is_historical detection from snapshot table only. force_holdings for empty entries.">
+        <span class="icon">📥</span>
+        <span class="label">PDF Router</span>
+        <span class="sub">ingest · 4-tier match · snapshots</span>
+      </div>
+
+      <div class="box purple" id="b-sqlite"
+           data-tip="SQLite in WAL mode. Tables: users, plaid_items, accounts, account_balances, transactions, transaction_splits, transaction_metadata, budget_groups, budget_items, budget_history, budget_auto_rules, transaction_assignments, manual_entries, manual_holdings, manual_entry_snapshots, manual_holdings_snapshots, net_worth_snapshots. Wrapped in Litestream for continuous R2 backup.">
+        <span class="icon">🗄️</span>
+        <span class="label">SQLite (WAL)</span>
+        <span class="sub">data/vaultic.db</span>
+      </div>
+
+      <div class="box purple" id="b-litestream"
+           data-tip="Litestream wraps uvicorn via start.sh (litestream replicate -exec uvicorn...). Streams WAL pages to Cloudflare R2 in real time. 7-day retention. restore.sh pulls latest snapshot + WAL on deploy.">
+        <span class="icon">🔄</span>
+        <span class="label">Litestream</span>
+        <span class="sub">WAL → R2 real-time</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── ROW 3: EXTERNAL SERVICES ─────────────────────────────── -->
+  <div class="lane">
+    <div class="lane-title">External Services &amp; APIs</div>
+    <div class="lane-row">
+
+      <div class="box teal" id="b-plaid"
+           data-tip="Plaid API (production). Non-OAuth: Vanguard, Voya, Insperity, Robinhood, Optum Bank. OAuth (pending ~April 2026): Chase, Rocket Mortgage, HealthEquity. liabilities in optional_products (not products). Fernet-encrypted access tokens at rest. Cursor-based transaction sync.">
+        <span class="icon">🏦</span>
+        <span class="label">Plaid API</span>
+        <span class="sub">account link · transactions</span>
+      </div>
+
+      <div class="box orange" id="b-coinbase"
+           data-tip="Coinbase Advanced Trade API. Fetches crypto account balances and holdings (BTC, ETH, etc.) on each sync. Keys stored in server .env.">
+        <span class="icon">₿</span>
+        <span class="label">Coinbase</span>
+        <span class="sub">Advanced Trade API</span>
+      </div>
+
+      <div class="box yellow" id="b-anthropic-haiku"
+           data-tip="Anthropic Claude Haiku (claude-haiku-4-5-20251001). Powers Sage tool-use loop. Chosen for low latency on conversational turns. 200K context window. Token overflow guard truncates old history.">
+        <span class="icon">🤖</span>
+        <span class="label">Claude Haiku</span>
+        <span class="sub">Anthropic · Sage advisor</span>
+      </div>
+
+      <div class="box yellow" id="b-anthropic-sonnet"
+           data-tip="Anthropic Claude Sonnet (claude-sonnet-4-6). Powers PDF parsing — complex multi-account statement extraction. Higher accuracy than Haiku for dense financial tables. Responses can take 60–90s on large PDFs; nginx proxy_read_timeout 180s required.">
+        <span class="icon">📑</span>
+        <span class="label">Claude Sonnet</span>
+        <span class="sub">Anthropic · PDF parsing</span>
+      </div>
+
+      <div class="box white" id="b-openai"
+           data-tip="OpenAI TTS API (tts-1, voice: fable). Sage voice responses. Sentences split and fetched in parallel for low latency. Playback at 1.2× speed. Falls back silently if API unavailable.">
+        <span class="icon">🔊</span>
+        <span class="label">OpenAI TTS</span>
+        <span class="sub">tts-1 · fable · 1.2×</span>
+      </div>
+
+      <div class="box teal" id="b-tavily"
+           data-tip="Tavily Search API. Powers Sage's web_search tool. include_answer: true for AI-synthesized answers. Used for market data, financial news, rate lookups. TAVILY_API_KEY in server .env.">
+        <span class="icon">🔍</span>
+        <span class="label">Tavily Search</span>
+        <span class="sub">web_search for Sage</span>
+      </div>
+
+      <div class="box green" id="b-gsheets"
+           data-tip="Google Sheets API (read-only). Sheet: 11-e3Jodhs8YPGZ1CvcVjou8D2GP2iXs7rWLAljf2kDw. Wife's Fund Financials tracker. 10+ years of monthly data back to Oct 2015. Publicly shared (view-only). Range selector: 6M / 1Y / 2Y / 5Y / All.">
+        <span class="icon">📊</span>
+        <span class="label">Google Sheets</span>
+        <span class="sub">Fund Financials · read-only</span>
+      </div>
+
+      <div class="box purple" id="b-r2"
+           data-tip="Cloudflare R2 object storage. Receives continuous WAL replication from Litestream. Bucket: vaultic-backup. 7-day retention. Used for disaster recovery — restore.sh pulls latest snapshot on fresh deploy.">
+        <span class="icon">☁️</span>
+        <span class="label">Cloudflare R2</span>
+        <span class="sub">SQLite backup · WAL stream</span>
+      </div>
+
+      <div class="box gray" id="b-github"
+           data-tip="GitHub repository (private). GitHub Actions CI/CD: on push to main → SSH deploy to Oracle A1 → pull latest, pip install, npm build, restart systemd vaultic service. No Co-Authored-By in commit messages.">
+        <span class="icon">🐙</span>
+        <span class="label">GitHub</span>
+        <span class="sub">Actions CI/CD · SSH deploy</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── ROW 4: DATA SOURCES ───────────────────────────────────── -->
+  <div class="lane">
+    <div class="lane-title">Data Sources (read via intermediaries)</div>
+    <div class="lane-row">
+
+      <div class="box blue" id="b-chase"
+           data-tip="Chase checking, savings, money market, credit cards. Connected via Plaid (non-OAuth currently, OAuth pending April 2026 approval). Transactions + balances synced daily.">
+        <span class="icon">🏛️</span>
+        <span class="label">Chase</span>
+        <span class="sub">via Plaid</span>
+      </div>
+
+      <div class="box blue" id="b-vanguard"
+           data-tip="Vanguard 401k. Connected via Plaid non-OAuth. Balances + investment holdings synced.">
+        <span class="icon">📈</span>
+        <span class="label">Vanguard 401k</span>
+        <span class="sub">via Plaid</span>
+      </div>
+
+      <div class="box blue" id="b-rocket"
+           data-tip="Rocket Mortgage. Plaid OAuth — pending approval ~early April 2026. Will provide mortgage balance + payment history.">
+        <span class="icon">🏠</span>
+        <span class="label">Rocket Mortgage</span>
+        <span class="sub">via Plaid OAuth (pending)</span>
+      </div>
+
+      <div class="box blue" id="b-healthequity"
+           data-tip="HealthEquity HSA. Plaid OAuth — pending approval ~early April 2026.">
+        <span class="icon">🏥</span>
+        <span class="label">HealthEquity HSA</span>
+        <span class="sub">via Plaid OAuth (pending)</span>
+      </div>
+
+      <div class="box blue" id="b-parker"
+           data-tip="Parker Financial (small RIA, Elkhorn NE). Custodian: NFS (Fidelity institutional). Plaid does not support NFS. Investor360 / Advisor360° portal exports PDFs only. IRAs, college fund (529), car fund. 5 individual accounts + Overall Portfolio summary. Historical statements imported monthly.">
+        <span class="icon">📋</span>
+        <span class="label">Parker Financial</span>
+        <span class="sub">PDF import · NFS / Investor360</span>
+      </div>
+
+      <div class="box orange" id="b-coinbase-acct"
+           data-tip="Coinbase retail crypto account. BTC, ETH, and other holdings. Connected via Coinbase Advanced Trade API (not Plaid). River Bitcoin cannot be connected (no retail API) — plan to transfer to Coinbase.">
+        <span class="icon">₿</span>
+        <span class="label">Coinbase Account</span>
+        <span class="sub">direct API</span>
+      </div>
+
+      <div class="box gray" id="b-manual"
+           data-tip="Manual entries: Home Value ($655,000), Car Value — Kia Carnival Hybrid EX ($40,000), Credit Score — Experian (758), Optum HSA (PDF-imported, $1,149.68). Updated by user or via PDF import.">
+        <span class="icon">✏️</span>
+        <span class="label">Manual Entries</span>
+        <span class="sub">home · car · credit score · HSA</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- SVG connector arrows rendered by JS -->
+  <svg class="connectors" id="svg-connectors"></svg>
+</div>
+
+<!-- ── Arrow legend ─────────────────────────────────────────────── -->
+<div class="legend">
+  <div class="legend-item">
+    <svg width="32" height="8" viewBox="0 0 32 8">
+      <line x1="0" y1="4" x2="26" y2="4" stroke="#388bfd" stroke-width="2"/>
+      <polygon points="26,1 32,4 26,7" fill="#388bfd"/>
+    </svg>
+    HTTPS / REST
+  </div>
+  <div class="legend-item">
+    <svg width="32" height="8" viewBox="0 0 32 8">
+      <line x1="0" y1="4" x2="26" y2="4" stroke="#2ea043" stroke-width="2" stroke-dasharray="5,3"/>
+      <polygon points="26,1 32,4 26,7" fill="#2ea043"/>
+    </svg>
+    Internal (in-process)
+  </div>
+  <div class="legend-item">
+    <svg width="32" height="8" viewBox="0 0 32 8">
+      <line x1="0" y1="4" x2="26" y2="4" stroke="#a371f7" stroke-width="2" stroke-dasharray="2,3"/>
+      <polygon points="26,1 32,4 26,7" fill="#a371f7"/>
+    </svg>
+    Replication / Backup
+  </div>
+  <div class="legend-item">
+    <svg width="32" height="8" viewBox="0 0 32 8">
+      <line x1="0" y1="4" x2="26" y2="4" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4,3"/>
+      <polygon points="26,1 32,4 26,7" fill="#8b949e"/>
+    </svg>
+    Data source (read)
+  </div>
+</div>
+
+<!-- ── Tooltip ───────────────────────────────────────────────────── -->
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+  // ── Tooltip on hover ──────────────────────────────────────────────
+  const tooltip = document.getElementById("tooltip");
+  document.querySelectorAll(".box[data-tip]").forEach(el => {
+    el.addEventListener("mouseenter", e => {
+      tooltip.textContent = el.dataset.tip;
+      tooltip.classList.add("show");
+    });
+    el.addEventListener("mousemove", e => {
+      const x = e.clientX + 14, y = e.clientY - 10;
+      const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+      tooltip.style.left = Math.min(x, window.innerWidth - tw - 8) + "px";
+      tooltip.style.top  = Math.max(8, Math.min(y, window.innerHeight - th - 8)) + "px";
+    });
+    el.addEventListener("mouseleave", () => tooltip.classList.remove("show"));
+  });
+
+  // ── SVG Connector arrows ──────────────────────────────────────────
+  // Each entry: [fromId, toId, color, dash, label]
+  const CONNECTIONS = [
+    // User ↔ Backend
+    ["b-browser",        "b-nginx",          "#388bfd", "",      "HTTPS"],
+    ["b-sage-panel",     "b-nginx",          "#388bfd", "",      "HTTPS"],
+    ["b-plaidlink",      "b-nginx",          "#388bfd", "",      "HTTPS"],
+    ["b-pdfui",          "b-nginx",          "#388bfd", "",      "HTTPS"],
+
+    // nginx → FastAPI
+    ["b-nginx",          "b-fastapi",        "#2ea043", "5,3",   "proxy"],
+
+    // FastAPI internals
+    ["b-fastapi",        "b-sage-be",        "#2ea043", "5,3",   ""],
+    ["b-fastapi",        "b-pdf-router",     "#2ea043", "5,3",   ""],
+    ["b-fastapi",        "b-scheduler",      "#2ea043", "5,3",   ""],
+    ["b-fastapi",        "b-sqlite",         "#2ea043", "5,3",   "R/W"],
+    ["b-sqlite",         "b-litestream",     "#a371f7", "2,3",   "WAL"],
+    ["b-litestream",     "b-r2",             "#a371f7", "2,3",   "stream"],
+    ["b-github",         "b-fastapi",        "#8b949e", "4,3",   "CI/CD deploy"],
+
+    // Sage → external AI + search
+    ["b-sage-be",        "b-anthropic-haiku","#d29922", "",      "tool-use loop"],
+    ["b-sage-be",        "b-tavily",         "#2dd4bf", "",      "web_search"],
+    ["b-sage-be",        "b-openai",         "#8b949e", "",      "TTS"],
+
+    // PDF → Claude Sonnet
+    ["b-pdf-router",     "b-anthropic-sonnet","#d29922","",      "parse prompt"],
+
+    // Scheduler → data sources
+    ["b-scheduler",      "b-plaid",          "#2dd4bf", "",      "sync"],
+    ["b-scheduler",      "b-coinbase",       "#e3710a", "",      "balance"],
+
+    // Plaid → linked accounts
+    ["b-plaid",          "b-chase",          "#8b949e", "4,3",   ""],
+    ["b-plaid",          "b-vanguard",       "#8b949e", "4,3",   ""],
+    ["b-plaid",          "b-rocket",         "#8b949e", "4,3",   ""],
+    ["b-plaid",          "b-healthequity",   "#8b949e", "4,3",   ""],
+
+    // Coinbase → account
+    ["b-coinbase",       "b-coinbase-acct",  "#8b949e", "4,3",   ""],
+
+    // PDF importer → parser → manual entries
+    ["b-pdfui",          "b-pdf-router",     "#388bfd", "",      "upload"],
+    ["b-pdf-router",     "b-manual",         "#2ea043", "5,3",   "save"],
+    ["b-parker",         "b-pdfui",          "#8b949e", "4,3",   "PDF download"],
+
+    // Google Sheets
+    ["b-fastapi",        "b-gsheets",        "#2ea043", "5,3",   "read-only"],
+
+    // Manual entries → SQLite (via FastAPI)
+    ["b-manual",         "b-sqlite",         "#8b949e", "4,3",   ""],
+  ];
+
+  function midpoint(el) {
+    const r = el.getBoundingClientRect();
+    const cr = document.getElementById("canvas").getBoundingClientRect();
+    return {
+      x: r.left + r.width  / 2 - cr.left,
+      y: r.top  + r.height / 2 - cr.top,
+      top:    r.top    - cr.top,
+      bottom: r.bottom - cr.top,
+      left:   r.left   - cr.left,
+      right:  r.right  - cr.left,
+      w: r.width,
+      h: r.height,
+    };
+  }
+
+  function drawArrow(svg, x1, y1, x2, y2, color, dash) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    if (len < 1) return;
+    const ux = dx/len, uy = dy/len;
+    // shorten end to not overlap arrowhead
+    const ex = x2 - ux*7, ey = y2 - uy*7;
+
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", x1); line.setAttribute("y1", y1);
+    line.setAttribute("x2", ex); line.setAttribute("y2", ey);
+    line.setAttribute("stroke", color);
+    line.setAttribute("stroke-width", "1.5");
+    line.setAttribute("stroke-opacity", "0.55");
+    if (dash) line.setAttribute("stroke-dasharray", dash);
+    svg.appendChild(line);
+
+    // arrowhead
+    const angle = Math.atan2(dy, dx);
+    const s = 5;
+    const ax1 = x2 - Math.cos(angle - 0.5)*s*2;
+    const ay1 = y2 - Math.sin(angle - 0.5)*s*2;
+    const ax2 = x2 - Math.cos(angle + 0.5)*s*2;
+    const ay2 = y2 - Math.sin(angle + 0.5)*s*2;
+    const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+    poly.setAttribute("points", `${x2},${y2} ${ax1},${ay1} ${ax2},${ay2}`);
+    poly.setAttribute("fill", color);
+    poly.setAttribute("opacity", "0.65");
+    svg.appendChild(poly);
+  }
+
+  function render() {
+    const svg = document.getElementById("svg-connectors");
+    svg.innerHTML = "";
+    const canvas = document.getElementById("canvas");
+    svg.setAttribute("height", canvas.offsetHeight);
+
+    for (const [fromId, toId, color, dash] of CONNECTIONS) {
+      const from = document.getElementById(fromId);
+      const to   = document.getElementById(toId);
+      if (!from || !to) continue;
+      const f = midpoint(from);
+      const t = midpoint(to);
+      // pick closest edge pair
+      const pairs = [
+        [f.right, f.y, t.left,  t.y],
+        [f.left,  f.y, t.right, t.y],
+        [f.x, f.bottom, t.x, t.top],
+        [f.x, f.top,    t.x, t.bottom],
+      ];
+      let best = pairs[0], bestD = Infinity;
+      for (const p of pairs) {
+        const d = (p[0]-p[2])**2 + (p[1]-p[3])**2;
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      drawArrow(svg, best[0], best[1], best[2], best[3], color, dash);
+    }
+  }
+
+  window.addEventListener("load",   render);
+  window.addEventListener("resize", render);
+</script>
+</body>
+</html>
