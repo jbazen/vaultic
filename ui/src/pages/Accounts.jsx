@@ -1088,7 +1088,7 @@ export default function Accounts() {
       )}
 
       {/* ── PDF-Imported Investment Accounts ── */}
-      {manualEntries.filter(e => e.category === "invested").length > 0 && (
+      {manualEntries.filter(e => e.category === "invested" && e.account_number).length > 0 && (
         <div className="card">
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
             Investment Accounts (PDF Imported)
@@ -1097,13 +1097,27 @@ export default function Accounts() {
             Click any row to expand holdings. Use "⊘ Exclude" on consolidated portfolio summaries to avoid double-counting in net worth.
           </div>
           <div className="account-list">
-            {[...manualEntries.filter(e => e.category === "invested")]
+            {[...manualEntries.filter(e => e.category === "invested" && e.account_number)]
               .sort((a, b) => (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name))
               .map(entry => (
                 <ManualInvestmentCard key={entry.id} entry={entry}
                   onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
                   onToggleExclude={load} onRenamed={load} />
               ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Manually-entered Investment Accounts (no account number — e.g. Insperity) ── */}
+      {manualEntries.filter(e => e.category === "invested" && !e.account_number).length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Other Investment Accounts</div>
+          <div className="account-list">
+            {manualEntries.filter(e => e.category === "invested" && !e.account_number).map(entry => (
+              <ManualInvestmentCard key={entry.id} entry={entry}
+                onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+                onToggleExclude={load} onRenamed={load} />
+            ))}
           </div>
         </div>
       )}

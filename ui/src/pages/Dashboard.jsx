@@ -664,7 +664,8 @@ export default function Dashboard() {
   const sortManual = arr => [...arr].sort((a, b) =>
     (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name)
   );
-  const manualInvested = sortManual(manualEntries.filter(e => e.category === "invested"));
+  const manualInvested = sortManual(manualEntries.filter(e => e.category === "invested" && e.account_number));
+  const manualInvestedOther = manualEntries.filter(e => e.category === "invested" && !e.account_number);
   const manualLiquid = sortManual(manualEntries.filter(e => e.category === "liquid"));
 
   // Consolidated allocation across all manual investment holdings
@@ -851,6 +852,16 @@ export default function Dashboard() {
             )}
             <div className="account-list">
               {manualInvested.map(e => <ManualAccountRow key={e.id} entry={e} onRenamed={load} />)}
+            </div>
+          </div>
+        )}
+
+        {/* Other Investment Accounts (manual, no account number — e.g. Insperity) */}
+        {manualInvestedOther.length > 0 && (
+          <div className="card" style={{ margin: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Other Investment Accounts</div>
+            <div className="account-list">
+              {manualInvestedOther.map(e => <ManualAccountRow key={e.id} entry={e} onRenamed={load} />)}
             </div>
           </div>
         )}

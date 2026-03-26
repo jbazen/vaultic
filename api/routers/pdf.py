@@ -80,7 +80,7 @@ Return ONLY a JSON array with this exact structure (no explanation, no markdown)
 ]
 
 Rules:
-- Create ONE entry per individual account. If the PDF shows a portfolio-level summary AND individual accounts, create entries for each individual account only (skip the rolled-up portfolio entry to avoid double-counting).
+- Create ONE entry per account shown. Include both individual accounts AND any portfolio-level summary entry (e.g. "Overall Portfolio"). The user will mark the summary as excluded from net worth to avoid double-counting.
 - activity_summary: capture ALL numeric fields visible — current period AND year-to-date. Use null only if the field genuinely does not appear in the PDF.
 - holdings: extract EVERY holding shown. Use the EXACT name from the PDF — do NOT normalize or rename. Include avg_unit_cost (shown as "Average Unit Cost $X.XX" per fund), estimated_yield_pct (shown as "Estimated Yield X.XX%"), and estimated_annual_income.
 - activity: capture every transaction listed in the Activity section (buy, sell, dividend, reinvestment, fee, transfer, etc.)
@@ -224,7 +224,8 @@ def _norm_str(s) -> str | None:
     return " ".join(str(s).lower().split())
 
 
-def _find_existing(conn, acct_num: str | None, summary: dict, name: str, category: str):
+def _find_existing(conn, acct_num: str | None, summary: dict, name: str, category: str,
+                   pre_existing_ids: set | None = None):
     """
     Find an existing manual_entries row using multi-point matching.
     Returns (row, tier) where tier is 1–4, or (None, None) if no match.
@@ -278,6 +279,11 @@ def _find_existing(conn, acct_num: str | None, summary: dict, name: str, categor
             if not (inst_match and holder_match):
                 continue
 
+            # Skip entries created during this batch — mid-loop insertions cause
+            # Tier 3 false positives when two accounts share institution + holder
+            # (e.g. Heather has both a Roth IRA and IRA Rollover at Parker).
+            if pre_existing_ids is not None and row["id"] not in pre_existing_ids:
+                continue
             tier3.append(row)
 
             # Tier 2: also require last-4 of account_number to match
@@ -337,6 +343,10 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
         return None
 
     with get_db() as conn:
+        # Snapshot of entry IDs that exist before this batch. Entries inserted
+        # during the loop must not be Tier 3 candidates for later entries.
+        pre_existing_ids = {r[0] for r in conn.execute("SELECT id FROM manual_entries").fetchall()}
+
         for e in body.entries:
             name = str(e.get("name", ""))[:100]
             category = str(e.get("category", "other_asset"))
@@ -356,7 +366,7 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                 snapshot_date = _parse_date(raw_date)
 
             # Multi-point match against existing entries
-            existing, match_tier = _find_existing(conn, acct_num, summary, name, category)
+            existing, match_tier = _find_existing(conn, acct_num, summary, name, category, pre_existing_ids)
 
             # If no match found but the PDF had enough identifying info, flag it.
             # This surfaces potential duplicates rather than silently creating new entries.
