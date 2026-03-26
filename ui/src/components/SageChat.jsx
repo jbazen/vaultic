@@ -114,6 +114,7 @@ export default function SageChat() {
   const [loading, setLoading] = useState(false);
   const [unread, setUnread] = useState(0);
   const [speaking, setSpeaking] = useState(false);
+  const [paused, setPaused] = useState(false);
 
   // Voice modes — default to OpenAI (best quality, works on mobile and desktop)
   const [voiceMode, setVoiceMode] = useState("openai"); // off | browser | openai
@@ -209,6 +210,19 @@ export default function SageChat() {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     window.speechSynthesis?.cancel();
     setSpeaking(false);
+    setPaused(false);
+  }
+
+  function pauseSpeaking() {
+    if (audioRef.current) audioRef.current.pause();
+    window.speechSynthesis?.pause();
+    setPaused(true);
+  }
+
+  function resumeSpeaking() {
+    if (audioRef.current) audioRef.current.play().catch(() => {});
+    window.speechSynthesis?.resume();
+    setPaused(false);
   }
 
   // Split a Sage response into individual sentences so we can request TTS for each
@@ -234,6 +248,7 @@ export default function SageChat() {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     window.speechSynthesis?.cancel();
     setSpeaking(false);
+    setPaused(false);
 
     if (mode === "openai") {
       const myGen = speakGenRef.current;
@@ -775,17 +790,30 @@ export default function SageChat() {
                   >{m.label}</button>
                 ))}
               </div>
-              {/* Stop speaking */}
+              {/* Pause / Resume / Stop speaking */}
               {speaking && (
-                <button onClick={stopSpeaking} title="Stop speaking"
-                  style={{
-                    background: "rgba(248,113,113,0.15)", border: "1px solid #f87171",
-                    color: "#f87171", borderRadius: 6,
-                    padding: isMobile ? "10px 14px" : "4px 8px",
-                    minHeight: isMobile ? 44 : undefined,
-                    cursor: "pointer", fontSize: 13, fontWeight: 600,
-                    touchAction: "manipulation",
-                  }}>⏹</button>
+                <>
+                  <button
+                    onClick={paused ? resumeSpeaking : pauseSpeaking}
+                    title={paused ? "Resume" : "Pause"}
+                    style={{
+                      background: "rgba(79,142,247,0.15)", border: "1px solid #388bfd",
+                      color: "#79c0ff", borderRadius: 6,
+                      padding: isMobile ? "10px 14px" : "4px 8px",
+                      minHeight: isMobile ? 44 : undefined,
+                      cursor: "pointer", fontSize: 13, fontWeight: 600,
+                      touchAction: "manipulation",
+                    }}>{paused ? "▶" : "⏸"}</button>
+                  <button onClick={stopSpeaking} title="Stop speaking"
+                    style={{
+                      background: "rgba(248,113,113,0.15)", border: "1px solid #f87171",
+                      color: "#f87171", borderRadius: 6,
+                      padding: isMobile ? "10px 14px" : "4px 8px",
+                      minHeight: isMobile ? 44 : undefined,
+                      cursor: "pointer", fontSize: 13, fontWeight: 600,
+                      touchAction: "manipulation",
+                    }}>⏹</button>
+                </>
               )}
               <button onClick={() => { setMessages([]); setHistory([]); sessionStorage.removeItem(SESSION_KEY); }} title="Clear conversation"
                 style={{ background: "none", border: "1px solid var(--border)", color: "var(--text2)",
