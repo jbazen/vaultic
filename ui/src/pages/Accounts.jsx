@@ -797,6 +797,7 @@ function BalanceChart({ accountId, data: preloadedData }) {
             tick={{ fontSize: 10, fill: "var(--text2)" }}
             axisLine={false} tickLine={false}
             width={55}
+            domain={["auto", "auto"]}
           />
           <RechartsTooltip content={<CustomTooltip />} />
           <Area
