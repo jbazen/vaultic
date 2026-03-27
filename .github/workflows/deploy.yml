@@ -55,6 +55,13 @@ jobs:
               echo "Litestream installed: $(litestream version)"
             fi
 
+            # Configure journald log rotation (idempotent) — caps journal at 500MB
+            if ! grep -q "^SystemMaxUse=500M" /etc/systemd/journald.conf; then
+              sudo sed -i 's/^#\?SystemMaxUse=.*/SystemMaxUse=500M/' /etc/systemd/journald.conf
+              sudo systemctl restart systemd-journald
+              echo "journald log rotation configured (500MB cap)"
+            fi
+
             # Ensure we're on main branch (rollback may have left detached HEAD)
             git checkout main 2>/dev/null || true
             # Pull latest code (repo is public, HTTPS works without a deploy key)
