@@ -354,6 +354,8 @@ MIGRATIONS = [
     )""",
     # Add device_token to existing push_subscriptions rows (migration for existing installs)
     "ALTER TABLE push_subscriptions ADD COLUMN device_token TEXT",
+    # Store which user subscribed so device-auth issues JWT for the correct user
+    "ALTER TABLE push_subscriptions ADD COLUMN username TEXT",
     # split_rules: stores percentage-based split patterns per merchant so future
     # transactions from the same merchant can be pre-populated with the same split.
     # splits column is JSON: [{"item_id": 1, "pct": 60.0}, {"item_id": 2, "pct": 40.0}]

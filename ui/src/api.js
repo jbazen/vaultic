@@ -264,8 +264,11 @@ export async function totpConfirm(code) {
   return res.json();
 }
 
-export async function disable2FA() {
-  const res = await apiFetch("/api/auth/2fa", { method: "DELETE" });
+export async function disable2FA(password) {
+  const res = await apiFetch("/api/auth/2fa/disable", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
   return res.json();
 }
 

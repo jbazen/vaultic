@@ -45,7 +45,7 @@ async def login(body: LoginRequest, request: Request):
     ip = get_client_ip(request)
     ua = request.headers.get("user-agent", "")
 
-    if is_rate_limited(ip):
+    if is_rate_limited(ip, body.username):
         security_log.log_server_event(f"RATE_LIMITED  ip={ip}  user={body.username}")
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
 
@@ -53,10 +53,10 @@ async def login(body: LoginRequest, request: Request):
     security_log.log_login_attempt(ip, body.username, ok, ua)
 
     if not ok:
-        record_failed_attempt(ip)
+        record_failed_attempt(ip, body.username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    clear_failed_attempts(ip)
+    clear_failed_attempts(ip, body.username)
 
     info = get_user_2fa(body.username)
     if info and info["two_fa_enabled"] and info["totp_secret"]:
@@ -150,8 +150,15 @@ async def totp_confirm(body: ConfirmTOTPRequest, username: str = Depends(get_cur
     return {"status": "2fa_enabled"}
 
 
-@router.delete("/2fa")
-async def totp_disable(username: str = Depends(get_current_user)):
+class Disable2FARequest(BaseModel):
+    password: str
+
+
+@router.post("/2fa/disable")
+async def totp_disable(body: Disable2FARequest, username: str = Depends(get_current_user)):
+    """Disable 2FA — requires current password to prevent abuse of stolen sessions."""
+    if not authenticate_user(username, body.password):
+        raise HTTPException(status_code=401, detail="Password is incorrect")
     with get_db() as conn:
         conn.execute(
             "UPDATE users SET two_fa_enabled = 0, totp_secret = NULL, totp_pending_secret = NULL WHERE username = ?",

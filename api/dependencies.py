@@ -7,9 +7,16 @@ _bearer = HTTPBearer(auto_error=False)
 
 
 def get_client_ip(request: Request) -> str:
+    """Extract real client IP from X-Forwarded-For set by nginx.
+
+    Only the LAST entry (rightmost) is trusted — it's the one added by our
+    nginx reverse proxy. Earlier entries can be spoofed by the client.
+    """
     forwarded = request.headers.get("X-Forwarded-For")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        # Rightmost = set by our trusted nginx proxy, not by the client
+        parts = [p.strip() for p in forwarded.split(",")]
+        return parts[-1] if parts else (request.client.host if request.client else "unknown")
     return request.client.host if request.client else "unknown"
 
 

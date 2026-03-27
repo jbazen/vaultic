@@ -113,6 +113,17 @@ async def security_and_logging_middleware(request: Request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self' https://cdn.plaid.com https://production.plaid.com; "
+        "frame-src 'self' https://cdn.plaid.com; "
+        "media-src 'self' blob:; "
+        "worker-src 'self' blob:; "
+        "font-src 'self'"
+    )
 
     return response
 

@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 _log_path = Path(__file__).parent.parent / "data" / "security.log"
@@ -7,7 +8,8 @@ _log_path.parent.mkdir(exist_ok=True)
 _logger = logging.getLogger("vaultic.security")
 _logger.setLevel(logging.INFO)
 if not _logger.handlers:
-    fh = logging.FileHandler(_log_path, encoding="utf-8")
+    # 10 MB per file, keep 5 backups (50 MB total max)
+    fh = RotatingFileHandler(_log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s  %(message)s"))
     _logger.addHandler(fh)
     sh = logging.StreamHandler()

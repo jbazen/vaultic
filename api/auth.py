@@ -32,7 +32,9 @@ ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
 
 _failed_attempts: dict[str, list[float]] = defaultdict(list)
+_failed_by_username: dict[str, list[float]] = defaultdict(list)
 MAX_ATTEMPTS = 5
+MAX_ATTEMPTS_PER_USER = 20  # Per-username across all IPs
 LOCKOUT_WINDOW = 15 * 60
 
 # Token denylist: stores revoked tokens until they would naturally expire.
@@ -40,18 +42,29 @@ LOCKOUT_WINDOW = 15 * 60
 _token_denylist: dict[str, float] = {}
 
 
-def is_rate_limited(ip: str) -> bool:
+def is_rate_limited(ip: str, username: str = "") -> bool:
+    """Check both per-IP and per-username rate limits."""
     now = time.time()
     _failed_attempts[ip] = [t for t in _failed_attempts[ip] if now - t < LOCKOUT_WINDOW]
-    return len(_failed_attempts[ip]) >= MAX_ATTEMPTS
+    if len(_failed_attempts[ip]) >= MAX_ATTEMPTS:
+        return True
+    if username:
+        _failed_by_username[username] = [t for t in _failed_by_username[username] if now - t < LOCKOUT_WINDOW]
+        if len(_failed_by_username[username]) >= MAX_ATTEMPTS_PER_USER:
+            return True
+    return False
 
 
-def record_failed_attempt(ip: str):
+def record_failed_attempt(ip: str, username: str = ""):
     _failed_attempts[ip].append(time.time())
+    if username:
+        _failed_by_username[username].append(time.time())
 
 
-def clear_failed_attempts(ip: str):
+def clear_failed_attempts(ip: str, username: str = ""):
     _failed_attempts.pop(ip, None)
+    if username:
+        _failed_by_username.pop(username, None)
 
 
 def revoke_token(token: str):

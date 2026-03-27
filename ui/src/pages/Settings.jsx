@@ -110,11 +110,14 @@ function TwoFA({ me, onRefresh }) {
   }
 
   async function handleDisable() {
-    if (!confirm("Disable two-factor authentication? You will no longer need a code to log in.")) return;
+    const pwd = prompt("Enter your password to disable two-factor authentication:");
+    if (!pwd) return;
     setLoading(true);
     try {
-      await disable2FA();
+      await disable2FA(pwd);
       onRefresh();
+    } catch (err) {
+      setMsg({ text: "Incorrect password", type: "error" });
     } finally { setLoading(false); }
   }
 
@@ -161,9 +164,17 @@ function TwoFA({ me, onRefresh }) {
             background: "#fff", borderRadius: 8, padding: 16, display: "inline-block", marginBottom: 20,
             lineHeight: 0,
           }}>
-            <div style={{ width: 200, height: 200 }}
-              dangerouslySetInnerHTML={{ __html: qrSvg.replace(/width="[^"]*"/, 'width="200"').replace(/height="[^"]*"/, 'height="200"') }}
-            />
+            <div style={{ width: 200, height: 200 }} ref={el => {
+              if (!el || !qrSvg) return;
+              el.innerHTML = "";
+              const doc = new DOMParser().parseFromString(qrSvg, "image/svg+xml");
+              const svg = doc.querySelector("svg");
+              if (svg) {
+                svg.setAttribute("width", "200");
+                svg.setAttribute("height", "200");
+                el.appendChild(document.importNode(svg, true));
+              }
+            }} />
           </div>
           <p style={{ color: "var(--text2)", fontSize: 13, marginBottom: 12 }}>
             <strong style={{ color: "var(--text)" }}>Step 2:</strong> Enter the 6-digit code from your app to confirm.

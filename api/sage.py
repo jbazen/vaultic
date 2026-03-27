@@ -927,7 +927,30 @@ def _tavily_search(query: str) -> str:
         return f"Search failed: {e}"
 
 
+def _is_url_safe(url: str) -> bool:
+    """Block requests to private/internal networks (SSRF prevention)."""
+    from urllib.parse import urlparse
+    import ipaddress
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False
+    hostname = parsed.hostname or ""
+    if hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1", ""):
+        return False
+    if hostname.endswith(".local") or hostname.endswith(".internal"):
+        return False
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return False
+    except ValueError:
+        pass  # Not an IP literal — hostname is fine
+    return True
+
+
 def _fetch_page(url: str) -> str:
+    if not _is_url_safe(url):
+        return "Blocked: cannot fetch private/internal URLs"
     try:
         resp = httpx.get(
             url,

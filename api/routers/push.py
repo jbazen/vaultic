@@ -90,14 +90,15 @@ async def subscribe(body: SubscribeBody, _user: str = Depends(get_current_user))
     with get_db() as conn:
         # Upsert: insert new or reactivate existing endpoint, refreshing device_token
         conn.execute(
-            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_token, is_active)
-               VALUES (?, ?, ?, ?, 1)
+            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_token, username, is_active)
+               VALUES (?, ?, ?, ?, ?, 1)
                ON CONFLICT(endpoint) DO UPDATE SET
                  p256dh       = excluded.p256dh,
                  auth         = excluded.auth,
                  device_token = excluded.device_token,
+                 username     = excluded.username,
                  is_active    = 1""",
-            (body.endpoint, body.p256dh, body.auth, device_token),
+            (body.endpoint, body.p256dh, body.auth, device_token, _user),
         )
 
     # Return the device_token so the frontend can store it for auto-auth
@@ -122,7 +123,7 @@ async def device_auth(body: DeviceAuthBody):
 
     with get_db() as conn:
         row = conn.execute(
-            """SELECT id FROM push_subscriptions
+            """SELECT username FROM push_subscriptions
                WHERE device_token = ? AND is_active = 1""",
             (body.device_token,),
         ).fetchone()
@@ -130,9 +131,9 @@ async def device_auth(body: DeviceAuthBody):
     if not row:
         raise HTTPException(status_code=401, detail="Invalid or expired device token")
 
-    # Issue a fresh JWT for the default app user (single-user personal app)
+    # Issue a fresh JWT for the user who subscribed this device
     import os
-    username = os.environ.get("AUTH_USERNAME", "jbazen")
+    username = row["username"] or os.environ.get("AUTH_USERNAME", "jbazen")
     token = create_token(username)
     return {"token": token}
 

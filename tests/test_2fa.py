@@ -135,22 +135,31 @@ class TestTOTPLogin:
 
 
 class TestTOTPDisable:
-    def test_disable_2fa(self, client, auth_headers):
+    def test_disable_2fa_requires_password(self, client, auth_headers):
         _enable_2fa(client, auth_headers)
 
-        res = client.delete("/api/auth/2fa", headers=auth_headers)
+        res = client.post("/api/auth/2fa/disable", headers=auth_headers,
+                          json={"password": "testpassword"})
         assert res.status_code == 200
 
         state = _get_totp_secret("testuser")
         assert state["two_fa_enabled"] == 0
 
+    def test_disable_2fa_wrong_password_returns_401(self, client, auth_headers):
+        _enable_2fa(client, auth_headers)
+
+        res = client.post("/api/auth/2fa/disable", headers=auth_headers,
+                          json={"password": "wrongpassword"})
+        assert res.status_code == 401
+
     def test_disable_2fa_requires_auth(self, client):
-        res = client.delete("/api/auth/2fa")
+        res = client.post("/api/auth/2fa/disable", json={"password": "test"})
         assert res.status_code == 401
 
     def test_login_returns_token_directly_when_2fa_disabled(self, client, auth_headers):
         # Disable 2FA first
-        client.delete("/api/auth/2fa", headers=auth_headers)
+        client.post("/api/auth/2fa/disable", headers=auth_headers,
+                    json={"password": "testpassword"})
         res = client.post("/api/auth/login", json={"username": "testuser", "password": "testpassword"})
         assert res.status_code == 200
         data = res.json()
