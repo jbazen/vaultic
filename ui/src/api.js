@@ -703,6 +703,7 @@ export async function uploadTaxPdf(file) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
   return res.json();
 }
 
@@ -741,6 +742,7 @@ export async function uploadToVault(file, year, category, issuer, description, a
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
   return res.json();
 }
 
@@ -749,6 +751,7 @@ export async function downloadVaultDoc(id, filename) {
   const res = await fetch(`/api/vault/download/${id}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -772,6 +775,7 @@ export async function uploadTaxDoc(file) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
   return res.json();
 }
 
@@ -824,6 +828,7 @@ export async function uploadW4(file) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
   return res.json();
 }
 
@@ -846,6 +851,7 @@ export async function uploadPaystub(file) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
   });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
   return res.json();
 }
 

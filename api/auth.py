@@ -1,6 +1,8 @@
 import os
 import io
+import re
 import time
+import uuid
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -46,11 +48,15 @@ def is_rate_limited(ip: str, username: str = "") -> bool:
     """Check both per-IP and per-username rate limits."""
     now = time.time()
     _failed_attempts[ip] = [t for t in _failed_attempts[ip] if now - t < LOCKOUT_WINDOW]
-    if len(_failed_attempts[ip]) >= MAX_ATTEMPTS:
+    if not _failed_attempts[ip]:
+        _failed_attempts.pop(ip, None)
+    elif len(_failed_attempts[ip]) >= MAX_ATTEMPTS:
         return True
     if username:
         _failed_by_username[username] = [t for t in _failed_by_username[username] if now - t < LOCKOUT_WINDOW]
-        if len(_failed_by_username[username]) >= MAX_ATTEMPTS_PER_USER:
+        if not _failed_by_username[username]:
+            _failed_by_username.pop(username, None)
+        elif len(_failed_by_username[username]) >= MAX_ATTEMPTS_PER_USER:
             return True
     return False
 
@@ -85,6 +91,19 @@ def is_token_revoked(token: str) -> bool:
     for t in expired:
         _token_denylist.pop(t, None)
     return token in _token_denylist
+
+
+def validate_password_strength(password: str) -> str | None:
+    """Return an error message if the password is too weak, or None if acceptable."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters"
+    if not re.search(r"[A-Z]", password):
+        return "Password must contain at least one uppercase letter"
+    if not re.search(r"[a-z]", password):
+        return "Password must contain at least one lowercase letter"
+    if not re.search(r"\d", password):
+        return "Password must contain at least one digit"
+    return None
 
 
 def hash_password(plain: str) -> str:
@@ -209,8 +228,9 @@ def seed_user_from_env():
 
 
 def create_token(username: str) -> str:
-    exp = datetime.now(timezone.utc) + timedelta(hours=TOKEN_EXPIRE_HOURS)
-    payload = {"sub": username, "exp": exp}
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(hours=TOKEN_EXPIRE_HOURS)
+    payload = {"sub": username, "exp": exp, "iat": now, "jti": str(uuid.uuid4())}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 

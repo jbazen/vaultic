@@ -3,9 +3,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from api.auth import (
     authenticate_user, create_token, create_2fa_pending_token, decode_2fa_pending_token,
-    hash_password, is_rate_limited, record_failed_attempt, clear_failed_attempts,
-    get_user_2fa, generate_totp_setup, confirm_totp_enrollment, verify_totp_code,
-    revoke_token,
+    hash_password, validate_password_strength, is_rate_limited, record_failed_attempt,
+    clear_failed_attempts, get_user_2fa, generate_totp_setup, confirm_totp_enrollment,
+    verify_totp_code, revoke_token,
 )
 from api.database import get_db
 from api.dependencies import get_current_user, get_client_ip, admin_required
@@ -118,8 +118,9 @@ async def me(username: str = Depends(get_current_user)):
 async def change_password(body: ChangePasswordRequest, username: str = Depends(get_current_user)):
     if not authenticate_user(username, body.current_password):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if len(body.new_password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    pw_err = validate_password_strength(body.new_password)
+    if pw_err:
+        raise HTTPException(status_code=400, detail=pw_err)
     with get_db() as conn:
         conn.execute(
             "UPDATE users SET password_hash = ? WHERE username = ?",
@@ -174,15 +175,16 @@ async def totp_disable(body: Disable2FARequest, username: str = Depends(get_curr
 async def list_users(_user: str = Depends(admin_required)):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, username, two_fa_enabled, is_admin, is_active, created_at FROM users ORDER BY created_at"
+            "SELECT id, username, two_fa_enabled, is_admin, is_active, created_at FROM users WHERE is_active = 1 ORDER BY created_at"
         ).fetchall()
     return [dict(row) for row in rows]
 
 
 @router.post("/users")
 async def create_user(body: CreateUserRequest, _user: str = Depends(admin_required)):
-    if len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    pw_err = validate_password_strength(body.password)
+    if pw_err:
+        raise HTTPException(status_code=400, detail=pw_err)
     with get_db() as conn:
         existing = conn.execute("SELECT id FROM users WHERE username = ?", (body.username,)).fetchone()
         if existing:

@@ -13,7 +13,7 @@ class TestUserManagement:
 
     def test_create_user(self, client, auth_headers):
         res = client.post("/api/auth/users", headers=auth_headers,
-                          json={"username": "newuser1", "password": "newpass123"})
+                          json={"username": "newuser1", "password": "NewPass123"})
         assert res.status_code == 200
 
         users = client.get("/api/auth/users", headers=auth_headers).json()
@@ -21,14 +21,14 @@ class TestUserManagement:
 
     def test_create_duplicate_user_returns_error(self, client, auth_headers):
         client.post("/api/auth/users", headers=auth_headers,
-                    json={"username": "dupuser", "password": "pass1"})
+                    json={"username": "dupuser", "password": "DupPass1"})
         res = client.post("/api/auth/users", headers=auth_headers,
-                          json={"username": "dupuser", "password": "pass2"})
+                          json={"username": "dupuser", "password": "DupPass2"})
         assert res.status_code in (400, 409)
 
     def test_delete_user(self, client, auth_headers):
         client.post("/api/auth/users", headers=auth_headers,
-                    json={"username": "todelete", "password": "pass"})
+                    json={"username": "todelete", "password": "DelPass1"})
         res = client.delete("/api/auth/users/todelete", headers=auth_headers)
         assert res.status_code == 200
 
@@ -53,11 +53,25 @@ class TestUserManagement:
         assert res.status_code == 401
 
 
+    def test_create_user_weak_password_rejected(self, client, auth_headers):
+        # No uppercase
+        res = client.post("/api/auth/users", headers=auth_headers,
+                          json={"username": "weakuser", "password": "weakpass1"})
+        assert res.status_code == 400
+        # No digit
+        res = client.post("/api/auth/users", headers=auth_headers,
+                          json={"username": "weakuser", "password": "WeakPass"})
+        assert res.status_code == 400
+        # Too short
+        res = client.post("/api/auth/users", headers=auth_headers,
+                          json={"username": "weakuser", "password": "Wp1"})
+        assert res.status_code == 400
+
+
 class TestChangePassword:
     def test_change_password_with_correct_current(self, client, auth_headers):
         res = client.post("/api/auth/change-password", headers=auth_headers,
-                          json={"current_password": "testpassword", "new_password": "testpassword"})
-        # Accept 200 (success) — we reset to same password so tests stay valid
+                          json={"current_password": "testpassword", "new_password": "TestPass1"})
         assert res.status_code == 200
 
     def test_change_password_with_wrong_current_returns_error(self, client, auth_headers):

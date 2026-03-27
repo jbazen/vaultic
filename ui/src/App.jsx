@@ -6,10 +6,9 @@ class ReviewErrorBoundary extends Component {
   static getDerivedStateFromError(err) { return { error: err }; }
   render() {
     if (this.state.error) {
-      const e = this.state.error;
       return <div style={{ position:"fixed", inset:0, background:"#0f1117", color:"#e8eaf0", padding:20, fontSize:13, overflow:"auto", zIndex:99 }}>
-        <div style={{ color:"#f87171", fontWeight:700, marginBottom:8, fontSize:16 }}>Review Error</div>
-        <pre style={{ whiteSpace:"pre-wrap", wordBreak:"break-all" }}>{e.stack || String(e)}</pre>
+        <div style={{ color:"#f87171", fontWeight:700, marginBottom:8, fontSize:16 }}>Something went wrong</div>
+        <p>Please refresh the page to try again.</p>
       </div>;
     }
     return this.props.children;

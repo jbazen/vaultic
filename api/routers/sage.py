@@ -4,7 +4,7 @@ import base64
 import logging
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from api.dependencies import get_current_user
 from api.sage import chat
 from api import security_log, rate_limit
@@ -35,6 +35,20 @@ class ChatRequest(BaseModel):
     message: str
     history: list[dict] = []
     attachments: list[dict] = []   # [{type, content, media_type, filename}]
+
+    @field_validator("message")
+    @classmethod
+    def message_max_length(cls, v):
+        if len(v) > 10_000:
+            raise ValueError("Message must be under 10,000 characters")
+        return v
+
+    @field_validator("history")
+    @classmethod
+    def history_max_entries(cls, v):
+        if len(v) > 100:
+            raise ValueError("History must be under 100 messages")
+        return v
 
 
 class ChatResponse(BaseModel):
