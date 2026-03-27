@@ -65,7 +65,7 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
   const q = search.toLowerCase().trim();
 
   return (
-    <div style={{
+    <div role="dialog" aria-modal="true" style={{
       position: "fixed", inset: 0, zIndex: 200,
       background: "var(--bg, #0f1117)", display: "flex", flexDirection: "column",
     }}>
@@ -75,7 +75,7 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
         background: "var(--bg2, #171b27)",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-          <button onClick={onCancel}
+          <button onClick={onCancel} aria-label="Go back"
             style={{ background: "none", border: "none", color: "var(--accent, #4f8ef7)",
               fontSize: 16, cursor: "pointer", padding: 0 }}>
             ← Back
@@ -258,7 +258,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
   const amt   = fmtAmount(txn.amount);
 
   return (
-    <div style={{
+    <div role="dialog" aria-modal="true" style={{
       position: "fixed", inset: 0, zIndex: 300,
       background: "var(--bg, #0f1117)", display: "flex", flexDirection: "column",
     }}>
@@ -269,7 +269,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
         position: "sticky", top: 0, zIndex: 10,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
-          <button onClick={onCancel}
+          <button onClick={onCancel} aria-label="Cancel"
             style={{ background: "none", border: "none", color: "var(--accent, #4f8ef7)",
               fontSize: 16, cursor: "pointer", padding: 0 }}>
             ← Cancel
@@ -364,6 +364,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                     {splits.length > 2 && (
                       <button
                         onClick={() => removeRow(idx)}
+                        aria-label="Remove split row"
                         style={{
                           background: "none", border: "none",
                           color: "#f87171", fontSize: 20, cursor: "pointer",
@@ -824,6 +825,7 @@ export default function Review() {
               fontSize: 20, cursor: "pointer", padding: "0 4px", lineHeight: 1,
             }}
             title="Back to Vaultic"
+            aria-label="Back to Vaultic"
           >
             ←
           </button>
@@ -845,7 +847,8 @@ export default function Review() {
               background: "none", border: "none", color: "var(--text2, #8b90a7)",
               fontSize: 18, cursor: "pointer", padding: "0 4px",
             }}
-            title="Refresh">
+            title="Refresh"
+            aria-label="Refresh">
             ↻
           </button>
         </div>

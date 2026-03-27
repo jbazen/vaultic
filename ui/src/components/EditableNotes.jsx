@@ -35,7 +35,7 @@ function EditableNotes({ notes, onSave, placeholder = "Add description…", inli
           value={draft} onChange={e => setDraft(e.target.value)} autoFocus
           onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
         <button className="btn btn-primary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
-        <button className="btn btn-secondary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setEditing(false)}>✕</button>
+        <button className="btn btn-secondary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setEditing(false)} aria-label="Cancel editing">✕</button>
       </Wrapper>
     );
   }
@@ -43,7 +43,7 @@ function EditableNotes({ notes, onSave, placeholder = "Add description…", inli
     <span style={{ color: "var(--text2)", fontSize: 12 }}>
       {notes || ""}
       <button onClick={() => { setDraft(notes || ""); setEditing(true); }} title="Edit description"
-        style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 11, padding: "0 3px", opacity: 0.6 }}>✎</button>
+        style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 11, padding: "0 3px", opacity: 0.6 }} aria-label="Edit description">✎</button>
     </span>
   );
 }

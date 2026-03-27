@@ -218,13 +218,13 @@ function CryptoAccountRow({ account, onRenamed }) {
               value={draft} onChange={e => setDraft(e.target.value)} autoFocus
               onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
             <button className="btn btn-primary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
-            <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)}>✕</button>
+            <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)} aria-label="Cancel editing">✕</button>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <div className="account-name">{label}</div>
             <button onClick={() => setEditing(true)} title="Rename"
-              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
           </div>
         )}
         <div className="account-meta">
@@ -268,13 +268,13 @@ function ManualAccountRow({ entry, onRenamed, badge, badgeClass, negative = fals
               value={draft} onChange={e => setDraft(e.target.value)} autoFocus
               onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
             <button className="btn btn-primary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
-            <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)}>✕</button>
+            <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }} onClick={() => setEditing(false)} aria-label="Cancel editing">✕</button>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
             <div className="account-name">{entry.name}</div>
             <button onClick={() => setEditing(true)} title="Rename"
-              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
             {entry.entered_at && <span style={{ fontSize: 11, color: "var(--text2)" }}>· Imported {fmtDate(entry.entered_at)}</span>}
           </div>
         )}
@@ -323,13 +323,13 @@ function AccountRow({ account, onRenamed }) {
             <button className="btn btn-primary" style={{ padding: "3px 10px", fontSize: 12 }}
               onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
             <button className="btn btn-secondary" style={{ padding: "3px 10px", fontSize: 12 }}
-              onClick={() => setEditing(false)}>✕</button>
+              onClick={() => setEditing(false)} aria-label="Cancel editing">✕</button>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <div className="account-name">{label}{mask}</div>
             <button onClick={() => setEditing(true)} title="Rename"
-              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
           </div>
         )}
         <div className="account-meta">

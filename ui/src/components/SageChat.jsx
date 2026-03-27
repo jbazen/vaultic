@@ -680,6 +680,7 @@ export default function SageChat() {
             zIndex: 1000,
           }}
           title={awake ? "Sage is listening…" : "Chat with Sage"}
+          aria-label={awake ? "Sage is listening" : "Chat with Sage"}
         >
           {awake ? "👂" : "✦"}
           {/* Always-on indicator dot */}
@@ -710,6 +711,8 @@ export default function SageChat() {
       {/* ── Chat panel ── */}
       {open && (
         <div
+          role="dialog"
+          aria-modal="true"
           onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
           style={isMobile ? {
             position: "fixed", inset: 0,
@@ -774,7 +777,7 @@ export default function SageChat() {
               {/* Voice mode selector */}
               <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
                 {VOICE_MODES.map((m, idx) => (
-                  <button key={m.value} title={m.title}
+                  <button key={m.value} title={m.title} aria-label={m.title}
                     onClick={() => setVoiceMode(m.value)}
                     style={{
                       background: voiceMode === m.value ? "rgba(79,142,247,0.2)" : "none",
@@ -803,8 +806,8 @@ export default function SageChat() {
                       minHeight: isMobile ? 44 : undefined,
                       cursor: "pointer", fontSize: 13, fontWeight: 600,
                       touchAction: "manipulation",
-                    }}>{paused ? "▶" : "⏸"}</button>
-                  <button onClick={stopSpeaking} title="Stop speaking"
+                    }} aria-label={paused ? "Resume speaking" : "Pause speaking"}>{paused ? "▶" : "⏸"}</button>
+                  <button onClick={stopSpeaking} title="Stop speaking" aria-label="Stop speaking"
                     style={{
                       background: "rgba(248,113,113,0.15)", border: "1px solid #f87171",
                       color: "#f87171", borderRadius: 6,
@@ -815,7 +818,7 @@ export default function SageChat() {
                     }}>⏹</button>
                 </>
               )}
-              <button onClick={() => { setMessages([]); setHistory([]); sessionStorage.removeItem(SESSION_KEY); }} title="Clear conversation"
+              <button onClick={() => { setMessages([]); setHistory([]); sessionStorage.removeItem(SESSION_KEY); }} title="Clear conversation" aria-label="Clear conversation"
                 style={{ background: "none", border: "1px solid var(--border)", color: "var(--text2)",
                   borderRadius: 6,
                   padding: isMobile ? "10px 14px" : "4px 8px",
@@ -823,7 +826,7 @@ export default function SageChat() {
                   cursor: "pointer", fontSize: 13,
                   touchAction: "manipulation",
                 }}>↺</button>
-              <button onClick={() => setOpen(false)}
+              <button onClick={() => setOpen(false)} aria-label="Close Sage chat"
                 style={{ background: "none", border: "1px solid var(--border)", color: "var(--text2)",
                   borderRadius: 6,
                   padding: isMobile ? "10px 14px" : "4px 8px",
@@ -911,7 +914,7 @@ export default function SageChat() {
                     <span style={{ color: "var(--text)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {f.filename}
                     </span>
-                    <button onClick={() => removePendingFile(i)}
+                    <button onClick={() => removePendingFile(i)} aria-label="Remove file"
                       style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 13, padding: 0, lineHeight: 1 }}>✕</button>
                   </div>
                 ))}
@@ -946,7 +949,8 @@ export default function SageChat() {
                   cursor: "pointer", fontSize: 16,
                   display: "flex", alignItems: "center", justifyContent: "center",
                   touchAction: "manipulation",
-                }}>
+                }}
+                aria-label={processingFile ? "Processing file" : "Attach file"}>
                 {processingFile ? "⏳" : "📎"}
               </button>
 
@@ -977,6 +981,7 @@ export default function SageChat() {
                   <button
                     onClick={toggleWhisperRecording}
                     title={whisperRecording ? "Click to stop recording" : "Click to record (Whisper AI)"}
+                    aria-label={whisperRecording ? "Stop recording" : "Record with Whisper AI"}
                     style={{
                       width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
                       borderRadius: "50%", flexShrink: 0,
@@ -992,6 +997,7 @@ export default function SageChat() {
                   <button
                     onClick={listening ? stopListening : startListening}
                     title={listening ? "Stop" : "Push to talk (browser)"}
+                    aria-label={listening ? "Stop listening" : "Push to talk"}
                     style={{
                       width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
                       borderRadius: "50%", flexShrink: 0,
@@ -1019,7 +1025,7 @@ export default function SageChat() {
                   fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "all 0.15s",
                   touchAction: "manipulation",
-                }}>➤</button>
+                }} aria-label="Send message">➤</button>
             </div>
           </div>
         </div>

@@ -357,27 +357,17 @@ async def list_w4s(_user: str = Depends(get_current_user)):
 
 # ── Tax projection ─────────────────────────────────────────────────────────────
 
-# 2025 MFJ tax brackets
-_BRACKETS_2025_MFJ = [
-    (23850,   0.10),
-    (96950,   0.12),
-    (206700,  0.22),
-    (394600,  0.24),
-    (501050,  0.32),
-    (751600,  0.35),
-    (float("inf"), 0.37),
-]
+from api.tax_calc import (
+    BRACKETS_2025_MFJ, BRACKETS_2024_MFJ, BRACKETS_BY_YEAR_AND_STATUS,
+    STANDARD_DEDUCTIONS as _STANDARD_DEDUCTIONS_SHARED,
+    CHILD_CREDIT_PER_CHILD as _CHILD_CREDIT_SHARED,
+    NUM_CHILDREN as _NUM_CHILDREN_SHARED,
+    SALT_CAP, calc_tax, get_brackets, get_standard_deduction,
+)
 
-def _calc_tax(taxable_income: float, brackets) -> float:
-    tax = 0.0
-    prev = 0.0
-    for ceiling, rate in brackets:
-        if taxable_income <= prev:
-            break
-        chunk = min(taxable_income, ceiling) - prev
-        tax += chunk * rate
-        prev = ceiling
-    return round(tax, 2)
+# Aliases for backward compatibility within this file
+_BRACKETS_2025_MFJ = BRACKETS_2025_MFJ
+_calc_tax = calc_tax
 
 
 @router.get("/projection/{year}")
@@ -897,17 +887,10 @@ async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
     Aggregates W-2s, 1099s, 1098s, and charitable giving to produce
     line-by-line figures for a complete federal return.
     """
-    STANDARD_DEDUCTIONS = {2024: 29200, 2025: 30000}
-    CHILD_CREDIT_PER_CHILD = 2000
-    NUM_CHILDREN = 2
-    BRACKETS = {
-        2025: _BRACKETS_2025_MFJ,
-        2024: [
-            (23200, 0.10), (94300, 0.12), (201050, 0.22),
-            (383900, 0.24), (487450, 0.32), (731200, 0.35),
-            (float("inf"), 0.37),
-        ],
-    }
+    std_ded_amount = get_standard_deduction(year)
+    CHILD_CREDIT_PER_CHILD = _CHILD_CREDIT_SHARED
+    NUM_CHILDREN = _NUM_CHILDREN_SHARED
+    brackets = get_brackets(year)
 
     with get_db() as conn:
         docs = conn.execute(
@@ -945,7 +928,7 @@ async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
     agi = total_income - adjustments
 
     # ── Deductions ────────────────────────────────────────────────────────────
-    std_ded = STANDARD_DEDUCTIONS.get(year, 30000)
+    std_ded = std_ded_amount
     mortgage_interest = _sum("mortgage_interest") + _sum("mortgage_points")
     charitable_cash = _sum("charitable_cash")
     charitable_noncash = _sum("charitable_noncash")
@@ -964,7 +947,6 @@ async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
     taxable_income = max(0, agi - deduction_amount)
 
     # ── Tax calculation ───────────────────────────────────────────────────────
-    brackets = BRACKETS.get(year, _BRACKETS_2025_MFJ)
     gross_tax = _calc_tax(taxable_income, brackets)
     child_credit = min(NUM_CHILDREN * CHILD_CREDIT_PER_CHILD, gross_tax)
     net_tax = max(0, gross_tax - child_credit)
@@ -1034,47 +1016,12 @@ async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
 
 # ── W-4 Multi-Job Optimization Wizard ─────────────────────────────────────────
 
-# Federal tax brackets by year and filing status.
-# Each entry: list of (ceiling, rate) tuples in ascending order.
-_BRACKETS = {
-    2025: {
-        "married_filing_jointly": [
-            (23850, 0.10), (96950, 0.12), (206700, 0.22),
-            (394600, 0.24), (501050, 0.32), (751600, 0.35), (float("inf"), 0.37),
-        ],
-        "single": [
-            (11925, 0.10), (48475, 0.12), (103350, 0.22),
-            (197300, 0.24), (250525, 0.32), (375800, 0.35), (float("inf"), 0.37),
-        ],
-        "head_of_household": [
-            (17000, 0.10), (64850, 0.12), (103350, 0.22),
-            (197300, 0.24), (250500, 0.32), (375800, 0.35), (float("inf"), 0.37),
-        ],
-    },
-    2024: {
-        "married_filing_jointly": [
-            (23200, 0.10), (94300, 0.12), (201050, 0.22),
-            (383900, 0.24), (487450, 0.32), (731200, 0.35), (float("inf"), 0.37),
-        ],
-        "single": [
-            (11600, 0.10), (47150, 0.12), (100525, 0.22),
-            (191950, 0.24), (243725, 0.32), (365600, 0.35), (float("inf"), 0.37),
-        ],
-        "head_of_household": [
-            (16550, 0.10), (63100, 0.12), (100500, 0.22),
-            (191950, 0.24), (243700, 0.32), (365600, 0.35), (float("inf"), 0.37),
-        ],
-    },
-}
-
-_STANDARD_DEDUCTIONS = {
-    2025: {"married_filing_jointly": 30000, "single": 15000, "head_of_household": 22500},
-    2024: {"married_filing_jointly": 29200, "single": 14600, "head_of_household": 21900},
-}
+# Use shared tax constants from api/tax_calc.py
+_BRACKETS = BRACKETS_BY_YEAR_AND_STATUS
+_STANDARD_DEDUCTIONS = _STANDARD_DEDUCTIONS_SHARED
+_CHILD_CREDIT_PER_CHILD = _CHILD_CREDIT_SHARED
 
 _PAY_PERIODS = {"weekly": 52, "biweekly": 26, "semimonthly": 24, "monthly": 12}
-
-_CHILD_CREDIT_PER_CHILD = 2000  # up to $2,000 per qualifying child (both 2024 and 2025)
 
 
 class _W4Job(BaseModel):

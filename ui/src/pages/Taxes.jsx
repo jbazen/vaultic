@@ -440,6 +440,7 @@ export default function Taxes() {
                         onClick={() => handleDeleteDoc(doc.id)}
                         style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: 16, padding: "0 4px" }}
                         title="Remove"
+                        aria-label="Remove document"
                       >×</button>
                     </div>
                   </div>
@@ -846,7 +847,7 @@ export default function Taxes() {
           display: "flex", alignItems: "flex-start", justifyContent: "center",
           zIndex: 1000, padding: "40px 16px", overflowY: "auto",
         }} onClick={e => e.target === e.currentTarget && setWizardOpen(false)}>
-          <div style={{
+          <div role="dialog" aria-modal="true" style={{
             background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 14,
             width: "100%", maxWidth: 700, padding: 28,
           }}>
@@ -858,7 +859,7 @@ export default function Taxes() {
                   Calculates the exact extra withholding (Step 4c) to enter on each employer's W-4 so you neither owe nor over-withhold at filing.
                 </div>
               </div>
-              <button onClick={() => setWizardOpen(false)} style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 22, cursor: "pointer", padding: 4 }}>✕</button>
+              <button onClick={() => setWizardOpen(false)} style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 22, cursor: "pointer", padding: 4 }} aria-label="Close wizard">✕</button>
             </div>
 
             {/* Inputs — household */}
@@ -929,7 +930,7 @@ export default function Taxes() {
                     </select>
                   </label>
                   <button onClick={() => setWizardJobs(wizardJobs.filter((_, idx) => idx !== i))}
-                    style={{ background: "rgba(248,113,113,0.15)", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "7px 10px", cursor: "pointer", fontSize: 13, alignSelf: "end" }}>✕</button>
+                    style={{ background: "rgba(248,113,113,0.15)", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "7px 10px", cursor: "pointer", fontSize: 13, alignSelf: "end" }} aria-label="Remove income source">✕</button>
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4, maxWidth: 200 }}>

@@ -81,7 +81,7 @@ function CryptoAccountRow({ account, onRenamed }) {
                 transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
               <div className="account-name">{label}</div>
               <button onClick={() => setEditing(true)} title="Rename"
-                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
             </div>
           )}
           <MetaLine
@@ -170,7 +170,7 @@ function AccountRow({ account, onRenamed }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="account-name">{label}{mask}</div>
             <button onClick={() => setEditing(true)} title="Rename"
-              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
           </div>
         )}
         <MetaLine
@@ -283,7 +283,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
                 {entry.name}
               </div>
               <button onClick={() => setEditingName(true)} title="Rename"
-                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
             </div>
           )}
           {/* Badge + notes + imported date all on one meta line */}
@@ -322,7 +322,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
               <button onClick={() => onDelete(entry.id)}
                 style={{ background: "none", border: "1px solid var(--border)",
                   color: "#f87171", borderRadius: 6, padding: "3px 8px",
-                  cursor: "pointer", fontSize: 12 }} title="Delete">✕</button>
+                  cursor: "pointer", fontSize: 12 }} title="Delete" aria-label="Delete">✕</button>
             )}
           </div>
         </div>
@@ -759,7 +759,7 @@ function PlaidInvestmentCard({ account, onRenamed }) {
                 transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
               <div className="account-name">{label}{mask}</div>
               <button onClick={() => setEditing(true)} title="Rename"
-                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+                style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
             </div>
           )}
           <MetaLine
@@ -827,7 +827,7 @@ function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, onRenam
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div className="account-name">{entry.name}</div>
             <button onClick={() => setEditing(true)} title="Rename"
-              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }}>✎</button>
+              style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
           </div>
         )}
         <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px" }}>
@@ -847,7 +847,7 @@ function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, onRenam
           {negative ? `-${fmt(entry.value)}` : fmt(entry.value)}
         </div>
         <button onClick={onDelete}
-          style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }} title="Delete">✕</button>
+          style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }} title="Delete" aria-label="Delete">✕</button>
       </div>
     </div>
   );

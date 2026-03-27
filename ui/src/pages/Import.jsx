@@ -196,7 +196,7 @@ function ManualTab() {
                   <td style={{ padding: "10px 16px", textAlign: "right" }}>
                     <button onClick={() => handleDelete(e.id)}
                       style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14 }}
-                      title="Delete">✕</button>
+                      title="Delete" aria-label="Delete entry">✕</button>
                   </td>
                 </tr>
               ))}

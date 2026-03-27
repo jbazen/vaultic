@@ -665,7 +665,7 @@ def _call_tool(name: str, inputs: dict) -> str:
 
         elif name == "optimize_w4":
             from datetime import date as _date
-            from api.routers.tax import _calc_tax, _BRACKETS_2025_MFJ
+            from api.tax_calc import calc_tax, get_brackets, get_standard_deduction, CHILD_CREDIT_PER_CHILD, NUM_CHILDREN, SALT_CAP
             target_refund = inputs.get("target_refund", 0)
             year = inputs.get("year", 2025)
             pay_periods_remaining = inputs.get("pay_periods_remaining")
@@ -697,10 +697,10 @@ def _call_tool(name: str, inputs: dict) -> str:
             proj_gross = ytd_gross / frac
 
             # Deduction
-            std = {2024: 29200, 2025: 30000}.get(year, 30000)
+            std = get_standard_deduction(year)
             if docs:
                 mortgage = _sum(docs, "mortgage_interest") + _sum(docs, "mortgage_points")
-                salt = min(10000, _sum(docs, "property_taxes") + _sum(docs, "w2_state_withheld"))
+                salt = min(SALT_CAP, _sum(docs, "property_taxes") + _sum(docs, "w2_state_withheld"))
                 charity = _sum(docs, "charitable_cash") + _sum(docs, "charitable_noncash")
                 itemized = mortgage + salt + charity
                 ded = itemized if itemized > std else std
@@ -708,11 +708,9 @@ def _call_tool(name: str, inputs: dict) -> str:
                 ded = std
 
             taxable = max(0, proj_gross - ded)
-            brackets = _BRACKETS_2025_MFJ if year == 2025 else [
-                (23200, 0.10), (94300, 0.12), (201050, 0.22),
-                (383900, 0.24), (487450, 0.32), (731200, 0.35), (float("inf"), 0.37),
-            ]
-            net_tax = max(0, _calc_tax(taxable, brackets) - 4000)
+            brackets = get_brackets(year)
+            child_credit = NUM_CHILDREN * CHILD_CREDIT_PER_CHILD
+            net_tax = max(0, calc_tax(taxable, brackets) - child_credit)
 
             # How much total withholding is needed
             needed_total = net_tax - target_refund
@@ -754,8 +752,8 @@ def _call_tool(name: str, inputs: dict) -> str:
         elif name == "get_draft_return":
             from api.routers.tax import get_draft_return as _draft
             year = inputs.get("year", 2025)
-            # Call the endpoint logic directly
-            from api.routers.tax import _calc_tax, _BRACKETS_2025_MFJ, _DOC_TYPE_LABELS
+            from api.tax_calc import calc_tax, get_brackets, get_standard_deduction, CHILD_CREDIT_PER_CHILD, NUM_CHILDREN, SALT_CAP
+            from api.routers.tax import _DOC_TYPE_LABELS
             with get_db() as conn:
                 docs = conn.execute(
                     "SELECT * FROM tax_docs WHERE tax_year = ?", (year,)
@@ -779,20 +777,17 @@ def _call_tool(name: str, inputs: dict) -> str:
             total_income = wages + interest + ord_div + cap_gains + retirement
             hsa_ded = max(0, _sum("hsa_contributions") - _sum("w2_hsa_employer"))
             agi = total_income - hsa_ded
-            std = {2024: 29200, 2025: 30000}.get(year, 30000)
+            std = get_standard_deduction(year)
             mortgage = _sum("mortgage_interest") + _sum("mortgage_points")
-            salt = min(10000, _sum("property_taxes") + _sum("w2_state_withheld"))
+            salt = min(SALT_CAP, _sum("property_taxes") + _sum("w2_state_withheld"))
             charity = _sum("charitable_cash") + _sum("charitable_noncash")
             itemized = mortgage + salt + charity
             ded_method = "itemized" if itemized > std else "standard"
             ded_amt = itemized if itemized > std else std
             taxable = max(0, agi - ded_amt)
-            brackets = _BRACKETS_2025_MFJ if year == 2025 else [
-                (23200, 0.10), (94300, 0.12), (201050, 0.22),
-                (383900, 0.24), (487450, 0.32), (731200, 0.35), (float("inf"), 0.37),
-            ]
-            gross_tax = _calc_tax(taxable, brackets)
-            net_tax = max(0, gross_tax - 4000)
+            gross_tax = calc_tax(taxable, get_brackets(year))
+            child_credit = NUM_CHILDREN * CHILD_CREDIT_PER_CHILD
+            net_tax = max(0, gross_tax - child_credit)
             withheld = _sum("w2_fed_withheld") + sum((d.get("fed_withheld") or 0) for d in docs if d.get("doc_type") != "w2")
             delta = withheld - net_tax
             return str({
@@ -802,7 +797,7 @@ def _call_tool(name: str, inputs: dict) -> str:
                 "agi": round(agi), "deduction_method": ded_method,
                 "deduction": round(ded_amt), "itemized_total": round(itemized),
                 "taxable_income": round(taxable), "gross_tax": round(gross_tax),
-                "child_tax_credit": 4000, "net_tax": round(net_tax),
+                "child_tax_credit": child_credit, "net_tax": round(net_tax),
                 "total_withheld": round(withheld),
                 "refund": round(delta) if delta >= 0 else None,
                 "owed": round(-delta) if delta < 0 else None,
@@ -812,11 +807,8 @@ def _call_tool(name: str, inputs: dict) -> str:
 
         elif name == "get_tax_projection":
             try:
-                # Compute inline to avoid circular HTTP call
-                from api.routers.tax import _calc_tax, _BRACKETS_2025_MFJ
+                from api.tax_calc import calc_tax, get_brackets, get_standard_deduction, CHILD_CREDIT_PER_CHILD, NUM_CHILDREN
                 from datetime import date as _date
-                STANDARD_DEDUCTION = 30000
-                CHILD_CREDIT = 4000
                 with get_db() as conn:
                     stubs = conn.execute("""
                         SELECT p.* FROM paystubs p
@@ -838,10 +830,12 @@ def _call_tool(name: str, inputs: dict) -> str:
                 proj_gross = round(ytd_gross / frac)
                 proj_withheld = round(ytd_federal / frac)
                 prior_itemized = prior.get("total_itemized") or 0
-                deduction = prior_itemized if prior_itemized > STANDARD_DEDUCTION else STANDARD_DEDUCTION
+                std_ded = get_standard_deduction(2025)
+                deduction = prior_itemized if prior_itemized > std_ded else std_ded
                 taxable = max(0, proj_gross - deduction)
-                gross_tax = _calc_tax(taxable, _BRACKETS_2025_MFJ)
-                net_tax = max(0, gross_tax - CHILD_CREDIT)
+                gross_tax = calc_tax(taxable, get_brackets(2025))
+                child_credit = NUM_CHILDREN * CHILD_CREDIT_PER_CHILD
+                net_tax = max(0, gross_tax - child_credit)
                 delta = proj_withheld - net_tax
                 return str({
                     "year": 2025, "as_of": latest_date,

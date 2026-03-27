@@ -292,6 +292,7 @@ export default function Documents() {
                         onClick={() => handleDelete(doc.id)}
                         style={{ padding: "4px 8px", borderRadius: 6, background: "none", border: "none", color: "#f87171", fontSize: 16, cursor: "pointer" }}
                         title="Delete"
+                        aria-label="Delete document"
                       >×</button>
                     </div>
                   </div>
@@ -309,6 +310,8 @@ export default function Documents() {
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
         >
           <div
+            role="dialog"
+            aria-modal="true"
             onClick={e => e.stopPropagation()}
             style={{ background: "var(--bg2)", borderRadius: 14, padding: 28, width: "100%", maxWidth: 460, border: "1px solid var(--border)", maxHeight: "90vh", overflowY: "auto" }}
           >

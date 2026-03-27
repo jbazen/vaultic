@@ -128,12 +128,12 @@ function MonthPicker({ month, onChange, onClose }) {
     }}>
       {/* Year navigation */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <button onClick={() => setPickerYear(y => y - 1)}
+        <button onClick={() => setPickerYear(y => y - 1)} aria-label="Previous year"
           style={{ background: "none", border: "none", color: "var(--text)", cursor: "pointer", fontSize: 20, padding: "0 8px", lineHeight: 1 }}>
           ‹
         </button>
         <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>{pickerYear}</span>
-        <button onClick={() => setPickerYear(y => y + 1)}
+        <button onClick={() => setPickerYear(y => y + 1)} aria-label="Next year"
           style={{ background: "none", border: "none", color: "var(--text)", cursor: "pointer", fontSize: 20, padding: "0 8px", lineHeight: 1 }}>
           ›
         </button>
@@ -654,7 +654,7 @@ function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
                       border: "none", cursor: "pointer", padding: 0, opacity: 0.5,
                       lineHeight: 1,
                     }}
-                  >🗑</button>
+                  aria-label="Remove from budget">🗑</button>
                 )}
                 {/* Restore button for Deleted tab */}
                 {tab === "deleted" && (
@@ -850,6 +850,8 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
         onClick={e => e.stopPropagation()}
         style={{
           width: 700, maxWidth: "95vw", maxHeight: "90vh",
@@ -892,6 +894,7 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
 
           <button
             onClick={onClose}
+            aria-label="Close"
             style={{ background: "none", border: "none", color: "var(--text2)", fontSize: 18, cursor: "pointer", lineHeight: 1, marginLeft: 4 }}
           >✕</button>
         </div>
@@ -1009,7 +1012,7 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
                         cursor: "pointer", fontSize: 16, lineHeight: 1, flexShrink: 0,
                         display: "flex", alignItems: "center", justifyContent: "center",
                       }}
-                    >−</button>
+                    aria-label="Remove this split">−</button>
                   ) : (
                     <div style={{ width: 22, flexShrink: 0 }} />
                   )}
@@ -1274,7 +1277,7 @@ function ItemDetailModal({ itemId, itemName, month, allGroups, onClose, onUpdate
       padding: "20px 20px 0 0",
     }}>
       {/* Panel — stop clicks from closing when clicking inside */}
-      <div onClick={e => e.stopPropagation()} style={{
+      <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
         width: 360, maxHeight: "calc(100vh - 40px)", overflowY: "auto",
         background: "var(--bg2)", borderRadius: 12,
         border: "1px solid var(--border)",
@@ -1306,7 +1309,7 @@ function ItemDetailModal({ itemId, itemName, month, allGroups, onClose, onUpdate
               </div>
             )}
           </div>
-          <button onClick={onClose} style={{
+          <button onClick={onClose} aria-label="Close" style={{
             background: "none", border: "none", color: "var(--text2)",
             fontSize: 18, cursor: "pointer", padding: "0 0 0 8px", lineHeight: 1,
           }}>✕</button>
@@ -1592,6 +1595,7 @@ function ItemRow({ item, month, groupType, showSpent, onUpdate, onOpenItem,
       <button
         onClick={e => { e.stopPropagation(); if (window.confirm(`Delete "${item.name}"?`)) deleteBudgetItem(item.id).then(onUpdate); }}
         title="Delete item"
+        aria-label="Delete item"
         style={{
           background: "none", border: "none", color: "var(--text2)",
           cursor: "pointer", fontSize: 13, padding: 0, opacity: 0.5,
@@ -1776,6 +1780,7 @@ function GroupSection({ group, month, colorIndex, onUpdate, onOpenItem,
               Delete Group
             </button>
             <button onClick={e => { e.stopPropagation(); setEditingName(false); setNameDraft(group.name); }}
+              aria-label="Cancel renaming"
               style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 14, padding: 0 }}>
               ✕
             </button>
@@ -2014,7 +2019,7 @@ export default function Budget() {
       {/* ── Month navigator ── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginBottom: 10 }}>
         <button className="btn btn-secondary" style={{ padding: "6px 16px", fontSize: 18, lineHeight: 1 }}
-          onClick={() => setMonth(prevMonth)}>
+          onClick={() => setMonth(prevMonth)} aria-label="Previous month">
           ‹
         </button>
 
@@ -2035,7 +2040,7 @@ export default function Budget() {
         </div>
 
         <button className="btn btn-secondary" style={{ padding: "6px 16px", fontSize: 18, lineHeight: 1 }}
-          onClick={() => setMonth(nextMonth)}>
+          onClick={() => setMonth(nextMonth)} aria-label="Next month">
           ›
         </button>
       </div>

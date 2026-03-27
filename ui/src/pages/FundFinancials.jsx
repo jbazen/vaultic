@@ -82,7 +82,7 @@ function FundHistory({ fund, onChanged }) {
             {saving ? "…" : addMode === "add" ? "Add" : "Remove"}
           </button>
           <button className="btn btn-secondary" style={{ fontSize: 12, padding: "5px 10px" }}
-            onClick={() => setAddMode(null)}>✕</button>
+            onClick={() => setAddMode(null)} aria-label="Cancel">✕</button>
         </div>
       )}
 
@@ -113,7 +113,7 @@ function FundHistory({ fund, onChanged }) {
                 <td style={{ padding: "5px 8px", textAlign: "right" }}>
                   <button onClick={() => handleDelete(t.id)}
                     style={{ background: "none", border: "none", color: "var(--text2)",
-                      cursor: "pointer", fontSize: 12 }}>✕</button>
+                      cursor: "pointer", fontSize: 12 }} aria-label="Delete transaction">✕</button>
                 </td>
               </tr>
             ))}
@@ -196,7 +196,7 @@ function FundCard({ fund, onUpdate }) {
         {/* Delete */}
         <button onClick={e => { e.stopPropagation(); if (confirm(`Delete "${fund.name}"? This cannot be undone.`)) deleteFund(fund.id).then(onUpdate); }}
           style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 13 }}
-          title="Delete fund">✕</button>
+          title="Delete fund" aria-label="Delete fund">✕</button>
       </div>
 
       {/* Progress bar */}
