@@ -55,6 +55,8 @@ jobs:
               echo "Litestream installed: $(litestream version)"
             fi
 
+            # Ensure we're on main branch (rollback may have left detached HEAD)
+            git checkout main 2>/dev/null || true
             # Pull latest code (repo is public, HTTPS works without a deploy key)
             git pull https://github.com/jbazen/vaultic.git main
 
@@ -78,10 +80,24 @@ jobs:
             sudo cp deploy/vaultic-nginx.conf /etc/nginx/sites-available/vaultic
             sudo nginx -t && sudo systemctl reload nginx
 
-            # Health check — verify the app came up
-            sleep 3
-            if ! curl -sf http://127.0.0.1:8000/api/health > /dev/null 2>&1; then
-              echo "Health check failed! Rolling back to $OLD_COMMIT"
+            # Health check — retry up to 5 times with 3s intervals (Litestream + uvicorn startup)
+            HEALTHY=0
+            for i in 1 2 3 4 5; do
+              sleep 3
+              if curl -sf http://127.0.0.1:8000/api/health > /dev/null 2>&1; then
+                HEALTHY=1
+                break
+              fi
+              echo "Health check attempt $i failed, retrying..."
+            done
+
+            if [ "$HEALTHY" -ne 1 ]; then
+              echo "Health check failed after 5 attempts!"
+              echo "--- Last 40 lines of service log ---"
+              sudo journalctl -u vaultic-api.service -n 40 --no-pager || true
+              echo "--- Service status ---"
+              sudo systemctl status vaultic-api.service --no-pager || true
+              echo "Rolling back to $OLD_COMMIT"
               git checkout "$OLD_COMMIT"
               .venv/bin/pip install -q -r requirements.txt
               cd ui && npm ci --silent && npm run build && cd ..
