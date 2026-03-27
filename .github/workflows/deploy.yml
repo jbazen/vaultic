@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
 jobs:
   # ── 1. Run backend unit tests ────────────────────────────────────────────────
   test:
@@ -14,6 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -25,6 +30,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: success()
 
     steps:
@@ -36,6 +42,9 @@ jobs:
           script: |
             set -e
             cd /home/ubuntu/vaultic
+
+            # Save current commit for rollback
+            OLD_COMMIT=$(git rev-parse HEAD)
 
             # Install Litestream if not present (idempotent)
             if ! command -v litestream &> /dev/null; then
@@ -68,5 +77,16 @@ jobs:
             # Update nginx config and reload (picks up cache-control header changes)
             sudo cp deploy/vaultic-nginx.conf /etc/nginx/sites-available/vaultic
             sudo nginx -t && sudo systemctl reload nginx
+
+            # Health check — verify the app came up
+            sleep 3
+            if ! curl -sf http://127.0.0.1:8000/api/health > /dev/null 2>&1; then
+              echo "Health check failed! Rolling back to $OLD_COMMIT"
+              git checkout "$OLD_COMMIT"
+              .venv/bin/pip install -q -r requirements.txt
+              cd ui && npm ci --silent && npm run build && cd ..
+              sudo systemctl restart vaultic-api.service
+              exit 1
+            fi
 
             echo "Deploy complete"

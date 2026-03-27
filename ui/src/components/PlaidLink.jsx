@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { usePlaidLink } from "react-plaid-link";
 import { createLinkToken, exchangeToken } from "../api.js";
 
@@ -41,9 +41,9 @@ export default function PlaidLink({ onSuccess }) {
   });
 
   // Auto-open once we have a link token
-  if (linkToken && ready) {
-    open();
-  }
+  useEffect(() => {
+    if (linkToken && ready) open();
+  }, [linkToken, ready, open]);
 
   return (
     <div>

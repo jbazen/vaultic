@@ -6,59 +6,11 @@ import {
   getManualEntryHistory,
 } from "../api.js";
 import PlaidLink from "../components/PlaidLink.jsx";
+import EditableNotes from "../components/EditableNotes.jsx";
+import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
+import { isRetirementAccount } from "../utils/accounts.js";
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
-
-// ── Formatters ─────────────────────────────────────────────────────────────────
-
-function fmt(v) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(Math.abs(v));
-}
-
-function fmtCrypto(v, decimals = 8) {
-  if (v == null) return "—";
-  const s = Number(v).toFixed(decimals);
-  return s.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
-}
-
-function fmtPrice(v) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(v);
-}
-
-function fmtPct(v) {
-  if (v == null) return "—";
-  return `${Number(v).toFixed(2)}%`;
-}
-
-function fmtNum(v, decimals = 4) {
-  if (v == null) return "—";
-  return Number(v).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: decimals });
-}
-
-function fmtDate(s) {
-  if (!s) return "";
-  const dateOnly = s.length > 10 ? s.substring(0, 10) : s;
-  return new Date(dateOnly + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-function fmtCompact(v) {
-  if (v == null) return "—";
-  const abs = Math.abs(v);
-  if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
-  return `$${v.toFixed(0)}`;
-}
-
-function fmtAxisDate(s, days) {
-  if (!s) return "";
-  const d = new Date(s + "T12:00:00");
-  if (days <= 90) return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
-}
+import { fmt, fmtCrypto, fmtPrice, fmtPercent as fmtPct, fmtNum, fmtDate, fmtCompact, fmtAxisDate } from "../utils/format.js";
 
 function typeBadge(type) {
   return <span className={`badge badge-${type}`}>{type}</span>;
@@ -66,49 +18,6 @@ function typeBadge(type) {
 
 function isLiability(type) {
   return type === "credit" || type === "loan";
-}
-
-// Detect retirement accounts from Plaid subtype or account/entry name.
-// Uses regex to catch all Plaid subtype variants: "401k", "roth 401k", "403b",
-// "ira", "roth", "traditional ira", "simple ira", "sep ira", "pension".
-// Name fallback handles PDF-imported manual entries and Plaid display names.
-function isRetirementAccount(subtype, name) {
-  return /401|403b|roth|\bira\b|sep\s*ira|simple\s*ira|pension/i.test(subtype || "") ||
-         /401[\s(]?k|403b|roth|\bira\b|rollover\s*ira|pension/i.test(name || "");
-}
-
-// ── Shared: EditableNotes ──────────────────────────────────────────────────────
-// Inline pencil-click editor for account descriptions/notes.
-// Renders inline so it can sit on the same line as the type badge.
-function EditableNotes({ notes, onSave }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(notes || "");
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    setSaving(true);
-    try { await onSave(draft.trim()); setEditing(false); }
-    finally { setSaving(false); }
-  }
-
-  if (editing) {
-    return (
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-        <input className="form-input" style={{ width: 200, padding: "2px 6px", fontSize: 12 }}
-          value={draft} onChange={e => setDraft(e.target.value)} autoFocus
-          onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
-        <button className="btn btn-primary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
-        <button className="btn btn-secondary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setEditing(false)}>✕</button>
-      </span>
-    );
-  }
-  return (
-    <span style={{ color: "var(--text2)", fontSize: 12 }}>
-      {notes || ""}
-      <button onClick={() => { setDraft(notes || ""); setEditing(true); }} title="Edit description"
-        style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 11, padding: "0 3px", opacity: 0.6 }}>✎</button>
-    </span>
-  );
 }
 
 // ── Shared: Meta line ──────────────────────────────────────────────────────────
@@ -122,7 +31,7 @@ function MetaLine({ type, subtype, notes, onSaveNotes, date, extra, badgeType, b
       <span className={`badge badge-${bType}`}>{bLabel}</span>
       {subtype && <span style={{ color: "var(--text2)" }}>{subtype}</span>}
       {extra}
-      <EditableNotes notes={notes} onSave={onSaveNotes} />
+      <EditableNotes notes={notes} onSave={onSaveNotes} inline />
       {date && <span style={{ color: "var(--text2)", opacity: 0.6 }}>· {date}</span>}
     </div>
   );
@@ -282,40 +191,6 @@ function AccountRow({ account, onRenamed }) {
   );
 }
 
-// ── Asset allocation helpers ───────────────────────────────────────────────────
-
-const ASSET_CLASS_COLORS = {
-  equities: "#4f8ef7", fixed_income: "#a78bfa",
-  cash: "#34d399", alternatives: "#fbbf24", other: "#8b92a8",
-};
-const ASSET_CLASS_LABELS = {
-  equities: "Equities", fixed_income: "Fixed Income",
-  cash: "Cash", alternatives: "Alternatives", other: "Other",
-};
-
-function AllocationBar({ allocation, total }) {
-  if (!total) return null;
-  const entries = Object.entries(allocation).sort((a, b) => b[1] - a[1]);
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", marginBottom: 8 }}>
-        {entries.map(([cls, val]) => (
-          <div key={cls} style={{ width: `${(val / total * 100).toFixed(1)}%`, background: ASSET_CLASS_COLORS[cls] || "#8b92a8" }} />
-        ))}
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 16px" }}>
-        {entries.map(([cls, val]) => (
-          <div key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 2, background: ASSET_CLASS_COLORS[cls] || "#8b92a8" }} />
-            <span style={{ color: "var(--text2)" }}>{ASSET_CLASS_LABELS[cls] || cls}</span>
-            <span style={{ fontWeight: 600, color: "var(--text)" }}>{(val / total * 100).toFixed(1)}%</span>
-            <span style={{ color: "var(--text2)" }}>{fmt(val)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ── Manual Investment Card ─────────────────────────────────────────────────────
 // PDF-imported investment account row. Uses the same bordered box style as all other
@@ -424,6 +299,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
             <EditableNotes
               notes={entry.notes}
               onSave={async v => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }}
+              inline
             />
             {entry.entered_at && (
               <span style={{ color: "var(--text2)", opacity: 0.6 }}>· Imported {fmtDate(entry.entered_at)}</span>
@@ -464,7 +340,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
           {/* Holdings tab — asset allocation bar + holdings table */}
           {activeTab === "holdings" && (
             <div>
-              {holdingsTotal > 0 && <AllocationBar allocation={allocation} total={holdingsTotal} />}
+              {holdingsTotal > 0 && <AllocationBar allocation={allocation} total={holdingsTotal} style="accounts" />}
               {holdings.length > 0 ? (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -959,6 +835,7 @@ function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, onRenam
           <EditableNotes
             notes={entry.notes}
             onSave={async v => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }}
+            inline
           />
           {entry.entered_at && (
             <span style={{ color: "var(--text2)", opacity: 0.6 }}>· {fmtDate(entry.entered_at)}</span>

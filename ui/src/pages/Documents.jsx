@@ -8,6 +8,7 @@ import {
   getVaultYears, getVaultDocuments, getVaultChecklist, getDeductionTracker,
   uploadToVault, downloadVaultDoc, deleteVaultDoc,
 } from "../api.js";
+import { fmt as fmtBase } from "../utils/format.js";
 
 const CATEGORIES = [
   { value: "tax_return",           label: "Tax Return (1040)" },
@@ -29,10 +30,8 @@ const CATEGORIES = [
   { value: "other",                label: "Other" },
 ];
 
-function fmt(v) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
-}
+// Documents page uses whole-dollar formatting
+function fmt(v) { return fmtBase(v, { maximumFractionDigits: 0, minimumFractionDigits: 0 }); }
 
 function groupByCategory(docs) {
   const groups = {};

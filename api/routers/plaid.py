@@ -1,4 +1,5 @@
 """Plaid Link flow: create link token → exchange public token → store encrypted access token."""
+import asyncio
 import os
 import logging
 
@@ -93,7 +94,7 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
         """, (item_id, body.institution_id, body.institution_name, encrypt(access_token)))
 
     try:
-        sync.sync_all()
+        await asyncio.to_thread(sync.sync_all)
     except Exception as e:
         logger.warning(f"Initial sync failed (non-fatal): {e}")
 
@@ -108,7 +109,7 @@ async def trigger_sync(_user: str = Depends(get_current_user)):
         raise HTTPException(status_code=429, detail="Sync rate limit reached. Wait a few minutes.")
     rate_limit.record_sync(_user)
     try:
-        sync.sync_all()
+        await asyncio.to_thread(sync.sync_all)
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Sync error: {e}")

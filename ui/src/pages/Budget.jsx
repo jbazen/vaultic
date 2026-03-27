@@ -27,6 +27,7 @@ import {
   getPendingReviewTransactions, approveTransaction,
   budgetDeleteTransaction, budgetRestoreTransaction, getDeletedTransactions,
 } from "../api.js";
+import { fmt } from "../utils/format.js";
 
 // ── Color palette — one color per expense group (income is always green) ──────
 const PALETTE = [
@@ -76,13 +77,6 @@ function DragHandle({ onMouseDown }) {
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
-function fmt(v) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(Math.abs(v));
-}
 
 function monthLabel(m) {
   const [y, mo] = m.split("-");

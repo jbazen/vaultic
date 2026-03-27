@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,10 +16,10 @@ async def sync_holdings(_user: str = Depends(get_current_user)):
     """Manually trigger a Coinbase sync and refresh the net worth snapshot."""
     try:
         from api.coinbase_sync import sync_coinbase
-        result = sync_coinbase()
+        result = await asyncio.to_thread(sync_coinbase)
 
         from api.sync import _take_net_worth_snapshot
-        _take_net_worth_snapshot(date.today().isoformat())
+        await asyncio.to_thread(_take_net_worth_snapshot, date.today().isoformat())
 
         security_log.log_sync_event(f"COINBASE_SYNC  user={_user}  result={result}")
         return result

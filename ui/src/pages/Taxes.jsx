@@ -6,20 +6,11 @@
 import { useState, useEffect, useRef } from "react";
 import { getTaxSummary, uploadTaxPdf, getPaystubs, uploadPaystub, getTaxProjection, getW4s, uploadW4, uploadTaxDoc, getTaxDocs, deleteTaxDoc, getDraftReturn, getW4WizardPrefill, runW4Wizard, getEstimatedPayments } from "../api.js";
 
-// Currency formatter
-function fmt(v) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(v);
-}
+import { fmt as fmtBase, fmtPercent } from "../utils/format.js";
 
-function pct(v) {
-  if (v == null) return "—";
-  return `${Number(v).toFixed(1)}%`;
-}
+// Tax page uses whole-dollar formatting and 1-decimal percentages
+function fmt(v) { return fmtBase(v, { maximumFractionDigits: 0, minimumFractionDigits: 0 }); }
+function pct(v) { return fmtPercent(v, 1); }
 
 export default function Taxes() {
   const [summary, setSummary] = useState([]);

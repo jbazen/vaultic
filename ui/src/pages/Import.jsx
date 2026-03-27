@@ -4,13 +4,12 @@ import {
   ingestPDF, saveParsedPDF,
 } from "../api.js";
 
+import { fmt as fmtBase } from "../utils/format.js";
+
 // ── Shared formatter ──────────────────────────────────────────────────────────
 function fmt(v, cat) {
   if (cat === "credit_score") return Math.round(v).toString();
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(v);
+  return fmtBase(v);
 }
 
 // ── Manual entry categories (non-investment assets shown in the Dashboard grid)

@@ -383,12 +383,19 @@ def _call_tool(name: str, inputs: dict) -> str:
                                     WHERE ta.item_id = bi.id
                                       AND strftime('%Y-%m', t.date) = ?
                                       AND t.pending = 0), 0
+                               ) + COALESCE(
+                                   (SELECT ROUND(SUM(ts.amount), 2)
+                                    FROM transaction_splits ts
+                                    JOIN transactions t ON t.transaction_id = ts.transaction_id
+                                    WHERE ts.item_id = bi.id
+                                      AND strftime('%Y-%m', t.date) = ?
+                                      AND t.pending = 0), 0
                                ) AS spent
                         FROM budget_items bi
                         LEFT JOIN budget_amounts ba ON ba.item_id = bi.id AND ba.month = ?
                         WHERE bi.group_id = ? AND bi.is_deleted = 0
                         ORDER BY bi.display_order, bi.id
-                    """, (month, month, g["id"])).fetchall()
+                    """, (month, month, month, g["id"])).fetchall()
                     group_planned = sum(i["planned"] for i in items)
                     group_spent   = sum(i["spent"]   for i in items)
                     result.append({
@@ -470,6 +477,7 @@ def _call_tool(name: str, inputs: dict) -> str:
                     LEFT JOIN transaction_splits ts ON ts.transaction_id = t.transaction_id
                     WHERE strftime('%Y-%m', t.date) = ?
                       AND t.pending = 0
+                      AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
                       AND ta.transaction_id IS NULL
                       AND ts.transaction_id IS NULL
                     ORDER BY t.date DESC
@@ -803,13 +811,8 @@ def _call_tool(name: str, inputs: dict) -> str:
             })
 
         elif name == "get_tax_projection":
-            import httpx
             try:
-                # Call our own projection endpoint internally
-                token_row = None
-                with get_db() as conn:
-                    token_row = conn.execute("SELECT token FROM auth_tokens LIMIT 1").fetchone()
-                # Just compute inline to avoid circular HTTP call
+                # Compute inline to avoid circular HTTP call
                 from api.routers.tax import _calc_tax, _BRACKETS_2025_MFJ
                 from datetime import date as _date
                 STANDARD_DEDUCTION = 30000

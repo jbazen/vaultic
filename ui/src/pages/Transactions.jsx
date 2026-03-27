@@ -1,13 +1,11 @@
 import { useState, useEffect } from "react";
 import { getRecentTransactions } from "../api.js";
+import { fmtAmount } from "../utils/format.js";
 
 function fmt(amount) {
-  const abs = Math.abs(amount);
-  const str = new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD", minimumFractionDigits: 2
-  }).format(abs);
-  // Plaid: positive amount = debit (money out), negative = credit (money in)
-  return { str, isCredit: amount < 0 };
+  const { text, color } = fmtAmount(amount);
+  // Map to the { str, isCredit } shape used in this file
+  return { str: text.replace(/^[-+]/, ""), isCredit: amount < 0 };
 }
 
 export default function Transactions() {

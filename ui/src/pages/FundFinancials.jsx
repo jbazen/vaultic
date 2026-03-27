@@ -4,14 +4,7 @@ import {
   getFundTransactions, addFundTransaction, deleteFundTransaction,
   getSheetFundFinancials,
 } from "../api.js";
-
-// ── Formatters ────────────────────────────────────────────────────────────────
-function fmt(v) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(Math.abs(v));
-}
+import { fmt } from "../utils/format.js";
 
 function today() {
   return new Date().toISOString().slice(0, 10);

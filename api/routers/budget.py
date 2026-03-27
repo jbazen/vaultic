@@ -374,6 +374,45 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
             " WHERE is_deleted = 0 ORDER BY display_order, name"
         ).fetchall()
 
+        # Pre-fetch all items, planned amounts, and spending in bulk (avoids N+1)
+        all_items = conn.execute(
+            "SELECT id, name, group_id FROM budget_items"
+            " WHERE is_deleted = 0 ORDER BY display_order, name"
+        ).fetchall()
+
+        all_amounts = {}
+        for row in conn.execute(
+            "SELECT item_id, planned FROM budget_amounts WHERE month = ?", (month,)
+        ).fetchall():
+            all_amounts[row["item_id"]] = float(row["planned"])
+
+        # Aggregate direct assignment spending per item for this month
+        direct_spent = {}
+        for row in conn.execute("""
+            SELECT ta.item_id, COALESCE(SUM(ABS(t.amount)), 0) AS spent
+            FROM transaction_assignments ta
+            JOIN transactions t ON t.transaction_id = ta.transaction_id
+            WHERE strftime('%Y-%m', t.date) = ? AND t.pending = 0
+            GROUP BY ta.item_id
+        """, (month,)).fetchall():
+            direct_spent[row["item_id"]] = float(row["spent"])
+
+        # Aggregate split spending per item for this month
+        split_spent = {}
+        for row in conn.execute("""
+            SELECT ts.item_id, COALESCE(SUM(ts.amount), 0) AS spent
+            FROM transaction_splits ts
+            JOIN transactions t ON t.transaction_id = ts.transaction_id
+            WHERE strftime('%Y-%m', t.date) = ? AND t.pending = 0
+            GROUP BY ts.item_id
+        """, (month,)).fetchall():
+            split_spent[row["item_id"]] = float(row["spent"])
+
+        # Group items by their group_id for fast lookup
+        items_by_group = {}
+        for item in all_items:
+            items_by_group.setdefault(item["group_id"], []).append(item)
+
         result_groups = []
         total_income_planned = 0.0
         total_expense_planned = 0.0
@@ -381,32 +420,14 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
 
         for group in groups:
             gid = group["id"]
-
-            # Exclude soft-deleted items — same logic as groups above.
-            items_rows = conn.execute(
-                "SELECT id, name FROM budget_items"
-                " WHERE group_id = ? AND is_deleted = 0 ORDER BY display_order, name",
-                (gid,)
-            ).fetchall()
-
             items_out = []
             group_planned = 0.0
             group_spent = 0.0
 
-            for item in items_rows:
+            for item in items_by_group.get(gid, []):
                 iid = item["id"]
-
-                # Planned amount for this month (0 if no row exists yet)
-                amt_row = conn.execute(
-                    "SELECT planned FROM budget_amounts WHERE item_id = ? AND month = ?",
-                    (iid, month)
-                ).fetchone()
-                planned = float(amt_row["planned"]) if amt_row else 0.0
-
-                # Spent = sum of absolute transaction amounts assigned to this item
-                # within the target month, excluding pending transactions.
-                # Checks both direct assignments and splits via _spent_for_item.
-                spent = _spent_for_item(conn, iid, month)
+                planned = all_amounts.get(iid, 0.0)
+                spent = direct_spent.get(iid, 0.0) + split_spent.get(iid, 0.0)
 
                 items_out.append({
                     "id": iid,

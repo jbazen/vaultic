@@ -9,28 +9,10 @@ import {
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, AreaChart, Area, XAxis, YAxis } from "recharts";
 import NetWorthChart from "../components/NetWorthChart.jsx";
 import PlaidLink from "../components/PlaidLink.jsx";
-
-// ── Formatters ────────────────────────────────────────────────────────────────
-
-function fmt(v, opts = {}) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2, ...opts
-  }).format(Math.abs(v));
-}
-
-function fmtSigned(v) {
-  if (v == null) return "—";
-  const n = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Math.abs(v));
-  return v < 0 ? `-${n}` : n;
-}
-
-function fmtDate(s) {
-  if (!s) return "";
-  // Handles both "YYYY-MM-DD" and full datetime strings like "2026-03-18 07:46:43"
-  const dateOnly = s.length > 10 ? s.substring(0, 10) : s;
-  return new Date(dateOnly + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
+import EditableNotes from "../components/EditableNotes.jsx";
+import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
+import { isRetirementAccount } from "../utils/accounts.js";
+import { fmt, fmtSigned, fmtDate, fmtPrice, fmtCrypto } from "../utils/format.js";
 
 // ── Category config ───────────────────────────────────────────────────────────
 
@@ -56,16 +38,6 @@ const MANUAL_CAT_LABELS = {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function fmtPrice(v) {
-  if (v == null) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(v);
-}
-
-function fmtCrypto(v, decimals = 8) {
-  if (v == null) return "—";
-  return Number(v).toFixed(decimals).replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
-}
-
 // ── Asset Allocation Pie Chart ─────────────────────────────────────────────────
 
 const PIE_CATS = {
@@ -78,16 +50,6 @@ const PIE_CATS = {
   real_estate:       { label: "Real Estate",       color: "#f59e0b" },
   other_assets:      { label: "Other Assets",      color: "#f87171" },
 };
-
-// Detect retirement accounts from Plaid subtype or account/entry name.
-// Uses regex instead of an exact-match Set because Plaid returns many variants:
-// "401k", "roth 401k", "403b", "ira", "roth", "traditional ira", "simple ira", "sep ira", etc.
-// Name fallback handles PDF-imported manual entries (always category "invested"):
-// "Insperity 401k Plan", "Roth IRA", "IRA Rollover", "Traditional IRA", etc.
-function isRetirementAccount(subtype, name) {
-  return /401|403b|roth|\bira\b|sep\s*ira|simple\s*ira|pension/i.test(subtype || "") ||
-         /401[\s(]?k|403b|roth|\bira\b|rollover\s*ira|pension/i.test(name || "");
-}
 
 // Compute dollar totals per category from live account + manual entry data.
 // Liabilities (credit/loan) are excluded — this chart shows where assets are, not net worth.
@@ -232,46 +194,6 @@ function StatCard({ label, value, color, icon, negative }) {
   );
 }
 
-const ASSET_CLASS_COLORS = {
-  equities:     "#4f8ef7",
-  fixed_income: "#a78bfa",
-  cash:         "#34d399",
-  alternatives: "#fbbf24",
-  other:        "#8b92a8",
-};
-const ASSET_CLASS_LABELS = {
-  equities: "Equities", fixed_income: "Fixed Income",
-  cash: "Cash", alternatives: "Alternatives", other: "Other",
-};
-
-function AllocationBar({ allocation, total }) {
-  if (!total) return null;
-  const entries = Object.entries(allocation).sort((a, b) => b[1] - a[1]);
-  return (
-    <div>
-      <div style={{ display: "flex", height: 10, borderRadius: 5, overflow: "hidden", marginBottom: 8 }}>
-        {entries.map(([cls, val]) => (
-          <div key={cls} style={{
-            width: `${(val / total * 100).toFixed(1)}%`,
-            background: ASSET_CLASS_COLORS[cls] || "#8b92a8",
-            transition: "width 0.3s",
-          }} />
-        ))}
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px" }}>
-        {entries.map(([cls, val]) => (
-          <div key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 2, background: ASSET_CLASS_COLORS[cls] || "#8b92a8" }} />
-            <span style={{ color: "var(--text2)" }}>{ASSET_CLASS_LABELS[cls] || cls}</span>
-            <span style={{ color: "var(--text)", fontWeight: 600 }}>{(val / total * 100).toFixed(1)}%</span>
-            <span style={{ color: "var(--text2)" }}>{fmt(val)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function CryptoAccountRow({ account, onRenamed }) {
   const [editing, setEditing] = useState(false);
   const ticker = (account.subtype || "").toUpperCase();
@@ -315,39 +237,6 @@ function CryptoAccountRow({ account, onRenamed }) {
       </div>
       <div className="account-balance">{fmt(account.current)}</div>
     </div>
-  );
-}
-
-// Inline editable notes: shows current notes (or placeholder) with a pencil icon.
-// onSave(newNotes) is called when the user commits the edit.
-function EditableNotes({ notes, onSave, placeholder = "Add description…" }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(notes || "");
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    setSaving(true);
-    try { await onSave(draft.trim()); setEditing(false); }
-    finally { setSaving(false); }
-  }
-
-  if (editing) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-        <input className="form-input" style={{ width: 220, padding: "2px 6px", fontSize: 12 }}
-          value={draft} onChange={e => setDraft(e.target.value)} autoFocus
-          onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
-        <button className="btn btn-primary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={save} disabled={saving}>{saving ? "…" : "Save"}</button>
-        <button className="btn btn-secondary" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setEditing(false)}>✕</button>
-      </div>
-    );
-  }
-  return (
-    <span style={{ color: "var(--text2)", fontSize: 12, marginLeft: notes ? 0 : 0 }}>
-      {notes || ""}
-      <button onClick={() => { setDraft(notes || ""); setEditing(true); }} title="Edit description"
-        style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 11, padding: "0 3px", opacity: 0.6 }}>✎</button>
-    </span>
   );
 }
 

@@ -18,13 +18,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, saveTransactionSplits, getBudget, isAuthed, deviceAuth, budgetDeleteTransaction } from "../api.js";
 
+import { fmtDate as fmtDateFull, fmtAmount } from "../utils/format.js";
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-
+// Review page uses short date (no year)
 function fmtDate(s) {
-  if (!s) return "";
-  return new Date(s.substring(0, 10) + "T12:00:00")
-    .toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return fmtDateFull(s, { month: "short", day: "numeric" });
 }
 
 /** Map 0–100 Sage confidence score to a label and color.
@@ -35,21 +35,10 @@ function fmtDate(s) {
  *  ≥90      = High confidence        → green
  */
 function confidenceInfo(conf) {
-  if (conf == null || conf === 0) return { label: conf === 0 ? "0%" : "—", color: "#ef4444" };  // red
+  if (conf == null || conf === 0) return { label: conf === 0 ? "0%" : "\u2014", color: "#ef4444" };  // red
   if (conf >= 90) return { label: `${conf}%`, color: "#34d399" };   // green
   if (conf >= 70) return { label: `${conf}%`, color: "#f59e0b" };   // yellow
   return            { label: `${conf}%`, color: "#f97316" };         // orange
-}
-
-/** Format amount with sign and color: red "-$x" for debits, green "+$x" for credits.
- *  Plaid convention: positive = money out (expense), negative = money in (income). */
-function fmtAmount(v) {
-  const abs = new Intl.NumberFormat("en-US", {
-    style: "currency", currency: "USD",
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  }).format(Math.abs(v ?? 0));
-  const isDebit = (v ?? 0) >= 0;
-  return { text: (isDebit ? "-" : "+") + abs, color: isDebit ? "#f87171" : "#34d399" };
 }
 
 
