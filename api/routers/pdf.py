@@ -172,7 +172,17 @@ async def ingest_pdf(
     if not full_text.strip():
         raise HTTPException(status_code=422, detail="No text found in PDF — it may be a scanned image. OCR not yet supported.")
 
-    # Parse with Claude Haiku
+    # Try deterministic NFS parser first — free, no AI cost
+    from api.routers.pdf_nfs import is_nfs_statement, parse_nfs_statement
+    if is_nfs_statement(full_text):
+        logger.info("NFS statement detected — using deterministic parser (no AI)")
+        parsed = parse_nfs_statement(text_pages)
+        security_log.log_server_event(
+            f"PDF_PARSED_NFS  user={_user}  file={file.filename!r}  entries={len(parsed)}"
+        )
+        return {"filename": file.filename, "parsed": parsed, "pages": len(text_pages), "parser": "nfs_deterministic"}
+
+    # Parse with Claude Sonnet (AI fallback for non-NFS PDFs)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
@@ -213,7 +223,7 @@ async def ingest_pdf(
     security_log.log_server_event(
         f"PDF_PARSED  user={_user}  file={file.filename!r}  entries={len(parsed)}"
     )
-    return {"filename": file.filename, "parsed": parsed, "pages": len(text_pages)}
+    return {"filename": file.filename, "parsed": parsed, "pages": len(text_pages), "parser": "ai"}
 
 
 class SaveParsedRequest(BaseModel):
