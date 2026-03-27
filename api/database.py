@@ -590,6 +590,28 @@ MIGRATIONS = [
 ]
 
 
+def _migrate_encrypt_totp_secrets(conn):
+    """One-time migration: encrypt any plaintext TOTP secrets with Fernet.
+
+    Plaintext base32 secrets are ~32 chars; Fernet ciphertexts are ~120+ chars.
+    Only rows with short values (< 80 chars) are migrated to avoid double-encrypting.
+    """
+    from api.encryption import encrypt
+    rows = conn.execute(
+        "SELECT id, totp_secret, totp_pending_secret FROM users"
+    ).fetchall()
+    for row in rows:
+        uid = row["id"]
+        updates = {}
+        if row["totp_secret"] and len(row["totp_secret"]) < 80:
+            updates["totp_secret"] = encrypt(row["totp_secret"])
+        if row["totp_pending_secret"] and len(row["totp_pending_secret"]) < 80:
+            updates["totp_pending_secret"] = encrypt(row["totp_pending_secret"])
+        if updates:
+            cols = ", ".join(f"{k} = ?" for k in updates)
+            conn.execute(f"UPDATE users SET {cols} WHERE id = ?", (*updates.values(), uid))
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -599,6 +621,11 @@ def init_db():
                 conn.execute(migration)
             except sqlite3.OperationalError:
                 pass
+        # One-time: encrypt any plaintext TOTP secrets still in the DB
+        try:
+            _migrate_encrypt_totp_secrets(conn)
+        except Exception:
+            pass  # Skip if encryption key not yet configured
 
 
 @contextmanager

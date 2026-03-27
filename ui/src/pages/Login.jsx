@@ -10,7 +10,7 @@ export default function Login({ onLogin }) {
 
   // 2FA state
   const [needs2FA, setNeeds2FA] = useState(false);
-  const [pendingUser, setPendingUser] = useState("");
+  const [pendingToken, setPendingToken] = useState("");
   const [code, setCode] = useState("");
 
   async function handleSubmit(e) {
@@ -20,7 +20,7 @@ export default function Login({ onLogin }) {
     try {
       const result = await login(username, password);
       if (result.requires_2fa) {
-        setPendingUser(result.username);
+        setPendingToken(result.pending_token);
         setNeeds2FA(true);
       } else {
         onLogin();
@@ -37,7 +37,7 @@ export default function Login({ onLogin }) {
     setError("");
     setLoading(true);
     try {
-      await verify2FA(pendingUser, code);
+      await verify2FA(pendingToken, code);
       onLogin();
     } catch (err) {
       setError(err.message || "Invalid or expired code");

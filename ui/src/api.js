@@ -26,16 +26,16 @@ export async function login(username, password) {
   });
   if (!res.ok) throw new Error("Invalid credentials");
   const data = await res.json();
-  if (data.requires_2fa) return { requires_2fa: true, username: data.username };
+  if (data.requires_2fa) return { requires_2fa: true, pending_token: data.pending_token };
   setToken(data.token);
   return { requires_2fa: false };
 }
 
-export async function verify2FA(username, code) {
+export async function verify2FA(pendingToken, code) {
   const res = await fetch("/api/auth/verify-2fa", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, code }),
+    body: JSON.stringify({ pending_token: pendingToken, code }),
   });
   if (!res.ok) throw new Error("Invalid or expired code");
   const { token } = await res.json();

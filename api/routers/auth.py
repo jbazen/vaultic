@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException, status, Request, Depends
 from fastapi.responses import Response
 from pydantic import BaseModel
 from api.auth import (
-    authenticate_user, create_token, hash_password,
-    is_rate_limited, record_failed_attempt, clear_failed_attempts,
+    authenticate_user, create_token, create_2fa_pending_token, decode_2fa_pending_token,
+    hash_password, is_rate_limited, record_failed_attempt, clear_failed_attempts,
     get_user_2fa, generate_totp_setup, confirm_totp_enrollment, verify_totp_code,
 )
 from api.database import get_db
@@ -19,7 +19,7 @@ class LoginRequest(BaseModel):
 
 
 class Verify2FARequest(BaseModel):
-    username: str
+    pending_token: str
     code: str
 
 
@@ -60,7 +60,8 @@ async def login(body: LoginRequest, request: Request):
     info = get_user_2fa(body.username)
     if info and info["two_fa_enabled"] and info["totp_secret"]:
         security_log.log_server_event(f"2FA_REQUIRED  ip={ip}  user={body.username}")
-        return {"requires_2fa": True, "username": body.username}
+        pending_token = create_2fa_pending_token(body.username)
+        return {"requires_2fa": True, "pending_token": pending_token}
 
     security_log.log_token_event(ip, body.username, "ISSUED")
     return {"token": create_token(body.username)}
@@ -73,16 +74,21 @@ async def verify_2fa(body: Verify2FARequest, request: Request):
     if is_rate_limited(ip):
         raise HTTPException(status_code=429, detail="Too many attempts. Try again in 15 minutes.")
 
-    ok = verify_totp_code(body.username, body.code)
-    security_log.log_2fa_attempt(ip, body.username, ok)
+    # Decode the pending token to verify the user passed password auth
+    username = decode_2fa_pending_token(body.pending_token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid or expired 2FA session — please log in again")
+
+    ok = verify_totp_code(username, body.code)
+    security_log.log_2fa_attempt(ip, username, ok)
 
     if not ok:
         record_failed_attempt(ip)
         raise HTTPException(status_code=401, detail="Invalid or expired code")
 
     clear_failed_attempts(ip)
-    security_log.log_token_event(ip, body.username, "ISSUED")
-    return {"token": create_token(body.username)}
+    security_log.log_token_event(ip, username, "ISSUED")
+    return {"token": create_token(username)}
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────

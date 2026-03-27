@@ -86,19 +86,20 @@ def get_user_2fa(username: str) -> dict | None:
 
 def generate_totp_setup(username: str) -> tuple[str, str]:
     """
-    Generate a new TOTP secret, store it as pending, and return
+    Generate a new TOTP secret, store it as pending (encrypted), and return
     (otpauth_uri, svg_qr_code_string).
     """
+    from api.encryption import encrypt
     secret = pyotp.random_base32()
     totp = pyotp.TOTP(secret)
     uri = totp.provisioning_uri(name=username, issuer_name="Vaultic")
 
-    # Store pending (not yet confirmed)
+    # Store pending secret encrypted at rest
     from api.database import get_db
     with get_db() as conn:
         conn.execute(
             "UPDATE users SET totp_pending_secret = ? WHERE username = ?",
-            (secret, username)
+            (encrypt(secret), username)
         )
 
     # Generate SVG QR code using path factory (no Pillow, no namespace issues)
@@ -113,6 +114,7 @@ def generate_totp_setup(username: str) -> tuple[str, str]:
 
 def confirm_totp_enrollment(username: str, code: str) -> bool:
     """Verify the code against the pending secret and activate 2FA if correct."""
+    from api.encryption import decrypt, encrypt
     from api.database import get_db
     with get_db() as conn:
         row = conn.execute(
@@ -120,19 +122,23 @@ def confirm_totp_enrollment(username: str, code: str) -> bool:
         ).fetchone()
     if not row or not row["totp_pending_secret"]:
         return False
-    totp = pyotp.TOTP(row["totp_pending_secret"])
+    # Decrypt the pending secret to verify the TOTP code
+    pending_plain = decrypt(row["totp_pending_secret"])
+    totp = pyotp.TOTP(pending_plain)
     if not totp.verify(code, valid_window=1):
         return False
+    # Store confirmed secret encrypted; clear pending
     with get_db() as conn:
         conn.execute(
-            "UPDATE users SET totp_secret = totp_pending_secret, totp_pending_secret = NULL, two_fa_enabled = 1 WHERE username = ?",
-            (username,)
+            "UPDATE users SET totp_secret = ?, totp_pending_secret = NULL, two_fa_enabled = 1 WHERE username = ?",
+            (encrypt(pending_plain), username)
         )
     return True
 
 
 def verify_totp_code(username: str, code: str) -> bool:
     """Verify a TOTP code at login time."""
+    from api.encryption import decrypt
     from api.database import get_db
     with get_db() as conn:
         row = conn.execute(
@@ -141,7 +147,9 @@ def verify_totp_code(username: str, code: str) -> bool:
         ).fetchone()
     if not row or not row["totp_secret"]:
         return False
-    return pyotp.TOTP(row["totp_secret"]).verify(code, valid_window=1)
+    # Decrypt the stored TOTP secret before verification
+    secret_plain = decrypt(row["totp_secret"])
+    return pyotp.TOTP(secret_plain).verify(code, valid_window=1)
 
 
 # ── Standard auth ─────────────────────────────────────────────────────────────
@@ -167,9 +175,29 @@ def create_token(username: str) -> str:
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
+def create_2fa_pending_token(username: str) -> str:
+    """Short-lived token proving user passed password auth, scoped to 2FA verification only."""
+    exp = datetime.now(timezone.utc) + timedelta(minutes=5)
+    payload = {"sub": username, "exp": exp, "purpose": "2fa_pending"}
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_2fa_pending_token(token: str) -> str | None:
+    """Decode a 2FA pending token. Returns username if valid, None otherwise."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("purpose") != "2fa_pending":
+            return None
+        return payload.get("sub")
+    except jwt.PyJWTError:
+        return None
+
+
 def decode_token(token: str) -> str | None:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("purpose"):
+            return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth
         return payload.get("sub")
     except jwt.PyJWTError:
         return None
