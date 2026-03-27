@@ -37,10 +37,11 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 - **Unified dashboard** — net worth, all accounts, credit score, home value, car value, recent transactions on one screen
 - **Plaid integration** — connect Chase, Vanguard, Voya, Insperity, Robinhood, Rocket Mortgage, and any other Plaid-supported institution
 - **Sage AI advisor** — conversational AI financial advisor with access to your live data, persistent memory, and internet search
-- **PDF import** — parse Investor360/NFS account statements using Claude AI extraction (for Parker Financial IRA/college fund accounts that Plaid cannot reach)
+- **PDF import** — parse Investor360/NFS account statements for Parker Financial accounts that Plaid cannot reach; NFS statements use a free deterministic regex parser (no AI cost); other PDFs fall back to Claude Sonnet extraction
 - **Manual entries** — home value, car value, credit score, and any other asset or liability
 - **Net worth history** — daily snapshots, historical charts
-- **Zero-based budget module** — monthly budget with Plaid transaction auto-assignment, drag-to-reorder groups and items, carryforward of planned amounts month-to-month
+- **Zero-based budget module** — monthly budget with Plaid transaction auto-assignment, drag-to-reorder groups and items, carryforward of planned amounts month-to-month; balanced indicator shows when income = expenses
+- **Tax module** — upload 1040s, W-4s, paystubs; year-over-year tax history charts; live tax projection; W-4 multi-job withholding optimizer; quarterly estimated tax calculator (1040-ES) with IRS safe harbor analysis
 - **Fund Financials** — read-only Google Sheets viewer for savings category running totals (6M / 1Y / 2Y / 5Y / All range selector); native sinking fund tracker also built in
 - **Voice interface** — "Hey Sage" wake word, push-to-talk (Whisper), hands-free voice mode, OpenAI TTS (fable voice) or free browser TTS
 - **2FA (TOTP)** — Google Authenticator / Authy enrollment
@@ -903,7 +904,9 @@ All costs are for personal use (single user, ~15 connected accounts).
 
 ### Parker Financial / NFS Note
 
-Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client portal. The actual custodian is **National Financial Services (NFS)** — Fidelity's institutional arm. **Plaid does not support NFS** (Fidelity blocked all third-party aggregators for institutional accounts). Investor360 only exports PDFs, not CSV. The solution is the built-in **PDF Import** feature: download your monthly PDF from Investor360, drag it into Vaultic, and Claude AI extracts the account values automatically.
+Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client portal. The actual custodian is **National Financial Services (NFS)** — Fidelity's institutional arm. **Plaid does not support NFS** (Fidelity blocked all third-party aggregators for institutional accounts). Investor360 only exports PDFs, not CSV. The solution is the built-in **PDF Import** feature: download your monthly PDF from Investor360, drag it into Vaultic, and it parses automatically.
+
+NFS/Commonwealth statements are parsed by a **free deterministic regex parser** (`api/routers/pdf_nfs.py`) — no AI cost. Any other PDF format falls back to Claude Sonnet. Detection is automatic based on markers in the PDF text; no manual selection is needed. The response includes a `"parser"` field (`"nfs_deterministic"` or `"ai"`) for logging transparency.
 
 ---
 
@@ -918,5 +921,6 @@ Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client po
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
 - [ ] **River Bitcoin** — no retail API; plan to transfer BTC to Coinbase
 - [ ] **Sage budget tools** — `get_budget`, `get_budget_history` so Sage can answer "how much did I spend on groceries last month?"
-- [ ] **Tax module** — W-4 multi-job wizard, quarterly estimated tax calculator (1040-ES), capital gains tracker, withholding tracker
+- ✅ **Tax module** — W-4 multi-job withholding optimizer wizard, quarterly estimated tax calculator (1040-ES) with dual safe harbor analysis, tax projection, year-over-year history, paystub upload
+- [ ] Capital gains tracker
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen
