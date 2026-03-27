@@ -12,7 +12,15 @@ from api.database import get_db
 
 logger = logging.getLogger("vaultic.sage")
 
-NOTES_PATH = Path(__file__).parent.parent / "data" / "sage_notes.md"
+NOTES_DIR = Path(__file__).parent.parent / "data"
+
+
+def _notes_path(username: str) -> Path:
+    """Return the per-user Sage notes file path."""
+    # Sanitize username to prevent path traversal
+    safe = "".join(c for c in username if c.isalnum() or c in "-_")
+    return NOTES_DIR / f"sage_notes_{safe}.md"
+
 MODEL = "claude-haiku-4-5-20251001"
 
 SYSTEM_PROMPT = """You are Sage — a personal CFO, wealth-building advisor, tax expert, and financial thought partner. You are a man. You live inside Vaultic, the user's personal financial command center.
@@ -292,7 +300,7 @@ TOOLS = [
 ]
 
 
-def _call_tool(name: str, inputs: dict) -> str:
+def _call_tool(name: str, inputs: dict, username: str = "") -> str:
     try:
         if name == "get_net_worth":
             with get_db() as conn:
@@ -347,14 +355,16 @@ def _call_tool(name: str, inputs: dict) -> str:
             return str([dict(r) for r in rows])
 
         elif name == "get_notes":
-            if NOTES_PATH.exists():
-                return NOTES_PATH.read_text()
+            np = _notes_path(username)
+            if np.exists():
+                return np.read_text()
             return "No notes yet."
 
         elif name == "update_notes":
             notes = inputs.get("notes", "")
-            NOTES_PATH.parent.mkdir(exist_ok=True)
-            NOTES_PATH.write_text(notes)
+            np = _notes_path(username)
+            np.parent.mkdir(exist_ok=True)
+            np.write_text(notes)
             return "Notes updated."
 
         elif name == "web_search":
@@ -1103,7 +1113,7 @@ def _trim_history(messages: list[dict], keep: int = 20) -> list[dict]:
     return trimmed
 
 
-def chat(messages: list[dict], user_message: str, attachments: list[dict] | None = None) -> tuple[str, list[dict]]:
+def chat(messages: list[dict], user_message: str, attachments: list[dict] | None = None, username: str = "") -> tuple[str, list[dict]]:
     """
     Run one turn of conversation with Sage.
     Returns (sage_response_text, updated_messages).
@@ -1183,7 +1193,7 @@ def chat(messages: list[dict], user_message: str, attachments: list[dict] | None
             tool_results = []
             for block in resp.content:
                 if block.type == "tool_use":
-                    result = _call_tool(block.name, block.input)
+                    result = _call_tool(block.name, block.input, username=username)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,   # must match the id from the tool_use block

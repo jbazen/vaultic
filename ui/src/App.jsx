@@ -66,7 +66,7 @@ function NavGroup({ item }) {
   const [open, setOpen] = useState(isActive);
 
   // Re-open if user navigates to a child route from elsewhere
-  useEffect(() => { if (isActive) setOpen(true); }, [location.pathname]);
+  useEffect(() => { if (isActive) setOpen(true); }, [isActive]);
 
   return (
     <div>

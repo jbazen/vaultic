@@ -7,14 +7,13 @@ import json
 import logging
 from datetime import date
 
-import plaid
-from plaid.api import plaid_api
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
 from api.database import get_db
 from api.encryption import decrypt
 from api import security_log
+from api.plaid_client import get_plaid_client
 
 
 def _ai_categorize_unmatched(conn, txn_ids: list[str]):
@@ -212,20 +211,8 @@ logger = logging.getLogger("vaultic.sync")
 
 
 def _get_plaid_client():
-    env_map = {
-        "sandbox": plaid.Environment.Sandbox,
-        "development": plaid.Environment.Sandbox,  # newer SDK dropped Development
-        "production": plaid.Environment.Production,
-    }
-    host = env_map.get(os.environ.get("PLAID_ENV", "sandbox"), plaid.Environment.Sandbox)
-    config = plaid.Configuration(
-        host=host,
-        api_key={
-            "clientId": os.environ["PLAID_CLIENT_ID"],
-            "secret": os.environ["PLAID_SECRET"],
-        },
-    )
-    return plaid_api.PlaidApi(plaid.ApiClient(config))
+    """Wrapper for shared Plaid client factory."""
+    return get_plaid_client()
 
 
 def sync_all():

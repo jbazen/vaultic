@@ -1,7 +1,10 @@
 """SQLite database setup and connection management."""
+import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent.parent / "data" / "vaultic.db"
 DB_PATH.parent.mkdir(exist_ok=True)
@@ -632,21 +635,28 @@ def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
         # Run migrations silently (ignore if column/table already exists)
+        _expected_msg_fragments = (
+            "duplicate column name",
+            "already exists",
+            "table already exists",
+        )
         for migration in MIGRATIONS:
             try:
                 conn.execute(migration)
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                if not any(frag in msg for frag in _expected_msg_fragments):
+                    logger.warning("Unexpected migration error: %s | SQL: %.120s", exc, migration)
         # One-time: promote existing users to admin after is_admin column is added
         try:
             _migrate_set_existing_users_admin(conn)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Admin promotion migration failed: %s", exc)
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)
-        except Exception:
-            pass  # Skip if encryption key not yet configured
+        except Exception as exc:
+            logger.warning("TOTP encryption migration failed: %s", exc)
 
 
 @contextmanager

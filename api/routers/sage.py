@@ -69,7 +69,7 @@ async def sage_chat(body: ChatRequest, _user: str = Depends(get_current_user)):
     rate_limit.record_sage(_user)
     security_log.log_sage_query(_user, body.message)
     try:
-        response, updated_history = chat(body.history, body.message, body.attachments)
+        response, updated_history = chat(body.history, body.message, body.attachments, username=_user)
         return ChatResponse(response=response, history=updated_history)
     except Exception as e:
         logger.error(f"Sage chat error: {e}")

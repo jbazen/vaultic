@@ -745,6 +745,13 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
   const [editAmount, setEditAmount]   = useState("");
   const [checkNumber, setCheckNumber] = useState("");
   const [notes, setNotes]             = useState("");
+  // Track window width for responsive padding
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   // Expense vs Income toggle — seeded from the raw Plaid amount sign on load
   const [txnType, setTxnType] = useState("expense"); // "expense" | "income"
 
@@ -860,7 +867,7 @@ function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
           border: "1px solid var(--border)",
           boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
           // Reduce horizontal padding on narrow screens so content isn't cut off
-          padding: window.innerWidth <= 480 ? "16px 16px 20px" : "20px 48px 24px 36px",
+          padding: windowWidth <= 480 ? "16px 16px 20px" : "20px 48px 24px 36px",
           boxSizing: "border-box",
         }}
       >
@@ -1904,7 +1911,13 @@ export default function Budget() {
   // Mobile: one panel visible at a time. "budget" = left groups panel,
   // "summary" / "transactions" = right panel tabs.
   const [mobileTab, setMobileTab] = useState("budget");
-  const isMobile = window.innerWidth <= 768;
+  const [budgetWindowWidth, setBudgetWindowWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setBudgetWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const isMobile = budgetWindowWidth <= 768;
   const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [addingGroup, setAddingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");

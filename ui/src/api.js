@@ -134,10 +134,6 @@ export async function sageChat(message, history = [], attachments = []) {
     method: "POST",
     body: JSON.stringify({ message, history, attachments }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || `Sage error (${res.status})`);
-  }
   return res.json();
 }
 
@@ -174,16 +170,6 @@ export async function sageSpeak(text) {
     method: "POST",
     body: JSON.stringify({ text }),
   });
-  if (!res.ok) {
-    // We must explicitly read the JSON body to extract the `detail` field from
-    // FastAPI's HTTPException response. Simply doing `throw new Error(res.statusText)`
-    // would give a generic "Internal Server Error" with no useful context.
-    // The `.catch(() => ({}))` guard handles edge cases where the error response
-    // body is not valid JSON (e.g. network-level errors or proxy errors that return
-    // plain text), falling back to a generic message instead of a secondary throw.
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || "TTS unavailable");
-  }
   // The endpoint streams an MP3 — collect the full blob then create an object URL
   // so the browser can play it via new Audio(url). The caller is responsible for
   // calling URL.revokeObjectURL(url) after playback to release the memory.
@@ -256,7 +242,6 @@ export async function changePassword(current_password, new_password) {
 export async function totpSetup() {
   // Returns SVG string of QR code
   const res = await apiFetch("/api/auth/2fa/setup", { method: "POST" });
-  if (!res.ok) throw new Error("Setup failed");
   return res.text(); // SVG markup
 }
 
@@ -265,7 +250,6 @@ export async function totpConfirm(code) {
     method: "POST",
     body: JSON.stringify({ code }),
   });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Invalid code"); }
   return res.json();
 }
 
@@ -307,14 +291,12 @@ export async function saveParsedPDF(entries) {
     method: "POST",
     body: JSON.stringify({ entries }),
   });
-  if (!res.ok) throw new Error("Save failed");
   return res.json();
 }
 
 // --- Crypto ---
 export async function syncCoinbase() {
   const res = await apiFetch("/api/crypto/sync", { method: "POST" });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.detail || "Sync failed"); }
   return res.json();
 }
 
@@ -396,7 +378,6 @@ export async function importBudgetJSON(jsonData) {
     method: "POST",
     body: JSON.stringify(jsonData),
   });
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Import failed"); }
   return res.json();
 }
 

@@ -25,6 +25,12 @@ from api.database import get_db
 
 router = APIRouter(prefix="/api/budget", tags=["budget"])
 
+
+def normalize_merchant(name: str) -> str:
+    """Lowercase and strip punctuation for fuzzy merchant comparison."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
 # ---------------------------------------------------------------------------
 # Default template — groups and items seeded on first use
 # ---------------------------------------------------------------------------
@@ -930,10 +936,6 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
     """
     _validate_month(month)
 
-    def normalize_merchant(name: str) -> str:
-        """Lowercase and strip punctuation for fuzzy merchant comparison."""
-        return re.sub(r"[^a-z0-9]", "", (name or "").lower())
-
     with get_db() as conn:
         # ── Load all unassigned Plaid transactions for the month ──────────────
         unassigned = conn.execute("""
@@ -1051,9 +1053,6 @@ async def auto_assign_debug(month: str, _user: str = Depends(get_current_user)):
       no_match         — no history and no auto_rule; needs manual assignment
     """
     _validate_month(month)
-
-    def normalize_merchant(name: str) -> str:
-        return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
     with get_db() as conn:
         unassigned = conn.execute("""

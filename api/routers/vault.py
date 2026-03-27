@@ -7,6 +7,7 @@ import io
 import json
 import os
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -20,6 +21,10 @@ from api.dependencies import get_current_user
 
 router = APIRouter()
 logger = logging.getLogger("vaultic.vault")
+
+# Gate backfill to run at most once per hour (B8 peer review fix)
+_last_backfill: float = 0.0
+BACKFILL_INTERVAL = 3600  # seconds
 
 # Root storage directory — lives alongside the SQLite database
 VAULT_ROOT = Path(__file__).parent.parent.parent / "data" / "vault"
@@ -282,9 +287,12 @@ async def trigger_backfill(_user: str = Depends(get_current_user)):
 
 @router.get("/years")
 async def list_years(_user: str = Depends(get_current_user)):
-    """Return all years that have documents in the vault. Auto-backfills on first call."""
+    """Return all years that have documents in the vault. Auto-backfills periodically."""
+    global _last_backfill
     with get_db() as conn:
-        backfill_vault(conn)
+        if time.time() - _last_backfill > BACKFILL_INTERVAL:
+            backfill_vault(conn)
+            _last_backfill = time.time()
         rows = conn.execute(
             "SELECT DISTINCT year FROM vault_documents ORDER BY year DESC"
         ).fetchall()
@@ -294,8 +302,11 @@ async def list_years(_user: str = Depends(get_current_user)):
 @router.get("/documents/{year}")
 async def list_documents(year: int, _user: str = Depends(get_current_user)):
     """Return all vault documents for a year, grouped by category."""
+    global _last_backfill
     with get_db() as conn:
-        backfill_vault(conn)
+        if time.time() - _last_backfill > BACKFILL_INTERVAL:
+            backfill_vault(conn)
+            _last_backfill = time.time()
         rows = conn.execute(
             "SELECT * FROM vault_documents WHERE year = ? ORDER BY category, uploaded_at DESC",
             (year,)

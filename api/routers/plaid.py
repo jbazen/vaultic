@@ -1,10 +1,8 @@
 """Plaid Link flow: create link token → exchange public token → store encrypted access token."""
 import asyncio
-import os
 import logging
 
 import plaid
-from plaid.api import plaid_api
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
@@ -17,6 +15,7 @@ from api.dependencies import get_current_user
 from api.database import get_db
 from api.encryption import encrypt
 from api import sync, security_log, rate_limit
+from api.plaid_client import get_plaid_client
 
 logger = logging.getLogger("vaultic.plaid")
 
@@ -24,20 +23,8 @@ router = APIRouter(prefix="/api/plaid", tags=["plaid"])
 
 
 def _get_client():
-    env_map = {
-        "sandbox": plaid.Environment.Sandbox,
-        "development": plaid.Environment.Sandbox,  # newer SDK dropped Development
-        "production": plaid.Environment.Production,
-    }
-    host = env_map.get(os.environ.get("PLAID_ENV", "sandbox"), plaid.Environment.Sandbox)
-    config = plaid.Configuration(
-        host=host,
-        api_key={
-            "clientId": os.environ["PLAID_CLIENT_ID"],
-            "secret": os.environ["PLAID_SECRET"],
-        },
-    )
-    return plaid_api.PlaidApi(plaid.ApiClient(config))
+    """Wrapper for shared Plaid client factory."""
+    return get_plaid_client()
 
 
 @router.post("/link-token")

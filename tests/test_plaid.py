@@ -15,9 +15,9 @@ class TestPlaidLinkToken:
         assert res.status_code == 401
 
     def test_link_token_returns_token(self, client, auth_headers):
-        with patch("api.routers.plaid.plaid_api.PlaidApi") as mock_api_cls:
+        with patch("api.routers.plaid._get_client") as mock_get_client:
             mock_api = MagicMock()
-            mock_api_cls.return_value = mock_api
+            mock_get_client.return_value = mock_api
             mock_api.link_token_create.return_value = _make_mock_link_token_response()
 
             res = client.post("/api/plaid/link-token", headers=auth_headers)
@@ -34,9 +34,9 @@ class TestPlaidLinkToken:
             captured_request["req"] = req
             return _make_mock_link_token_response()
 
-        with patch("api.routers.plaid.plaid_api.PlaidApi") as mock_api_cls:
+        with patch("api.routers.plaid._get_client") as mock_get_client:
             mock_api = MagicMock()
-            mock_api_cls.return_value = mock_api
+            mock_get_client.return_value = mock_api
             mock_api.link_token_create.side_effect = capture_request
 
             client.post("/api/plaid/link-token", headers=auth_headers)
@@ -65,9 +65,9 @@ class TestPlaidLinkToken:
             captured_request["req"] = req
             return _make_mock_link_token_response()
 
-        with patch("api.routers.plaid.plaid_api.PlaidApi") as mock_api_cls:
+        with patch("api.routers.plaid._get_client") as mock_get_client:
             mock_api = MagicMock()
-            mock_api_cls.return_value = mock_api
+            mock_get_client.return_value = mock_api
             mock_api.link_token_create.side_effect = capture_request
 
             client.post("/api/plaid/link-token", headers=auth_headers)
@@ -80,9 +80,9 @@ class TestPlaidLinkToken:
     def test_link_token_plaid_error_returns_502(self, client, auth_headers):
         """Plaid API errors should surface as 502, not 500."""
         import plaid
-        with patch("api.routers.plaid.plaid_api.PlaidApi") as mock_api_cls:
+        with patch("api.routers.plaid._get_client") as mock_get_client:
             mock_api = MagicMock()
-            mock_api_cls.return_value = mock_api
+            mock_get_client.return_value = mock_api
             mock_api.link_token_create.side_effect = plaid.ApiException(status=400, reason="Bad Request")
 
             res = client.post("/api/plaid/link-token", headers=auth_headers)

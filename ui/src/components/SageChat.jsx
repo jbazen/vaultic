@@ -105,16 +105,33 @@ function saveSession(messages, history) {
   } catch {}
 }
 
+// Cache loaded session so lazy initializers don't parse JSON twice
+const _initSession = { loaded: false, data: null };
+function getInitialSession() {
+  if (!_initSession.loaded) {
+    _initSession.data = loadSession();
+    _initSession.loaded = true;
+  }
+  return _initSession.data;
+}
+
 export default function SageChat() {
-  const saved = loadSession();
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState(saved?.messages ?? []);
-  const [history, setHistory] = useState(saved?.history ?? []);
+  const [messages, setMessages] = useState(() => getInitialSession()?.messages ?? []);
+  const [history, setHistory] = useState(() => getInitialSession()?.history ?? []);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [unread, setUnread] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [paused, setPaused] = useState(false);
+
+  // Track window width for responsive layout
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // Voice modes — default to OpenAI (best quality, works on mobile and desktop)
   const [voiceMode, setVoiceMode] = useState("openai"); // off | browser | openai
@@ -637,7 +654,7 @@ export default function SageChat() {
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
+  const isMobile = windowWidth <= 768;
 
   return (
     <>
