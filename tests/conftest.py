@@ -29,6 +29,12 @@ def _test_get_db():
         _test_conn.row_factory = sqlite3.Row
         _test_conn.execute("PRAGMA foreign_keys = ON")
         _test_conn.executescript(db_module.SCHEMA)
+        # Run migrations so test DB has all columns (e.g. is_admin)
+        for migration in db_module.MIGRATIONS:
+            try:
+                _test_conn.execute(migration)
+            except sqlite3.OperationalError:
+                pass
         _test_conn.commit()
     try:
         yield _test_conn

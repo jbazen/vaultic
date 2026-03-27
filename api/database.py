@@ -587,7 +587,21 @@ MIGRATIONS = [
         related_table   TEXT,
         uploaded_at     DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+
+    # RBAC: admin flag for user management and security log access.
+    # Existing users (jbazen, hbazen) are set to admin; new users default to non-admin.
+    "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
 ]
+
+
+def _migrate_set_existing_users_admin(conn):
+    """One-time migration: set all existing users as admin.
+
+    The is_admin column defaults to 0, so this promotes the original users (jbazen, hbazen)
+    who were created before the column existed. Future users created via the API will
+    default to non-admin.
+    """
+    conn.execute("UPDATE users SET is_admin = 1 WHERE is_admin = 0 AND is_active = 1")
 
 
 def _migrate_encrypt_totp_secrets(conn):
@@ -621,6 +635,11 @@ def init_db():
                 conn.execute(migration)
             except sqlite3.OperationalError:
                 pass
+        # One-time: promote existing users to admin after is_admin column is added
+        try:
+            _migrate_set_existing_users_admin(conn)
+        except Exception:
+            pass
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)

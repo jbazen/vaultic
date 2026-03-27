@@ -5,9 +5,10 @@ from api.auth import (
     authenticate_user, create_token, create_2fa_pending_token, decode_2fa_pending_token,
     hash_password, is_rate_limited, record_failed_attempt, clear_failed_attempts,
     get_user_2fa, generate_totp_setup, confirm_totp_enrollment, verify_totp_code,
+    revoke_token,
 )
 from api.database import get_db
-from api.dependencies import get_current_user, get_client_ip
+from api.dependencies import get_current_user, get_client_ip, admin_required
 from api import security_log
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -91,6 +92,17 @@ async def verify_2fa(body: Verify2FARequest, request: Request):
     return {"token": create_token(username)}
 
 
+@router.post("/logout")
+async def logout(request: Request, username: str = Depends(get_current_user)):
+    """Revoke the current token server-side so it cannot be reused."""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        revoke_token(auth_header[7:])
+    ip = get_client_ip(request)
+    security_log.log_token_event(ip, username, "REVOKED")
+    return {"status": "logged_out"}
+
+
 # ── Profile ───────────────────────────────────────────────────────────────────
 
 @router.get("/me")
@@ -152,16 +164,16 @@ async def totp_disable(username: str = Depends(get_current_user)):
 # ── User management ───────────────────────────────────────────────────────────
 
 @router.get("/users")
-async def list_users(_user: str = Depends(get_current_user)):
+async def list_users(_user: str = Depends(admin_required)):
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, username, two_fa_enabled, is_active, created_at FROM users ORDER BY created_at"
+            "SELECT id, username, two_fa_enabled, is_admin, is_active, created_at FROM users ORDER BY created_at"
         ).fetchall()
     return [dict(row) for row in rows]
 
 
 @router.post("/users")
-async def create_user(body: CreateUserRequest, _user: str = Depends(get_current_user)):
+async def create_user(body: CreateUserRequest, _user: str = Depends(admin_required)):
     if len(body.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
     with get_db() as conn:
@@ -177,7 +189,7 @@ async def create_user(body: CreateUserRequest, _user: str = Depends(get_current_
 
 
 @router.delete("/users/{username}")
-async def delete_user(username: str, current_user: str = Depends(get_current_user)):
+async def delete_user(username: str, current_user: str = Depends(admin_required)):
     if username == current_user:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
     with get_db() as conn:
@@ -189,6 +201,6 @@ async def delete_user(username: str, current_user: str = Depends(get_current_use
 # ── Security log ──────────────────────────────────────────────────────────────
 
 @router.get("/security-log")
-async def get_security_log(lines: int = 500, _user: str = Depends(get_current_user)):
+async def get_security_log(lines: int = 500, _user: str = Depends(admin_required)):
     entries = security_log.tail(min(lines, 2000))
     return {"lines": entries, "total": len(entries)}

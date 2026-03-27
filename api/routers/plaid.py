@@ -112,7 +112,7 @@ async def trigger_sync(_user: str = Depends(get_current_user)):
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Sync error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/items")

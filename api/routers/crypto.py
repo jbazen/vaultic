@@ -1,8 +1,11 @@
+import logging
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from api.dependencies import get_current_user
 from api.database import get_db
 from api import security_log
+
+logger = logging.getLogger("vaultic.crypto")
 
 router = APIRouter(prefix="/api/crypto", tags=["crypto"])
 
@@ -20,7 +23,8 @@ async def sync_holdings(_user: str = Depends(get_current_user)):
         security_log.log_sync_event(f"COINBASE_SYNC  user={_user}  result={result}")
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Coinbase sync error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/holdings")

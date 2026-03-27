@@ -59,7 +59,7 @@ async def sage_chat(body: ChatRequest, _user: str = Depends(get_current_user)):
         return ChatResponse(response=response, history=updated_history)
     except Exception as e:
         logger.error(f"Sage chat error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/process-file")
@@ -211,7 +211,7 @@ async def transcribe_audio(
         return {"text": result.text}
     except Exception as e:
         logger.error(f"Whisper transcription error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/speak")
@@ -238,4 +238,4 @@ async def sage_speak(body: SpeakRequest, _user: str = Depends(get_current_user))
         return Response(response.content, media_type="audio/mpeg")
     except Exception as e:
         logger.error(f"TTS error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")

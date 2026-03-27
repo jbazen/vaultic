@@ -42,7 +42,13 @@ export async function verify2FA(pendingToken, code) {
   setToken(token);
 }
 
-export function logout() {
+export async function logout() {
+  // Revoke the token server-side before clearing it locally
+  try {
+    await apiFetch("/api/auth/logout", { method: "POST" });
+  } catch {
+    // If server is unreachable, still clear locally
+  }
   clearToken();
   window.dispatchEvent(new Event("auth:logout"));
 }

@@ -26,12 +26,18 @@ def _load_env():
 _load_env()
 
 SECRET_KEY = os.environ.get("JWT_SECRET", "")
+if not SECRET_KEY and not os.environ.get("TESTING"):
+    raise RuntimeError("JWT_SECRET is not set — refusing to start with unsigned tokens")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
 
 _failed_attempts: dict[str, list[float]] = defaultdict(list)
 MAX_ATTEMPTS = 5
 LOCKOUT_WINDOW = 15 * 60
+
+# Token denylist: stores revoked tokens until they would naturally expire.
+# Key = token string, value = expiry timestamp. Cleaned up on each check.
+_token_denylist: dict[str, float] = {}
 
 
 def is_rate_limited(ip: str) -> bool:
@@ -46,6 +52,26 @@ def record_failed_attempt(ip: str):
 
 def clear_failed_attempts(ip: str):
     _failed_attempts.pop(ip, None)
+
+
+def revoke_token(token: str):
+    """Add a token to the denylist. It will be cleaned up after its natural expiry."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
+        exp = payload.get("exp", 0)
+        _token_denylist[token] = exp
+    except jwt.PyJWTError:
+        pass  # Invalid token, nothing to revoke
+
+
+def is_token_revoked(token: str) -> bool:
+    """Check if a token has been revoked. Also cleans up expired entries."""
+    now = datetime.now(timezone.utc).timestamp()
+    # Clean up expired entries
+    expired = [t for t, exp in _token_denylist.items() if exp < now]
+    for t in expired:
+        _token_denylist.pop(t, None)
+    return token in _token_denylist
 
 
 def hash_password(plain: str) -> str:
@@ -164,7 +190,7 @@ def seed_user_from_env():
         existing = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, 1)",
                 (username, password_hash)
             )
 
@@ -195,6 +221,8 @@ def decode_2fa_pending_token(token: str) -> str | None:
 
 def decode_token(token: str) -> str | None:
     try:
+        if is_token_revoked(token):
+            return None
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         if payload.get("purpose"):
             return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth

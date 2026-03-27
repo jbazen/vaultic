@@ -218,7 +218,7 @@ async def ingest_pdf(
         raise
     except Exception as e:
         logger.error(f"Claude API error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
     security_log.log_server_event(
         f"PDF_PARSED  user={_user}  file={file.filename!r}  entries={len(parsed)}"

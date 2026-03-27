@@ -39,3 +39,15 @@ async def get_current_user(
 
     security_log.log_request(ip, request.method, request.url.path, username)
     return username
+
+
+async def admin_required(username: str = Depends(get_current_user)) -> str:
+    """Require the authenticated user to have is_admin=1."""
+    from api.database import get_db
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT is_admin FROM users WHERE username = ? AND is_active = 1", (username,)
+        ).fetchone()
+    if not row or not row["is_admin"]:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return username
