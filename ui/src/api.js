@@ -15,6 +15,11 @@ async function apiFetch(path, options = {}) {
     throw new Error("Session expired");
   }
 
+  if (!res.ok) {
+    const detail = await res.json().then(d => d.detail).catch(() => res.statusText);
+    throw new Error(detail || `Request failed (${res.status})`);
+  }
+
   return res;
 }
 
