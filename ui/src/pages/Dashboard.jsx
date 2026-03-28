@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries, getRecentTransactions,
@@ -50,6 +50,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
+  const mountedRef = useRef(true);
 
   async function load() {
     try {
@@ -63,6 +64,7 @@ export default function Dashboard() {
         getPortfolioPerformance(1825),
         getMarketRates().catch(() => ({ rates: [] })),
       ]);
+      if (!mountedRef.current) return;
       setNw(nwData);
       setHistory(hist);
       setAccounts(accts);
@@ -72,13 +74,17 @@ export default function Dashboard() {
       setPortfolioPerf(perf);
       setMarketRates(rates?.rates ?? []);
     } catch (e) {
+      if (!mountedRef.current) return;
       console.error(e);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    return () => { mountedRef.current = false; };
+  }, []);
 
   async function handleSync() {
     setSyncing(true);
