@@ -34,6 +34,12 @@ class FundTxnCreate(BaseModel):
     description: str | None = None
 
 
+class FundUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    target_amount: float | None = None
+
+
 # ---------------------------------------------------------------------------
 # Helper: fetch a single fund row with its computed balance
 # ---------------------------------------------------------------------------
@@ -117,12 +123,13 @@ async def create_fund(body: FundCreate, _user: str = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 
 @router.patch("/{fund_id}")
-async def update_fund(fund_id: int, body: dict, _user: str = Depends(get_current_user)):
+async def update_fund(fund_id: int, body: FundUpdate, _user: str = Depends(get_current_user)):
     """Update one or more fields on a fund (name, description, target_amount).
 
     Only keys present in the request body are updated; omitted keys keep
     their current values.
     """
+    provided = body.model_fields_set
     with get_db() as conn:
         row = conn.execute(
             "SELECT id, name, description, target_amount FROM funds WHERE id = ? AND is_active = 1",
@@ -131,17 +138,17 @@ async def update_fund(fund_id: int, body: dict, _user: str = Depends(get_current
         if not row:
             raise HTTPException(status_code=404, detail="Fund not found")
 
-        name = str(body["name"]).strip()[:100] if "name" in body else row["name"]
+        name = body.name.strip()[:100] if "name" in provided and body.name else row["name"]
         if not name:
             raise HTTPException(status_code=400, detail="name cannot be empty")
 
         description = (
-            str(body["description"]).strip()[:255] if body.get("description") else None
-        ) if "description" in body else row["description"]
+            str(body.description).strip()[:255] if body.description else None
+        ) if "description" in provided else row["description"]
 
         # target_amount can be explicitly set to None to clear it
-        if "target_amount" in body:
-            target = float(body["target_amount"]) if body["target_amount"] is not None else None
+        if "target_amount" in provided:
+            target = body.target_amount
         else:
             target = row["target_amount"]
 

@@ -26,6 +26,19 @@ from api.database import get_db
 router = APIRouter(prefix="/api/budget", tags=["budget"])
 
 
+# ── Request models ────────────────────────────────────────────────────────────
+
+class ReorderBody(BaseModel):
+    ids: List[int]
+
+class UpdateGroupBody(BaseModel):
+    name: str | None = None
+    type: str | None = None
+
+class UpdateItemBody(BaseModel):
+    name: str
+
+
 def normalize_merchant(name: str) -> str:
     """Lowercase and strip punctuation for fuzzy merchant comparison."""
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
@@ -522,12 +535,12 @@ async def create_group(body: GroupCreate, _user: str = Depends(get_current_user)
 # ---------------------------------------------------------------------------
 
 @router.patch("/groups/reorder")
-async def reorder_groups(body: dict, _user: str = Depends(get_current_user)):
+async def reorder_groups(body: ReorderBody, _user: str = Depends(get_current_user)):
     """Accept an ordered list of group IDs and write their display_order values.
 
     Body: {"ids": [3, 1, 4, 2]}  — position in list = new display_order (0-based).
     """
-    ids = body.get("ids", [])
+    ids = body.ids
     if not ids:
         raise HTTPException(status_code=400, detail="ids list is required")
     with get_db() as conn:
@@ -545,13 +558,13 @@ async def reorder_groups(body: dict, _user: str = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 
 @router.patch("/items/reorder")
-async def reorder_items(body: dict, _user: str = Depends(get_current_user)):
+async def reorder_items(body: ReorderBody, _user: str = Depends(get_current_user)):
     """Accept an ordered list of item IDs (all from the same group) and write
     their display_order values.
 
     Body: {"ids": [7, 5, 9]}  — position in list = new display_order (0-based).
     """
-    ids = body.get("ids", [])
+    ids = body.ids
     if not ids:
         raise HTTPException(status_code=400, detail="ids list is required")
     with get_db() as conn:
@@ -568,15 +581,15 @@ async def reorder_items(body: dict, _user: str = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 
 @router.patch("/groups/{group_id}")
-async def update_group(group_id: int, body: dict, _user: str = Depends(get_current_user)):
+async def update_group(group_id: int, body: UpdateGroupBody, _user: str = Depends(get_current_user)):
     """Update a group's name and/or type. Only provided fields are changed."""
     with get_db() as conn:
         row = conn.execute("SELECT * FROM budget_groups WHERE id = ?", (group_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Group not found")
 
-        name = str(body["name"]).strip()[:100] if "name" in body else row["name"]
-        gtype = body["type"] if "type" in body else row["type"]
+        name = body.name.strip()[:100] if body.name is not None else row["name"]
+        gtype = body.type if body.type is not None else row["type"]
 
         if not name:
             raise HTTPException(status_code=400, detail="name cannot be empty")
@@ -651,9 +664,9 @@ async def create_item(group_id: int, body: ItemCreate, _user: str = Depends(get_
 # ---------------------------------------------------------------------------
 
 @router.patch("/items/{item_id}")
-async def update_item(item_id: int, body: dict, _user: str = Depends(get_current_user)):
+async def update_item(item_id: int, body: UpdateItemBody, _user: str = Depends(get_current_user)):
     """Rename a budget line item."""
-    name = str(body.get("name", "")).strip()[:100]
+    name = body.name.strip()[:100]
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
 

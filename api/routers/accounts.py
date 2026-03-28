@@ -12,6 +12,10 @@ from api.database import get_db
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 
+class AccountNotesBody(BaseModel):
+    notes: str = ""
+
+
 def _display(name: str, display_name: str | None, mask: str | None) -> str:
     """Build the display label: '{display_name or name} (...{mask})'"""
     label = display_name if display_name else name
@@ -75,7 +79,7 @@ async def rename_account(
 @router.patch("/{account_id}/notes")
 async def update_account_notes(
     account_id: int,
-    body: dict,
+    body: AccountNotesBody,
     _user: str = Depends(get_current_user),
 ):
     """
@@ -84,7 +88,7 @@ async def update_account_notes(
     Empty string is stored as NULL (clears the note).
     Max 200 characters to keep display clean.
     """
-    notes = str(body.get("notes", "")).strip()[:200]
+    notes = body.notes.strip()[:200]
     with get_db() as conn:
         row = conn.execute("SELECT id FROM accounts WHERE id = ?", (account_id,)).fetchone()
         if not row:

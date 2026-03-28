@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { sageChat, sageSpeak, sageProcessFile, sageTranscribe } from "../api.js";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -31,7 +31,7 @@ function fileIcon(filename) {
   return FILE_ICONS[ext] || FILE_ICONS.default;
 }
 
-function Message({ msg }) {
+const Message = memo(function Message({ msg }) {
   const isUser = msg.role === "user";
   return (
     <div style={{
@@ -80,7 +80,7 @@ function Message({ msg }) {
       </div>
     </div>
   );
-}
+});
 
 // ── Main SageChat ─────────────────────────────────────────────────────────────
 

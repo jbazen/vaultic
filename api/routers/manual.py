@@ -9,6 +9,11 @@ from api import sync
 
 router = APIRouter(prefix="/api/manual", tags=["manual"])
 
+
+class RenameEntryBody(BaseModel):
+    name: str
+    notes: str | None = None
+
 VALID_CATEGORIES = {
     "home_value", "car_value", "credit_score",
     "other_asset", "other_liability",
@@ -92,12 +97,12 @@ async def toggle_exclude(entry_id: int, _user: str = Depends(get_current_user)):
 
 
 @router.patch("/{entry_id}/rename")
-async def rename_entry(entry_id: int, body: dict, _user: str = Depends(get_current_user)):
+async def rename_entry(entry_id: int, body: RenameEntryBody, _user: str = Depends(get_current_user)):
     """Update name and/or notes on a manual entry."""
-    name = str(body.get("name", "")).strip()[:100]
+    name = body.name.strip()[:100]
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
-    notes = body.get("notes")
+    notes = body.notes
     notes_val = str(notes).strip()[:200] if notes is not None else None
     with get_db() as conn:
         row = conn.execute("SELECT id, notes FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
