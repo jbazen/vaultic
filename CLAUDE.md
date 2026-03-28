@@ -290,12 +290,60 @@ await page.getByRole("link", { name: /transactions/i }).click();
 
 ## Security Practices
 
-- **SQL**: Always use parameterized queries — never f-strings or string concatenation
-- **Auth**: Every endpoint must check JWT token; use `get_current_user` dependency
-- **Secrets**: Never commit `.env`, credentials, or API keys. Use `.env.example` for templates
-- **File uploads**: Validate file types server-side; don't trust client `Content-Type`
-- **CORS**: Restrict to known origins in production
-- **Rate limiting**: Sage has 60 msg/hour per user — don't remove or increase without consideration
+These rules come from a full security audit (March 2026). Every finding below was a real vulnerability that was fixed. Do not reintroduce them.
+
+### Authentication & Authorization
+
+- **Every endpoint** must use the `get_current_user` FastAPI dependency — no exceptions
+- **Admin-only endpoints** (user management, security log) must also use `admin_required`
+- **JWT tokens** must include `iat` (issued-at) and `jti` (unique ID) claims for audit trail
+- **JWT_SECRET** must never be empty — `auth.py` raises `RuntimeError` on startup if it is
+- **Token revocation**: logout must call `POST /api/auth/logout` server-side (adds token to denylist) before clearing localStorage
+- **Scoped tokens**: 2FA pending tokens have `purpose=2fa_pending` and 5-minute expiry. `decode_token()` rejects scoped tokens for general API access
+- **2FA bypass prevention**: verify-2fa requires the scoped `pending_token` issued after password auth — never allow TOTP verification without prior password check
+- **2FA disable** requires password confirmation (POST, not DELETE)
+- **TOTP secrets** are Fernet-encrypted at rest — never store plaintext
+
+### Input Validation & Injection Prevention
+
+- **SQL**: Always use parameterized queries (`?` placeholders) — never f-strings or string concatenation
+- **Sage input limits**: max 10,000 chars per message, max 100 history entries (enforced in `ChatRequest` Pydantic model)
+- **Password complexity**: minimum 8 chars, must include uppercase, lowercase, and digit
+- **File uploads**: validate file types server-side — don't trust client `Content-Type`
+- **SSRF prevention**: `_is_url_safe()` in `sage.py` blocks private/internal/loopback IPs and non-http(s) schemes for Sage's `fetch_page` tool
+
+### Error Handling & Information Disclosure
+
+- **Never leak stack traces** in HTTP responses — all endpoints that catch exceptions must return generic messages (`"Internal server error"`) not `str(e)`
+- **Error boundary** in React hides stack traces from users in production
+- **QR codes**: render SVG via `DOMParser`, never via `dangerouslySetInnerHTML`
+
+### Rate Limiting
+
+- **Sage**: 60 messages/hour per user (in-memory sliding window)
+- **Login/2FA**: 5 requests/minute via nginx rate limiting
+- **General API**: 30 requests/second via nginx
+- **Per-username rate limiting**: 20 attempts per username per 15 minutes (prevents IP rotation bypass)
+- **Memory cleanup**: empty keys in rate-limit dicts must be cleaned up to prevent memory leaks
+
+### Network & Headers
+
+- **Content-Security-Policy** header set in middleware — `default-src 'self'` with specific directives for scripts, styles, images, connections
+- **CORS**: restrict to known origins in production
+- **X-Forwarded-For**: trust rightmost entry only (set by nginx, not spoofable by client)
+- **nginx `client_max_body_size`**: set to `25m` — default 1MB blocks PDF uploads
+
+### Secrets & Configuration
+
+- **Never commit** `.env`, credentials, API keys, or TOTP secrets. Use `.env.example` for templates
+- **Plaid access tokens** encrypted with Fernet at rest (`encryption.py`)
+- **Push subscriptions** store username — device-auth JWT must be issued for the correct subscribing user, never hardcoded
+
+### Logging & Audit
+
+- **Security log** uses `RotatingFileHandler` (10MB × 5 backups) — don't switch to unbounded file logging
+- **journald** log rotation configured in `deploy.yml` — 7 days, 500MB max
+- `list_users` must only return active users (filter soft-deleted accounts)
 
 ---
 
