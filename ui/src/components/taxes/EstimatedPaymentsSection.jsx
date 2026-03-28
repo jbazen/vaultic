@@ -25,21 +25,18 @@ export default function EstimatedPaymentsSection({ estPayments, setEstPayments }
 
   return (
     <div className="card" style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+      <div className="flex-between flex-wrap gap-10" style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 16 }}>Quarterly Estimated Payments (1040-ES)</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="flex-center gap-8">
           <input
             type="number"
             placeholder="Other income"
             value={otherIncome || ""}
             onChange={e => setOtherIncome(Number(e.target.value) || 0)}
-            style={{ width: 130, padding: "5px 10px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg3)", color: "inherit", fontSize: 13 }}
+            className="form-input"
+            style={{ width: 130, padding: "5px 10px", fontSize: 13 }}
           />
-          <button
-            onClick={recalculate}
-            disabled={loading}
-            style={{ padding: "5px 12px", borderRadius: 7, background: "#7c3aed", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.7 : 1 }}
-          >
+          <button className="btn-purple" onClick={recalculate} disabled={loading}>
             {loading ? "Calculating…" : "Recalculate"}
           </button>
         </div>
@@ -56,13 +53,13 @@ export default function EstimatedPaymentsSection({ estPayments, setEstPayments }
             const perQtr = estPayments.recommended_per_quarter || 0;
             if (perQtr === 0) {
               return (
-                <div style={{ background: "rgba(52,211,153,0.12)", border: "1px solid var(--green)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "var(--green)", fontWeight: 600 }}>
+                <div className="status-banner ok">
                   ✓ Your withholding covers your projected tax — no estimated payments needed.
                 </div>
               );
             }
             return (
-              <div style={{ background: "rgba(251,191,36,0.12)", border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#f59e0b", fontWeight: 600 }}>
+              <div className="status-banner warn">
                 ⚠ Estimated payments recommended: <strong>{fmt(perQtr)}/quarter</strong>
                 {" · "}Annual shortfall: <strong>{fmt(s)}</strong>
                 {" · "}Method: {estPayments.recommended_method === "prior_year" ? "Prior year safe harbor" : "90% of projected tax"}
@@ -74,9 +71,9 @@ export default function EstimatedPaymentsSection({ estPayments, setEstPayments }
           <div style={{ overflowX: "auto", marginBottom: 14 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
+                <tr className="table-header-row">
                   {["Quarter", "Period", "Due Date", "Amount", "Status"].map(h => (
-                    <th key={h} scope="col" style={{ padding: "9px 12px", textAlign: h === "Quarter" || h === "Period" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                    <th key={h} scope="col" className={`th-cell${h !== "Quarter" && h !== "Period" ? " right" : ""}`} style={{ padding: "9px 12px" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -85,12 +82,12 @@ export default function EstimatedPaymentsSection({ estPayments, setEstPayments }
                   const statusColor = q.status === "past" ? "var(--text2)" : q.status === "current" ? "#f59e0b" : "var(--purple)";
                   const statusLabel = q.status === "past" ? "Past" : q.status === "current" ? `Due in ${q.days_until_due}d` : `In ${q.days_until_due}d`;
                   return (
-                    <tr key={q.quarter} style={{ borderBottom: "1px solid var(--border)", opacity: q.status === "past" ? 0.6 : 1 }}>
-                      <td style={{ padding: "10px 12px", fontWeight: 600 }}>{q.label}</td>
-                      <td style={{ padding: "10px 12px", color: "var(--text2)" }}>{q.period}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right" }}>{q.due}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>{fmt(q.amount)}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", color: statusColor, fontWeight: 600, fontSize: 12 }}>{statusLabel}</td>
+                    <tr key={q.quarter} className="tr-row" style={{ opacity: q.status === "past" ? 0.6 : 1 }}>
+                      <td className="td-cell bold" style={{ padding: "10px 12px" }}>{q.label}</td>
+                      <td className="td-cell dim" style={{ padding: "10px 12px" }}>{q.period}</td>
+                      <td className="td-cell right" style={{ padding: "10px 12px" }}>{q.due}</td>
+                      <td className="td-cell right" style={{ padding: "10px 12px", fontWeight: 700 }}>{fmt(q.amount)}</td>
+                      <td className="td-cell right" style={{ padding: "10px 12px", color: statusColor, fontWeight: 600, fontSize: 12 }}>{statusLabel}</td>
                     </tr>
                   );
                 })}
@@ -109,12 +106,12 @@ export default function EstimatedPaymentsSection({ estPayments, setEstPayments }
                             (sh.key === "safe_harbor_b" && estPayments.recommended_method === "prior_year");
               return (
                 <div key={sh.key} style={{ background: "var(--bg3)", borderRadius: 9, padding: "11px 14px", border: isRec ? "1px solid var(--purple)" : "1px solid var(--border)" }}>
-                  <div style={{ fontSize: 11, color: isRec ? "var(--purple)" : "var(--text2)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>
+                  <div className="section-label" style={{ color: isRec ? "var(--purple)" : undefined }}>
                     {sh.label}{isRec && " ✓ recommended"}
                   </div>
-                  <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>{sh.sub}</div>
+                  <div className="sub-label" style={{ marginBottom: 6 }}>{sh.sub}</div>
                   <div style={{ fontWeight: 700, fontSize: 17 }}>{fmt(d.per_quarter)}<span style={{ fontSize: 12, fontWeight: 400, color: "var(--text2)" }}>/qtr</span></div>
-                  <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>Total needed: {fmt(d.total_needed)}</div>
+                  <div className="sub-label">Total needed: {fmt(d.total_needed)}</div>
                 </div>
               );
             })}

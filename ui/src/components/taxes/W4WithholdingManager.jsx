@@ -39,10 +39,10 @@ export default function W4WithholdingManager({ w4s, setW4s, onOpenWizard }) {
 
   return (
     <div className="card" style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+      <div className="flex-between flex-wrap gap-10" style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 16 }}>W-4s on File</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          {msg && <span style={{ fontSize: 12, color: "var(--text2)" }}>{msg}</span>}
+        <div className="flex-center gap-8 flex-wrap">
+          {msg && <span className="sub-label">{msg}</span>}
           <input ref={inputRef} type="file" accept=".pdf" multiple style={{ display: "none" }} onChange={handleUpload} />
           <button
             onClick={onOpenWizard}
@@ -50,11 +50,7 @@ export default function W4WithholdingManager({ w4s, setW4s, onOpenWizard }) {
           >
             ✦ W-4 Optimizer
           </button>
-          <button
-            onClick={() => inputRef.current?.click()}
-            disabled={uploading}
-            style={{ padding: "6px 14px", borderRadius: 8, background: "#7c3aed", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.7 : 1, whiteSpace: "nowrap" }}
-          >
+          <button className="btn-purple" onClick={() => inputRef.current?.click()} disabled={uploading}>
             {uploading ? "Parsing…" : "Upload W-4"}
           </button>
         </div>
@@ -67,20 +63,20 @@ export default function W4WithholdingManager({ w4s, setW4s, onOpenWizard }) {
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
-              <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
+              <tr className="table-header-row">
                 {["Employer", "Filing Status", "Dependents Credit", "Extra/Period", "Effective Date"].map(h => (
-                  <th key={h} scope="col" style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                  <th key={h} scope="col" className={`th-cell${h !== "Employer" ? " right" : ""}`}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {w4s.map(w => (
-                <tr key={w.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "12px 12px", fontWeight: 600 }}>{w.employer || "—"}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", textTransform: "capitalize" }}>{(w.filing_status || "—").replace(/_/g, " ")}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(w.dependents_amount)}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", color: w.extra_withholding > 0 ? "var(--green)" : "inherit" }}>{w.extra_withholding > 0 ? fmt(w.extra_withholding) : "—"}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--text2)" }}>{w.effective_date || "—"}</td>
+                <tr key={w.id} className="tr-row">
+                  <td className="td-cell bold">{w.employer || "—"}</td>
+                  <td className="td-cell right" style={{ textTransform: "capitalize" }}>{(w.filing_status || "—").replace(/_/g, " ")}</td>
+                  <td className="td-cell right">{fmt(w.dependents_amount)}</td>
+                  <td className="td-cell right" style={{ color: w.extra_withholding > 0 ? "var(--green)" : "inherit" }}>{w.extra_withholding > 0 ? fmt(w.extra_withholding) : "—"}</td>
+                  <td className="td-cell right dim">{w.effective_date || "—"}</td>
                 </tr>
               ))}
             </tbody>

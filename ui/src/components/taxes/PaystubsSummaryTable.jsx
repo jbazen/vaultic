@@ -43,26 +43,15 @@ export default function PaystubsSummaryTable({ paystubs, setPaystubs }) {
 
   return (
     <div className="card" style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+      <div className="flex-between flex-wrap gap-10" style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 16 }}>Paystubs — YTD</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {msg && <span style={{ fontSize: 12, color: "var(--text2)" }}>{msg}</span>}
+        <div className="flex-center gap-8">
+          {msg && <span className="sub-label">{msg}</span>}
           <input ref={inputRef} type="file" accept=".pdf" multiple style={{ display: "none" }} onChange={handleUpload} />
           <button
+            className="btn-upload"
             onClick={() => inputRef.current?.click()}
             disabled={uploading}
-            style={{
-              padding: "6px 14px",
-              borderRadius: 8,
-              background: "var(--accent)",
-              color: "#fff",
-              border: "none",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: uploading ? "not-allowed" : "pointer",
-              opacity: uploading ? 0.7 : 1,
-              whiteSpace: "nowrap",
-            }}
           >
             {uploading ? "Parsing…" : "Upload Paystub"}
           </button>
@@ -77,24 +66,24 @@ export default function PaystubsSummaryTable({ paystubs, setPaystubs }) {
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
-              <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
+              <tr className="table-header-row">
                 {["Employer", "Pay Date", "Gross (Period)", "YTD Gross", "YTD Federal", "YTD State", "YTD SS", "YTD Medicare", "YTD Net"].map(h => (
-                  <th key={h} scope="col" style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                  <th key={h} scope="col" className={`th-cell${h !== "Employer" ? " right" : ""}`}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {paystubs.map(p => (
-                <tr key={p.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "12px 12px", fontWeight: 600 }}>{p.employer || "—"}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--text2)" }}>{p.pay_date || "—"}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.gross_pay)}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", fontWeight: 600 }}>{fmt(p.ytd_gross)}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--red)" }}>{fmt(p.ytd_federal)}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--red)" }}>{fmt(p.ytd_state)}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.ytd_social_security)}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.ytd_medicare)}</td>
-                  <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--green)", fontWeight: 600 }}>{fmt(p.ytd_net)}</td>
+                <tr key={p.id} className="tr-row">
+                  <td className="td-cell bold">{p.employer || "—"}</td>
+                  <td className="td-cell right dim">{p.pay_date || "—"}</td>
+                  <td className="td-cell right">{fmt(p.gross_pay)}</td>
+                  <td className="td-cell right bold">{fmt(p.ytd_gross)}</td>
+                  <td className="td-cell right negative">{fmt(p.ytd_federal)}</td>
+                  <td className="td-cell right negative">{fmt(p.ytd_state)}</td>
+                  <td className="td-cell right">{fmt(p.ytd_social_security)}</td>
+                  <td className="td-cell right">{fmt(p.ytd_medicare)}</td>
+                  <td className="td-cell right positive bold">{fmt(p.ytd_net)}</td>
                 </tr>
               ))}
             </tbody>

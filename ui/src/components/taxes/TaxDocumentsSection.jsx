@@ -42,19 +42,15 @@ export default function TaxDocumentsSection({ taxYear, taxDocs, setTaxDocs, setD
 
   return (
     <div className="card" style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+      <div className="flex-between flex-wrap gap-10" style={{ marginBottom: 16 }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>Tax Documents — {taxYear}</div>
-          <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>W-2s, 1099s, 1098s, giving statements — upload anything</div>
+          <div className="sub-label">W-2s, 1099s, 1098s, giving statements — upload anything</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {msg && <span style={{ fontSize: 12, color: "var(--text2)", maxWidth: 300 }}>{msg}</span>}
+        <div className="flex-center gap-8">
+          {msg && <span className="sub-label" style={{ maxWidth: 300 }}>{msg}</span>}
           <input ref={inputRef} type="file" accept=".pdf" multiple style={{ display: "none" }} onChange={handleUpload} />
-          <button
-            onClick={() => inputRef.current?.click()}
-            disabled={uploading}
-            style={{ padding: "6px 14px", borderRadius: 8, background: "var(--accent)", color: "#fff", border: "none", fontSize: 13, fontWeight: 600, cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.7 : 1, whiteSpace: "nowrap" }}
-          >
+          <button className="btn-upload" onClick={() => inputRef.current?.click()} disabled={uploading}>
             {uploading ? "Parsing…" : "Upload Documents"}
           </button>
         </div>
@@ -66,13 +62,13 @@ export default function TaxDocumentsSection({ taxYear, taxDocs, setTaxDocs, setD
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {taxDocs.map(doc => (
-            <div key={doc.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--bg3)", borderRadius: 8, padding: "10px 14px", border: "1px solid var(--border)" }}>
+            <div key={doc.id} className="flex-between" style={{ background: "var(--bg3)", borderRadius: 8, padding: "10px 14px", border: "1px solid var(--border)" }}>
               <div>
                 <span style={{ fontWeight: 600, fontSize: 13 }}>{doc.doc_type_label}</span>
-                {doc.issuer && <span style={{ color: "var(--text2)", fontSize: 12, marginLeft: 8 }}>· {doc.issuer}</span>}
+                {doc.issuer && <span className="sub-label" style={{ marginLeft: 8 }}>· {doc.issuer}</span>}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontSize: 12, color: "var(--text2)" }}>{doc.source_file}</span>
+              <div className="flex-center gap-12">
+                <span className="sub-label">{doc.source_file}</span>
                 <button
                   onClick={() => handleDelete(doc.id)}
                   style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 16, padding: "0 4px" }}
