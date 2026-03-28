@@ -379,13 +379,10 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
     """
     from datetime import date as _date
 
-    if year != 2025:
-        raise HTTPException(status_code=400, detail="Projection only supported for 2025 currently")
-
-    # MFJ standard deduction and child tax credit for 2025
-    STANDARD_DEDUCTION = 30000
-    CHILD_TAX_CREDIT_PER_CHILD = 2000
-    NUM_CHILDREN = 2  # John and Milo
+    STANDARD_DEDUCTION = get_standard_deduction(year)
+    brackets = get_brackets(year)
+    CHILD_TAX_CREDIT_PER_CHILD = _CHILD_CREDIT_SHARED
+    _NUM_CHILDREN = _NUM_CHILDREN_SHARED
 
     with get_db() as conn:
         # Most recent paystub per employer for YTD totals
@@ -435,8 +432,8 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
 
     # Taxable income and tax
     taxable_income = max(0, proj_gross - deduction_amount)
-    gross_tax = _calc_tax(taxable_income, _BRACKETS_2025_MFJ)
-    child_credit = NUM_CHILDREN * CHILD_TAX_CREDIT_PER_CHILD
+    gross_tax = _calc_tax(taxable_income, brackets)
+    child_credit = _NUM_CHILDREN * CHILD_TAX_CREDIT_PER_CHILD
     net_tax = max(0, gross_tax - child_credit)
 
     # Result
