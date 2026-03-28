@@ -62,7 +62,7 @@ const Message = memo(function Message({ msg }) {
             }}>
               <span>{fileIcon(att.filename)}</span>
               <span>{att.filename}</span>
-              {att.truncated && <span style={{ color: "#f87171" }}>(truncated)</span>}
+              {att.truncated && <span style={{ color: "var(--red)" }}>(truncated)</span>}
             </div>
           )
         ))}
@@ -705,13 +705,13 @@ export default function SageChat() {
             <div style={{
               position: "absolute", bottom: 2, right: 2,
               width: 12, height: 12, borderRadius: "50%",
-              background: "#34d399", border: "2px solid var(--bg)",
+              background: "var(--green)", border: "2px solid var(--bg)",
             }} />
           )}
           {unread > 0 && !awake && (
             <div style={{
               position: "absolute", top: 0, right: 0,
-              background: "#f87171", borderRadius: "50%",
+              background: "var(--red)", borderRadius: "50%",
               width: 18, height: 18, fontSize: 10,
               display: "flex", alignItems: "center", justifyContent: "center",
               fontWeight: 700, color: "#fff",
@@ -766,7 +766,7 @@ export default function SageChat() {
             }}>S</div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Sage</div>
-              <div style={{ fontSize: 11, color: awake ? "#34d399" : "var(--text2)" }}>
+              <div style={{ fontSize: 11, color: awake ? "var(--green)" : "var(--text2)" }}>
                 {awake ? "Listening… speak your question" : alwaysOn ? "👂 Always listening for \"Hey Sage\"" : "Your AI financial advisor"}
               </div>
             </div>
@@ -778,8 +778,8 @@ export default function SageChat() {
                   title={alwaysOn ? "Disable Hey Sage" : "Enable Hey Sage (always listening)"}
                   style={{
                     background: alwaysOn ? "rgba(52,211,153,0.15)" : "none",
-                    border: `1px solid ${alwaysOn ? "#34d399" : "var(--border)"}`,
-                    color: alwaysOn ? "#34d399" : "var(--text2)",
+                    border: `1px solid ${alwaysOn ? "var(--green)" : "var(--border)"}`,
+                    color: alwaysOn ? "var(--green)" : "var(--text2)",
                     borderRadius: 6,
                     padding: isMobile ? "10px 14px" : "4px 8px",
                     minHeight: isMobile ? 44 : undefined,
@@ -826,8 +826,8 @@ export default function SageChat() {
                     }} aria-label={paused ? "Resume speaking" : "Pause speaking"}>{paused ? "▶" : "⏸"}</button>
                   <button onClick={stopSpeaking} title="Stop speaking" aria-label="Stop speaking"
                     style={{
-                      background: "rgba(248,113,113,0.15)", border: "1px solid #f87171",
-                      color: "#f87171", borderRadius: 6,
+                      background: "rgba(248,113,113,0.15)", border: "1px solid var(--red)",
+                      color: "var(--red)", borderRadius: 6,
                       padding: isMobile ? "10px 14px" : "4px 8px",
                       minHeight: isMobile ? 44 : undefined,
                       cursor: "pointer", fontSize: 13, fontWeight: 600,
@@ -866,7 +866,7 @@ export default function SageChat() {
                 <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6, color: "var(--text)" }}>Hi, I'm Sage</div>
                 <div style={{ fontSize: 13, lineHeight: 1.6 }}>
                   Ask me anything about your finances. Enable{" "}
-                  <strong style={{ color: "#34d399" }}>👂 Hey Sage</strong> to talk hands-free.
+                  <strong style={{ color: "var(--green)" }}>👂 Hey Sage</strong> to talk hands-free.
                 </div>
                 <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 8, alignItems: "center" }}>
                   {["What's my net worth?", "How am I spending?", "Am I on track to retire?"].map(q => (
@@ -943,11 +943,11 @@ export default function SageChat() {
               {awake && (
                 <div style={{
                   position: "absolute", bottom: 80, left: "50%", transform: "translateX(-50%)",
-                  background: "rgba(52,211,153,0.15)", border: "1px solid #34d399",
-                  borderRadius: 20, padding: "4px 14px", fontSize: 12, color: "#34d399",
+                  background: "rgba(52,211,153,0.15)", border: "1px solid var(--green)",
+                  borderRadius: 20, padding: "4px 14px", fontSize: 12, color: "var(--green)",
                   display: "flex", alignItems: "center", gap: 6,
                 }}>
-                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399",
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)",
                     animation: "sage-bounce 1s ease-in-out infinite" }} />
                   Listening — speak now
                 </div>
@@ -980,7 +980,7 @@ export default function SageChat() {
                 rows={1}
                 style={{
                   flex: 1, background: "var(--bg3)",
-                  border: `1px solid ${awake ? "#34d399" : whisperRecording ? "#f87171" : "var(--border)"}`,
+                  border: `1px solid ${awake ? "var(--green)" : whisperRecording ? "var(--red)" : "var(--border)"}`,
                   color: "var(--text)", borderRadius: 10, padding: "9px 12px",
                   fontSize: 14, resize: "none", outline: "none", lineHeight: 1.5,
                   maxHeight: 100, overflow: "auto", fontFamily: "inherit",
@@ -1002,8 +1002,8 @@ export default function SageChat() {
                     style={{
                       width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
                       borderRadius: "50%", flexShrink: 0,
-                      background: whisperRecording ? "#f87171" : "var(--bg3)",
-                      border: `1px solid ${whisperRecording ? "#f87171" : "var(--border)"}`,
+                      background: whisperRecording ? "var(--red)" : "var(--bg3)",
+                      border: `1px solid ${whisperRecording ? "var(--red)" : "var(--border)"}`,
                       color: whisperRecording ? "#fff" : "var(--text2)",
                       cursor: "pointer", fontSize: 16,
                       display: "flex", alignItems: "center", justifyContent: "center",
@@ -1018,8 +1018,8 @@ export default function SageChat() {
                     style={{
                       width: isMobile ? 44 : 38, height: isMobile ? 44 : 38,
                       borderRadius: "50%", flexShrink: 0,
-                      background: listening ? "#f87171" : "var(--bg3)",
-                      border: `1px solid ${listening ? "#f87171" : "var(--border)"}`,
+                      background: listening ? "var(--red)" : "var(--bg3)",
+                      border: `1px solid ${listening ? "var(--red)" : "var(--border)"}`,
                       color: listening ? "#fff" : "var(--text2)",
                       cursor: "pointer", fontSize: 16,
                       display: "flex", alignItems: "center", justifyContent: "center",

@@ -314,14 +314,14 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
             <button onClick={handleToggleExclude} disabled={toggling}
               title={excluded ? "Include in net worth" : "Exclude from net worth"}
               style={{ background: "none", border: "1px solid var(--border)",
-                color: excluded ? "#34d399" : "#f59e0b", borderRadius: 6, padding: "3px 8px",
+                color: excluded ? "var(--green)" : "#f59e0b", borderRadius: 6, padding: "3px 8px",
                 cursor: "pointer", fontSize: 12 }}>
               {toggling ? "…" : excluded ? "+ Include" : "⊘ Exclude"}
             </button>
             {onDelete && (
               <button onClick={() => onDelete(entry.id)}
                 style={{ background: "none", border: "1px solid var(--border)",
-                  color: "#f87171", borderRadius: 6, padding: "3px 8px",
+                  color: "var(--red)", borderRadius: 6, padding: "3px 8px",
                   cursor: "pointer", fontSize: 12 }} title="Delete" aria-label="Delete">✕</button>
             )}
           </div>
@@ -361,7 +361,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
                             <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name}</td>
                             <td style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
                               {h.asset_class ? (
-                                <span style={{ background: (ASSET_CLASS_COLORS[h.asset_class] || "#8b92a8") + "22", color: ASSET_CLASS_COLORS[h.asset_class] || "#8b92a8", borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 600 }}>
+                                <span style={{ background: `color-mix(in srgb, ${ASSET_CLASS_COLORS[h.asset_class] || "var(--text2)"} 13%, transparent)`, color: ASSET_CLASS_COLORS[h.asset_class] || "var(--text2)", borderRadius: 4, padding: "2px 6px", fontSize: 11, fontWeight: 600 }}>
                                   {ASSET_CLASS_LABELS[h.asset_class] || h.asset_class}
                                 </span>
                               ) : "—"}
@@ -372,10 +372,10 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
                             <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{h.value != null ? fmt(h.value) : "—"}</td>
                             <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{fmtPct(h.pct_assets)}</td>
                             <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{h.principal != null ? fmt(h.principal) : "—"}</td>
-                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
+                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "var(--green)" : glNeg ? "var(--red)" : "var(--text)" }}>
                               {h.gain_loss_dollars != null ? (glPos ? "+" : "") + fmt(h.gain_loss_dollars) : "—"}
                             </td>
-                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)" }}>
+                            <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glPos ? "var(--green)" : glNeg ? "var(--red)" : "var(--text)" }}>
                               {h.gain_loss_pct != null ? (h.gain_loss_pct > 0 ? "+" : "") + fmtPct(h.gain_loss_pct) : "—"}
                             </td>
                           </tr>
@@ -415,7 +415,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
                 ].map(({ label, value, date, signed }) => value != null ? (
                   <div key={label}>
                     <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>{label}{date ? ` (${date})` : ""}</div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: signed ? (value >= 0 ? "#34d399" : "#f87171") : "var(--text)" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: signed ? (value >= 0 ? "var(--green)" : "var(--red)") : "var(--text)" }}>
                       {signed && value > 0 ? "+" : ""}{fmt(value)}
                     </div>
                   </div>
@@ -423,7 +423,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
                 {entry.activity_summary.twr_pct != null && (
                   <div>
                     <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Time-Weighted Return</div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: entry.activity_summary.twr_pct >= 0 ? "#34d399" : "#f87171" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: entry.activity_summary.twr_pct >= 0 ? "var(--green)" : "var(--red)" }}>
                       {entry.activity_summary.twr_pct > 0 ? "+" : ""}{entry.activity_summary.twr_pct.toFixed(2)}%
                     </div>
                   </div>
@@ -490,7 +490,7 @@ function HoldingsTable({ holdings, totalValue }) {
           {holdings.map((h, i) => {
             const glPos = h.gain_loss_dollars > 0;
             const glNeg = h.gain_loss_dollars < 0;
-            const glColor = glPos ? "#34d399" : glNeg ? "#f87171" : "var(--text)";
+            const glColor = glPos ? "var(--green)" : glNeg ? "var(--red)" : "var(--text)";
             return (
               <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name || "—"}</td>
@@ -626,7 +626,7 @@ function BalanceChart({ accountId, data: preloadedData }) {
   const CustomTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
     return (
-      <div style={{ background: "#171b26", border: "1px solid #2a2f3e", borderRadius: 8, padding: "10px 14px" }}>
+      <div style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px" }}>
         <div style={{ color: "var(--text2)", fontSize: 11, marginBottom: 4 }}>{fmtAxisDate(label, days)}</div>
         <div style={{ color: "var(--text)", fontWeight: 700, fontSize: 14 }}>{fmt(payload[0].value)}</div>
       </div>
@@ -920,7 +920,7 @@ export default function Accounts() {
               {coinbaseSyncing ? "Syncing…" : "⟳ Sync Coinbase"}
             </button>
             {coinbaseStatus && (
-              <span style={{ fontSize: 12, color: coinbaseStatus.ok ? "var(--accent)" : "#f87171" }}>
+              <span style={{ fontSize: 12, color: coinbaseStatus.ok ? "var(--accent)" : "var(--red)" }}>
                 {coinbaseStatus.msg}
               </span>
             )}

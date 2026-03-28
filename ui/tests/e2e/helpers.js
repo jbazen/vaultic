@@ -17,9 +17,9 @@ export async function mockAllAPIs(page) {
     r.fulfill({ json: [] }));
   await page.route("/api/plaid/items", r =>
     r.fulfill({ json: [] }));
-  await page.route("/api/accounts/portfolio-performance*", r =>
+  await page.route("/api/accounts/portfolio/performance*", r =>
     r.fulfill({ json: [] }));
-  await page.route("/api/market-rates*", r =>
+  await page.route("/api/market/rates*", r =>
     r.fulfill({ json: { rates: [] } }));
 }
 

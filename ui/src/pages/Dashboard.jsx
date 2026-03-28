@@ -17,23 +17,23 @@ import { fmt, fmtSigned, fmtDate } from "../utils/format.js";
 // ── Category config ───────────────────────────────────────────────────────────
 
 const CATS = [
-  { key: "liquid",       label: "Liquid",       color: "#34d399", icon: "💵" },
-  { key: "invested",     label: "Invested",     color: "#4f8ef7", icon: "📈" },
-  { key: "real_estate",  label: "Real Estate",  color: "#a78bfa", icon: "🏠" },
-  { key: "vehicles",     label: "Vehicles",     color: "#fbbf24", icon: "🚗" },
-  { key: "crypto",       label: "Crypto",       color: "#fb923c", icon: "₿" },
-  { key: "other_assets", label: "Other Assets", color: "#6ee7b7", icon: "📦" },
-  { key: "liabilities",  label: "Liabilities",  color: "#f87171", icon: "💳" },
+  { key: "liquid",       label: "Liquid",       color: "var(--green)", icon: "💵" },
+  { key: "invested",     label: "Invested",     color: "var(--accent)", icon: "📈" },
+  { key: "real_estate",  label: "Real Estate",  color: "var(--purple)", icon: "🏠" },
+  { key: "vehicles",     label: "Vehicles",     color: "var(--yellow)", icon: "🚗" },
+  { key: "crypto",       label: "Crypto",       color: "var(--orange)", icon: "₿" },
+  { key: "other_assets", label: "Other Assets", color: "var(--teal)", icon: "📦" },
+  { key: "liabilities",  label: "Liabilities",  color: "var(--red)", icon: "💳" },
 ];
 
 const MANUAL_CAT_LABELS = {
-  home_value:        { label: "Home Value",    cat: "real_estate", color: "#a78bfa" },
-  car_value:         { label: "Car Value",     cat: "vehicles",    color: "#fbbf24" },
-  credit_score:      { label: "Credit Score",  cat: null,          color: "#34d399" },
-  other_asset:       { label: "Other Asset",   cat: "other_asset", color: "#6ee7b7" },
-  other_liability:   { label: "Liability",     cat: "liabilities", color: "#f87171" },
-  invested:          { label: "Invested",      cat: "invested",    color: "#4f8ef7" },
-  liquid:            { label: "Liquid",        cat: "liquid",      color: "#34d399" },
+  home_value:        { label: "Home Value",    cat: "real_estate", color: "var(--purple)" },
+  car_value:         { label: "Car Value",     cat: "vehicles",    color: "var(--yellow)" },
+  credit_score:      { label: "Credit Score",  cat: null,          color: "var(--green)" },
+  other_asset:       { label: "Other Asset",   cat: "other_asset", color: "var(--teal)" },
+  other_liability:   { label: "Liability",     cat: "liabilities", color: "var(--red)" },
+  invested:          { label: "Invested",      cat: "invested",    color: "var(--accent)" },
+  liquid:            { label: "Liquid",        cat: "liquid",      color: "var(--green)" },
 };
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
@@ -219,13 +219,13 @@ export default function Dashboard() {
             {homeValue && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>🏠 Home</div>
-                <span style={{ fontSize: 22, fontWeight: 700, color: "#a78bfa" }}>{fmt(homeValue.value)}</span>
+                <span style={{ fontSize: 22, fontWeight: 700, color: "var(--purple)" }}>{fmt(homeValue.value)}</span>
               </div>
             )}
             {carValue && (
               <div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>🚗 Car</div>
-                <span style={{ fontSize: 22, fontWeight: 700, color: "#fbbf24" }}>{fmt(carValue.value)}</span>
+                <span style={{ fontSize: 22, fontWeight: 700, color: "var(--yellow)" }}>{fmt(carValue.value)}</span>
               </div>
             )}
             {/* Market rates — separated by a vertical rule when other items are present */}

@@ -36,7 +36,7 @@ function fmtDate(s) {
  */
 function confidenceInfo(conf) {
   if (conf == null || conf === 0) return { label: conf === 0 ? "0%" : "\u2014", color: "#ef4444" };  // red
-  if (conf >= 90) return { label: `${conf}%`, color: "#34d399" };   // green
+  if (conf >= 90) return { label: `${conf}%`, color: "var(--green)" };   // green
   if (conf >= 70) return { label: `${conf}%`, color: "#f59e0b" };   // yellow
   return            { label: `${conf}%`, color: "#f97316" };         // orange
 }
@@ -129,7 +129,7 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
               {/* Items — show name on left, remaining balance on right */}
               {g.items.map(item => {
                 const rem = item.remaining ?? 0;
-                const remColor = rem >= 0 ? "#34d399" : "#f87171";
+                const remColor = rem >= 0 ? "var(--green)" : "var(--red)";
                 const remText  = rem >= 0
                   ? `$${Number(rem).toFixed(2)}`
                   : `-$${Math.abs(Number(rem)).toFixed(2)}`;
@@ -284,8 +284,8 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
         {/* Remaining to allocate */}
         <div style={{
           marginTop: 6, fontSize: 13,
-          color: Math.abs(remaining) < 0.01 ? "#34d399"
-               : remaining < 0             ? "#f87171"
+          color: Math.abs(remaining) < 0.01 ? "var(--green)"
+               : remaining < 0             ? "var(--red)"
                : "#f59e0b",
           fontWeight: 700,
         }}>
@@ -367,7 +367,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                         aria-label="Remove split row"
                         style={{
                           background: "none", border: "none",
-                          color: "#f87171", fontSize: 20, cursor: "pointer",
+                          color: "var(--red)", fontSize: 20, cursor: "pointer",
                           padding: "0 4px", flexShrink: 0,
                         }}>
                         ✕
@@ -391,7 +391,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
             </button>
 
             {error && (
-              <div style={{ color: "#f87171", fontSize: 13, marginBottom: 12 }}>{error}</div>
+              <div style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{error}</div>
             )}
 
             {/* Save button */}
@@ -400,7 +400,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
               disabled={saving}
               style={{
                 width: "100%", padding: "15px 0",
-                background: "#34d399", border: "none", borderRadius: 10,
+                background: "var(--green)", border: "none", borderRadius: 10,
                 color: "#fff", fontWeight: 800, fontSize: 16,
                 cursor: saving ? "default" : "pointer", opacity: saving ? 0.6 : 1,
               }}>
@@ -562,7 +562,7 @@ function TxnCard({ txn, onApprove, onReassign, onSplit, onDelete, busy, mode = "
                 disabled={busy}
                 style={{
                   flex: 2, padding: "14px 0",
-                  background: "#34d399", border: "none", borderRadius: 10,
+                  background: "var(--green)", border: "none", borderRadius: 10,
                   color: "#fff", fontWeight: 800, fontSize: 16,
                   cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1,
                 }}>
@@ -935,7 +935,7 @@ export default function Review() {
             <>
               <div style={{
                 padding: "10px 16px 10px",
-                fontSize: 12, fontWeight: 800, color: "#fbbf24",
+                fontSize: 12, fontWeight: 800, color: "var(--yellow)",
                 textTransform: "uppercase", letterSpacing: "1px",
                 background: "var(--bg3, #1e2336)",
                 borderBottom: "1px solid var(--border, #2a2f45)",

@@ -1,11 +1,11 @@
 // ── Asset class allocation bar + legend ──────────────────────────────────────
 
 export const ASSET_CLASS_COLORS = {
-  equities:     "#4f8ef7",
-  fixed_income: "#a78bfa",
-  cash:         "#34d399",
-  alternatives: "#fbbf24",
-  other:        "#8b92a8",
+  equities:     "var(--accent)",
+  fixed_income: "var(--purple)",
+  cash:         "var(--green)",
+  alternatives: "var(--yellow)",
+  other:        "var(--text2)",
 };
 
 export const ASSET_CLASS_LABELS = {
@@ -38,7 +38,7 @@ export default function AllocationBar({ allocation, total, style = "dashboard" }
         {entries.map(([cls, val]) => (
           <div key={cls} style={{
             width: `${(val / total * 100).toFixed(1)}%`,
-            background: ASSET_CLASS_COLORS[cls] || "#8b92a8",
+            background: ASSET_CLASS_COLORS[cls] || "var(--text2)",
             ...(isAccounts ? {} : { transition: "width 0.3s" }),
           }} />
         ))}
@@ -46,7 +46,7 @@ export default function AllocationBar({ allocation, total, style = "dashboard" }
       <div style={{ display: "flex", flexWrap: "wrap", gap: legendGap }}>
         {entries.map(([cls, val]) => (
           <div key={cls} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12 }}>
-            <div style={{ width: 8, height: 8, borderRadius: 2, background: ASSET_CLASS_COLORS[cls] || "#8b92a8" }} />
+            <div style={{ width: 8, height: 8, borderRadius: 2, background: ASSET_CLASS_COLORS[cls] || "var(--text2)" }} />
             <span style={{ color: "var(--text2)" }}>{ASSET_CLASS_LABELS[cls] || cls}</span>
             <span style={{ color: "var(--text)", fontWeight: 600 }}>{(val / total * 100).toFixed(1)}%</span>
             <span style={{ color: "var(--text2)" }}>{fmt(val)}</span>

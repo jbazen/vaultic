@@ -186,7 +186,7 @@ export default function Documents() {
                 <div style={{ fontWeight: 700, fontSize: 16 }}>
                   {selectedYear} Tax Document Checklist
                 </div>
-                <div style={{ fontSize: 13, color: checklist.received_count === checklist.total_count ? "#34d399" : "#f59e0b", fontWeight: 600 }}>
+                <div style={{ fontSize: 13, color: checklist.received_count === checklist.total_count ? "var(--green)" : "#f59e0b", fontWeight: 600 }}>
                   {checklist.received_count} / {checklist.total_count} received
                 </div>
               </div>
@@ -204,7 +204,7 @@ export default function Documents() {
                       <div style={{ fontSize: 12, color: "var(--text2)" }}>{item.category_label}{item.issuer ? ` · ${item.issuer}` : ""}</div>
                     </div>
                     {!item.received && (
-                      <span style={{ fontSize: 12, color: "#f87171", fontWeight: 600 }}>Missing</span>
+                      <span style={{ fontSize: 12, color: "var(--red)", fontWeight: 600 }}>Missing</span>
                     )}
                   </div>
                 ))}
@@ -274,7 +274,7 @@ export default function Documents() {
                       <div style={{ fontSize: 12, color: "var(--text2)" }}>
                         {doc.issuer && <span>{doc.issuer} · </span>}
                         {doc.original_name}
-                        {doc.parsed ? <span style={{ marginLeft: 6, color: "#34d399", fontSize: 11 }}>● parsed</span> : ""}
+                        {doc.parsed ? <span style={{ marginLeft: 6, color: "var(--green)", fontSize: 11 }}>● parsed</span> : ""}
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -290,7 +290,7 @@ export default function Documents() {
                       )}
                       <button
                         onClick={() => handleDelete(doc.id)}
-                        style={{ padding: "4px 8px", borderRadius: 6, background: "none", border: "none", color: "#f87171", fontSize: 16, cursor: "pointer" }}
+                        style={{ padding: "4px 8px", borderRadius: 6, background: "none", border: "none", color: "var(--red)", fontSize: 16, cursor: "pointer" }}
                         title="Delete"
                         aria-label="Delete document"
                       >×</button>

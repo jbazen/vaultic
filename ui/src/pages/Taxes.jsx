@@ -73,8 +73,8 @@ export default function Taxes() {
 
   // Color for refund (green) vs owed (red)
   function refundColor(row) {
-    if (row.refund > 0) return "#34d399";
-    if (row.owed > 0) return "#f87171";
+    if (row.refund > 0) return "var(--green)";
+    if (row.owed > 0) return "var(--red)";
     return "var(--text2)";
   }
 
@@ -333,7 +333,7 @@ export default function Taxes() {
                     <td style={{ padding: "14px 16px", textAlign: "right" }}>
                       <span style={{
                         fontSize: 11,
-                        color: row.deduction_method === "itemized" ? "#a78bfa" : "var(--text2)",
+                        color: row.deduction_method === "itemized" ? "var(--purple)" : "var(--text2)",
                         marginRight: 4,
                       }}>
                         {row.deduction_method === "itemized" ? "ITEM" : "STD"}
@@ -438,7 +438,7 @@ export default function Taxes() {
                       <span style={{ fontSize: 12, color: "var(--text2)" }}>{doc.source_file}</span>
                       <button
                         onClick={() => handleDeleteDoc(doc.id)}
-                        style={{ background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: 16, padding: "0 4px" }}
+                        style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 16, padding: "0 4px" }}
                         title="Remove"
                         aria-label="Remove document"
                       >×</button>
@@ -484,13 +484,13 @@ export default function Taxes() {
                   { label: "Deduction", value: fmt(draftReturn.deductions?.amount), sub: draftReturn.deductions?.method === "itemized" ? "ITEM" : "STD" },
                   { label: "Taxable Income", value: fmt(draftReturn.taxable_income) },
                   { label: "Gross Tax", value: fmt(draftReturn.gross_tax) },
-                  { label: "Child Tax Credit", value: `-${fmt(draftReturn.child_tax_credit)}`, color: "#34d399" },
+                  { label: "Child Tax Credit", value: `-${fmt(draftReturn.child_tax_credit)}`, color: "var(--green)" },
                   { label: "Net Tax", value: fmt(draftReturn.net_tax), bold: true },
                   { label: "Total Withheld", value: fmt(draftReturn.withholding?.total) },
                   {
                     label: draftReturn.refund != null ? "Est. Refund" : "Est. Owed",
                     value: draftReturn.refund != null ? `+${fmt(draftReturn.refund)}` : `-${fmt(draftReturn.owed)}`,
-                    color: draftReturn.refund != null ? "#34d399" : "#f87171",
+                    color: draftReturn.refund != null ? "var(--green)" : "var(--red)",
                     bold: true,
                     highlight: true,
                   },
@@ -503,7 +503,7 @@ export default function Taxes() {
                   }}>
                     <div style={{ fontSize: 11, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>
                       {item.label}
-                      {item.sub && <span style={{ marginLeft: 6, color: "#a78bfa", fontSize: 10 }}>{item.sub}</span>}
+                      {item.sub && <span style={{ marginLeft: 6, color: "var(--purple)", fontSize: 10 }}>{item.sub}</span>}
                     </div>
                     <div style={{ fontWeight: item.bold ? 700 : 500, fontSize: 15, color: item.color || "inherit" }}>{item.value}</div>
                   </div>
@@ -515,7 +515,7 @@ export default function Taxes() {
                   Effective rate: <strong style={{ color: "#f59e0b" }}>{draftReturn.effective_rate}%</strong>
                   {draftReturn.deductions?.method === "itemized" && (
                     <span style={{ marginLeft: 12 }}>
-                      Itemized saves <strong style={{ color: "#a78bfa" }}>{fmt(draftReturn.deductions.total_itemized - draftReturn.deductions.standard_deduction)}</strong> vs standard
+                      Itemized saves <strong style={{ color: "var(--purple)" }}>{fmt(draftReturn.deductions.total_itemized - draftReturn.deductions.standard_deduction)}</strong> vs standard
                     </span>
                   )}
                 </div>
@@ -540,7 +540,7 @@ export default function Taxes() {
                   {
                     label: projection.refund ? "Est. Refund" : "Est. Owed",
                     value: projection.refund ? `+${fmt(projection.refund)}` : `-${fmt(projection.owed)}`,
-                    color: projection.refund ? "#34d399" : "#f87171",
+                    color: projection.refund ? "var(--green)" : "var(--red)",
                     highlight: true,
                   },
                 ].map(item => (
@@ -552,7 +552,7 @@ export default function Taxes() {
                   }}>
                     <div style={{ fontSize: 11, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>
                       {item.label}
-                      {item.sub && <span style={{ marginLeft: 6, color: "#a78bfa", fontSize: 10 }}>{item.sub}</span>}
+                      {item.sub && <span style={{ marginLeft: 6, color: "var(--purple)", fontSize: 10 }}>{item.sub}</span>}
                     </div>
                     <div style={{ fontWeight: 700, fontSize: 18, color: item.color || "inherit" }}>{item.value}</div>
                   </div>
@@ -606,7 +606,7 @@ export default function Taxes() {
                   const perQtr = estPayments.recommended_per_quarter || 0;
                   if (perQtr === 0) {
                     return (
-                      <div style={{ background: "rgba(52,211,153,0.12)", border: "1px solid #34d399", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#34d399", fontWeight: 600 }}>
+                      <div style={{ background: "rgba(52,211,153,0.12)", border: "1px solid var(--green)", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "var(--green)", fontWeight: 600 }}>
                         ✓ Your withholding covers your projected tax — no estimated payments needed.
                       </div>
                     );
@@ -632,7 +632,7 @@ export default function Taxes() {
                     </thead>
                     <tbody>
                       {(estPayments.quarters || []).map(q => {
-                        const statusColor = q.status === "past" ? "var(--text2)" : q.status === "current" ? "#f59e0b" : "#a78bfa";
+                        const statusColor = q.status === "past" ? "var(--text2)" : q.status === "current" ? "#f59e0b" : "var(--purple)";
                         const statusLabel = q.status === "past" ? "Past" : q.status === "current" ? `Due in ${q.days_until_due}d` : `In ${q.days_until_due}d`;
                         return (
                           <tr key={q.quarter} style={{ borderBottom: "1px solid var(--border)", opacity: q.status === "past" ? 0.6 : 1 }}>
@@ -658,8 +658,8 @@ export default function Taxes() {
                     const isRec = (sh.key === "safe_harbor_a" && estPayments.recommended_method === "current_year") ||
                                   (sh.key === "safe_harbor_b" && estPayments.recommended_method === "prior_year");
                     return (
-                      <div key={sh.key} style={{ background: "var(--bg3)", borderRadius: 9, padding: "11px 14px", border: isRec ? "1px solid #a78bfa" : "1px solid var(--border)" }}>
-                        <div style={{ fontSize: 11, color: isRec ? "#a78bfa" : "var(--text2)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>
+                      <div key={sh.key} style={{ background: "var(--bg3)", borderRadius: 9, padding: "11px 14px", border: isRec ? "1px solid var(--purple)" : "1px solid var(--border)" }}>
+                        <div style={{ fontSize: 11, color: isRec ? "var(--purple)" : "var(--text2)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 4 }}>
                           {sh.label}{isRec && " ✓ recommended"}
                         </div>
                         <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 6 }}>{sh.sub}</div>
@@ -689,7 +689,7 @@ export default function Taxes() {
                 <input ref={w4InputRef} type="file" accept=".pdf" multiple style={{ display: "none" }} onChange={handleW4Upload} />
                 <button
                   onClick={openWizard}
-                  style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(52,211,153,0.15)", color: "#34d399", border: "1px solid #34d399", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
+                  style={{ padding: "6px 14px", borderRadius: 8, background: "rgba(52,211,153,0.15)", color: "var(--green)", border: "1px solid var(--green)", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}
                 >
                   ✦ W-4 Optimizer
                 </button>
@@ -722,7 +722,7 @@ export default function Taxes() {
                         <td style={{ padding: "12px 12px", fontWeight: 600 }}>{w.employer || "—"}</td>
                         <td style={{ padding: "12px 12px", textAlign: "right", textTransform: "capitalize" }}>{(w.filing_status || "—").replace(/_/g, " ")}</td>
                         <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(w.dependents_amount)}</td>
-                        <td style={{ padding: "12px 12px", textAlign: "right", color: w.extra_withholding > 0 ? "#34d399" : "inherit" }}>{w.extra_withholding > 0 ? fmt(w.extra_withholding) : "—"}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: w.extra_withholding > 0 ? "var(--green)" : "inherit" }}>{w.extra_withholding > 0 ? fmt(w.extra_withholding) : "—"}</td>
                         <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--text2)" }}>{w.effective_date || "—"}</td>
                       </tr>
                     ))}
@@ -790,11 +790,11 @@ export default function Taxes() {
                         <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--text2)" }}>{p.pay_date || "—"}</td>
                         <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.gross_pay)}</td>
                         <td style={{ padding: "12px 12px", textAlign: "right", fontWeight: 600 }}>{fmt(p.ytd_gross)}</td>
-                        <td style={{ padding: "12px 12px", textAlign: "right", color: "#f87171" }}>{fmt(p.ytd_federal)}</td>
-                        <td style={{ padding: "12px 12px", textAlign: "right", color: "#f87171" }}>{fmt(p.ytd_state)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--red)" }}>{fmt(p.ytd_federal)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--red)" }}>{fmt(p.ytd_state)}</td>
                         <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.ytd_social_security)}</td>
                         <td style={{ padding: "12px 12px", textAlign: "right" }}>{fmt(p.ytd_medicare)}</td>
-                        <td style={{ padding: "12px 12px", textAlign: "right", color: "#34d399", fontWeight: 600 }}>{fmt(p.ytd_net)}</td>
+                        <td style={{ padding: "12px 12px", textAlign: "right", color: "var(--green)", fontWeight: 600 }}>{fmt(p.ytd_net)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -930,7 +930,7 @@ export default function Taxes() {
                     </select>
                   </label>
                   <button onClick={() => setWizardJobs(wizardJobs.filter((_, idx) => idx !== i))}
-                    style={{ background: "rgba(248,113,113,0.15)", border: "1px solid #f87171", color: "#f87171", borderRadius: 6, padding: "7px 10px", cursor: "pointer", fontSize: 13, alignSelf: "end" }} aria-label="Remove income source">✕</button>
+                    style={{ background: "rgba(248,113,113,0.15)", border: "1px solid var(--red)", color: "var(--red)", borderRadius: 6, padding: "7px 10px", cursor: "pointer", fontSize: 13, alignSelf: "end" }} aria-label="Remove income source">✕</button>
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <label style={{ fontSize: 12, color: "var(--text2)", display: "flex", flexDirection: "column", gap: 4, maxWidth: 200 }}>
@@ -949,7 +949,7 @@ export default function Taxes() {
 
             {/* Calculate button */}
             <button onClick={runWizard} disabled={wizardLoading || wizardJobs.length === 0}
-              style={{ width: "100%", padding: "11px", borderRadius: 8, background: "#34d399", color: "#0d2b1e", border: "none", fontWeight: 700, fontSize: 15, cursor: wizardLoading ? "not-allowed" : "pointer", opacity: wizardLoading ? 0.7 : 1, marginBottom: 24 }}>
+              style={{ width: "100%", padding: "11px", borderRadius: 8, background: "var(--green)", color: "#0d2b1e", border: "none", fontWeight: 700, fontSize: 15, cursor: wizardLoading ? "not-allowed" : "pointer", opacity: wizardLoading ? 0.7 : 1, marginBottom: 24 }}>
               {wizardLoading ? "Calculating…" : "Calculate Optimal Withholding"}
             </button>
 
@@ -987,13 +987,13 @@ export default function Taxes() {
                   return (
                     <div style={{
                       background: isOwe ? "rgba(248,113,113,0.1)" : "rgba(52,211,153,0.1)",
-                      border: `1px solid ${isOwe ? "#f87171" : "#34d399"}`,
+                      border: `1px solid ${isOwe ? "var(--red)" : "var(--green)"}`,
                       borderRadius: 10, padding: 16, marginBottom: 16, textAlign: "center",
                     }}>
                       <div style={{ fontSize: 13, color: "var(--text2)", marginBottom: 4 }}>
                         {isOwe ? "Projected to Owe at Filing (without changes)" : "Projected Refund (without changes)"}
                       </div>
-                      <div style={{ fontSize: 28, fontWeight: 800, color: isOwe ? "#f87171" : "#34d399" }}>
+                      <div style={{ fontSize: 28, fontWeight: 800, color: isOwe ? "var(--red)" : "var(--green)" }}>
                         {isOwe ? "-" : "+"}{fmt(Math.abs(gap))}
                       </div>
                     </div>
@@ -1010,7 +1010,7 @@ export default function Taxes() {
                         <div style={{ fontSize: 12, color: "var(--text2)" }}>{fmt(rec.annual_income)}/yr · {rec.pay_frequency} ({rec.pay_periods} pay periods)</div>
                       </div>
                       {rec.claim_dependents_here && (
-                        <span style={{ background: "rgba(124,58,237,0.2)", color: "#a78bfa", borderRadius: 12, padding: "3px 10px", fontSize: 11, fontWeight: 700 }}>
+                        <span style={{ background: "rgba(124,58,237,0.2)", color: "var(--purple)", borderRadius: 12, padding: "3px 10px", fontSize: 11, fontWeight: 700 }}>
                           Claim Dependents Here
                         </span>
                       )}
@@ -1018,19 +1018,19 @@ export default function Taxes() {
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
                       <div>
                         <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Step 3 (Dependents)</div>
-                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.claim_dependents_here ? "#a78bfa" : "var(--text2)" }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.claim_dependents_here ? "var(--purple)" : "var(--text2)" }}>
                           {rec.recommended_step3_dependents > 0 ? fmt(rec.recommended_step3_dependents) : "$0"}
                         </div>
                       </div>
                       <div>
                         <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Step 4c (Extra/Period)</div>
-                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.recommended_extra_per_period > 0 ? "#fbbf24" : "#34d399" }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.recommended_extra_per_period > 0 ? "var(--yellow)" : "var(--green)" }}>
                           {rec.recommended_extra_per_period > 0 ? fmt(rec.recommended_extra_per_period) : "$0"}
                         </div>
                       </div>
                       <div>
                         <div style={{ fontSize: 11, color: "var(--text2)", marginBottom: 2 }}>Change vs Current</div>
-                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.change_per_period > 0 ? "#f87171" : rec.change_per_period < 0 ? "#34d399" : "var(--text2)" }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: rec.change_per_period > 0 ? "var(--red)" : rec.change_per_period < 0 ? "var(--green)" : "var(--text2)" }}>
                           {rec.change_per_period > 0 ? "+" : ""}{rec.change_per_period !== 0 ? fmt(rec.change_per_period) + "/period" : "No change"}
                         </div>
                       </div>
@@ -1049,7 +1049,7 @@ export default function Taxes() {
               </div>
             )}
             {wizardResult?.error && (
-              <div style={{ color: "#f87171", fontSize: 13, textAlign: "center" }}>Error: {wizardResult.error}</div>
+              <div style={{ color: "var(--red)", fontSize: 13, textAlign: "center" }}>Error: {wizardResult.error}</div>
             )}
           </div>
         </div>

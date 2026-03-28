@@ -31,3 +31,10 @@ dbs:
         retention-check-interval: 1h
         # Sync WAL changes every 1 second
         sync-interval: 1s
+
+      # Local replica — fast recovery without network dependency.
+      # Protects against R2 outages or credential rotation issues.
+      - path: /home/ubuntu/vaultic-backup-local
+        retention: 72h
+        retention-check-interval: 1h
+        sync-interval: 1s
