@@ -174,7 +174,7 @@ function ManualTab() {
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
                 {["Date", "Name", "Category", "Value", ""].map((h, i) => (
-                  <th key={i} style={{
+                  <th key={i} scope="col" style={{
                     textAlign: i === 3 ? "right" : "left",
                     padding: "10px 16px", fontSize: 11, fontWeight: 600,
                     color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px",

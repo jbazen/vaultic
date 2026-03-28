@@ -176,7 +176,7 @@ async def delete_fund(fund_id: int, _user: str = Depends(get_current_user)):
         if not row:
             raise HTTPException(status_code=404, detail="Fund not found")
         conn.execute("UPDATE funds SET is_active = 0 WHERE id = ?", (fund_id,))
-    return {"status": "deleted"}
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -254,4 +254,4 @@ async def delete_transaction(txn_id: int, _user: str = Depends(get_current_user)
         if not row:
             raise HTTPException(status_code=404, detail="Transaction not found")
         conn.execute("DELETE FROM fund_transactions WHERE id = ?", (txn_id,))
-    return {"status": "deleted"}
+    return {"ok": True}

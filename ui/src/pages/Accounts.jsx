@@ -347,7 +347,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
                     <thead>
                       <tr style={{ borderBottom: "1px solid var(--border)" }}>
                         {["Security", "Class", "Ticker", "Shares", "Price", "Value ($)", "% Assets", "Principal ($)", "Gain/Loss ($)", "Gain/Loss (%)"].map(h => (
-                          <th key={h} style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Class" ? "left" : "right",
+                          <th key={h} scope="col" style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Class" ? "left" : "right",
                             color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
                         ))}
                       </tr>
@@ -481,7 +481,7 @@ function HoldingsTable({ holdings, totalValue }) {
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)" }}>
             {["Security", "Ticker", "Type", "Qty", "Price", "Value", "Cost Basis", "Gain/Loss $", "Gain/Loss %", "% Assets"].map(h => (
-              <th key={h} style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Type" ? "left" : "right",
+              <th key={h} scope="col" style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Type" ? "left" : "right",
                 color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
             ))}
           </tr>
@@ -541,7 +541,7 @@ function InvestmentTransactionsTable({ transactions }) {
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)" }}>
             {["Date", "Type", "Subtype", "Security", "Ticker", "Qty", "Amount", "Fees"].map(h => (
-              <th key={h} style={{ padding: "6px 10px 8px",
+              <th key={h} scope="col" style={{ padding: "6px 10px 8px",
                 textAlign: ["Date", "Security", "Type", "Subtype"].includes(h) ? "left" : "right",
                 color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
             ))}

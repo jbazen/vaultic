@@ -71,7 +71,7 @@ class TestFundCRUD:
         fund = _create_fund(client, auth_headers, "To Delete Fund")
         res = client.delete(f"/api/funds/{fund['id']}", headers=auth_headers)
         assert res.status_code == 200
-        assert res.json()["status"] == "deleted"
+        assert res.json()["ok"] is True
 
     def test_deleted_fund_not_in_list(self, client, auth_headers):
         fund = _create_fund(client, auth_headers, "Ghost Fund")

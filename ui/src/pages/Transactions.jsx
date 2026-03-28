@@ -36,7 +36,7 @@ export default function Transactions() {
             <thead>
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
                 {["Date", "Description", "Account", "Category", "Amount"].map(h => (
-                  <th key={h} style={{
+                  <th key={h} scope="col" style={{
                     textAlign: h === "Amount" ? "right" : "left",
                     padding: "12px 20px",
                     fontSize: "11px",

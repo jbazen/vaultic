@@ -605,7 +605,7 @@ function AppCosts() {
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border)" }}>
             {["Service", "Cost", "Notes"].map((h, i) => (
-              <th key={h} style={{
+              <th key={h} scope="col" style={{
                 textAlign: "left", padding: "6px 12px 10px",
                 fontSize: 11, fontWeight: 600, color: "var(--text2)",
                 textTransform: "uppercase", letterSpacing: "0.6px",

@@ -164,4 +164,4 @@ async def delete_entry(entry_id: int, _user: str = Depends(get_current_user)):
     """
     with get_db() as conn:
         conn.execute("DELETE FROM manual_entries WHERE id = ?", (entry_id,))
-    return {"status": "deleted"}
+    return {"ok": True}

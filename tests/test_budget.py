@@ -145,7 +145,7 @@ class TestBudgetGroups:
         g = _create_group(client, auth_headers, "To Delete")
         res = client.delete(f"/api/budget/groups/{g['id']}", headers=auth_headers)
         assert res.status_code == 200
-        assert res.json()["status"] == "deleted"
+        assert res.json()["ok"] is True
 
     def test_get_budget_returns_groups(self, client, auth_headers):
         _create_group(client, auth_headers, "Visible Group")
@@ -183,7 +183,7 @@ class TestBudgetItems:
         item = _create_item(client, auth_headers, g["id"], "To Remove")
         res = client.delete(f"/api/budget/items/{item['id']}", headers=auth_headers)
         assert res.status_code == 200
-        assert res.json()["status"] == "deleted"
+        assert res.json()["ok"] is True
 
 
 # ── Budget amounts ─────────────────────────────────────────────────────────────

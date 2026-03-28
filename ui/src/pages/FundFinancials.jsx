@@ -96,7 +96,7 @@ function FundHistory({ fund, onChanged }) {
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
               {["Date", "Description", "Amount", ""].map((h, i) => (
-                <th key={h} style={{ padding: "4px 8px", textAlign: i === 2 ? "right" : "left",
+                <th key={h} scope="col" style={{ padding: "4px 8px", textAlign: i === 2 ? "right" : "left",
                   color: "var(--text2)", fontWeight: 600, fontSize: 11 }}>{h}</th>
               ))}
             </tr>

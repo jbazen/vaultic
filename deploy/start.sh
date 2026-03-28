@@ -9,9 +9,13 @@ set -e
 
 VAULTIC_DIR="/home/ubuntu/vaultic"
 
-# Export only Litestream vars from .env — grep is safe here because these
-# two keys are simple strings with no special characters.
-export $(grep -E "^LITESTREAM_" "$VAULTIC_DIR/.env" | xargs)
+# Export only Litestream vars from .env — read line-by-line to safely
+# handle values with spaces or special characters.
+while IFS='=' read -r key value; do
+  case "$key" in
+    LITESTREAM_*) export "$key=$value" ;;
+  esac
+done < "$VAULTIC_DIR/.env"
 
 exec /usr/local/bin/litestream replicate \
   -config "$VAULTIC_DIR/deploy/litestream.yml" \

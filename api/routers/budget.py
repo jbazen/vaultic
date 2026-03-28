@@ -625,7 +625,7 @@ async def delete_group(group_id: int, _user: str = Depends(get_current_user)):
         conn.execute(
             "UPDATE budget_groups SET is_deleted = 1 WHERE id = ?", (group_id,)
         )
-    return {"status": "deleted"}
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +697,7 @@ async def delete_item(item_id: int, _user: str = Depends(get_current_user)):
         conn.execute(
             "UPDATE budget_items SET is_deleted = 1 WHERE id = ?", (item_id,)
         )
-    return {"status": "deleted"}
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------

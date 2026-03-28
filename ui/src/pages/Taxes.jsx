@@ -298,7 +298,7 @@ export default function Taxes() {
               <thead>
                 <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
                   {["Year", "W-2 Income", "AGI", "Deduction", "Taxable Inc", "Total Tax", "Eff. Rate", "Withheld", "Result"].map(h => (
-                    <th key={h} style={{
+                    <th key={h} scope="col" style={{
                       padding: "12px 16px",
                       textAlign: h === "Year" ? "left" : "right",
                       fontWeight: 700,
@@ -626,7 +626,7 @@ export default function Taxes() {
                     <thead>
                       <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
                         {["Quarter", "Period", "Due Date", "Amount", "Status"].map(h => (
-                          <th key={h} style={{ padding: "9px 12px", textAlign: h === "Quarter" || h === "Period" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                          <th key={h} scope="col" style={{ padding: "9px 12px", textAlign: h === "Quarter" || h === "Period" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -712,7 +712,7 @@ export default function Taxes() {
                   <thead>
                     <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
                       {["Employer", "Filing Status", "Dependents Credit", "Extra/Period", "Effective Date"].map(h => (
-                        <th key={h} style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                        <th key={h} scope="col" style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -779,7 +779,7 @@ export default function Taxes() {
                   <thead>
                     <tr style={{ borderBottom: "2px solid var(--border)", background: "var(--bg3)" }}>
                       {["Employer", "Pay Date", "Gross (Period)", "YTD Gross", "YTD Federal", "YTD State", "YTD SS", "YTD Medicare", "YTD Net"].map(h => (
-                        <th key={h} style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
+                        <th key={h} scope="col" style={{ padding: "10px 12px", textAlign: h === "Employer" ? "left" : "right", fontWeight: 700, fontSize: 11, textTransform: "uppercase", color: "var(--text2)", letterSpacing: "0.5px" }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
