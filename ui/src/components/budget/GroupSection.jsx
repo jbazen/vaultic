@@ -1,3 +1,6 @@
+/**
+ * GroupSection — Collapsible budget group with drag-and-drop reordering, item list, and inline editing.
+ */
 import { useState } from "react";
 import {
   updateBudgetGroup, deleteBudgetGroup,

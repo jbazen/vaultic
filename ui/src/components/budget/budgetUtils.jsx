@@ -1,3 +1,6 @@
+/**
+ * budgetUtils — Shared constants and helpers for the budget module (palette, month math, drag handle).
+ */
 // ── Shared budget utilities ──────────────────────────────────────────────────
 
 export const PALETTE = [

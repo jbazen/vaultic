@@ -1,3 +1,6 @@
+/**
+ * EditExpenseModal — Modal for editing a transaction's amount, date, merchant, splits, and metadata.
+ */
 import { useState, useEffect } from "react";
 import { getTransaction, saveTransactionSplits, unassignTransaction } from "../../api.js";
 import { fmt } from "../../utils/format.js";

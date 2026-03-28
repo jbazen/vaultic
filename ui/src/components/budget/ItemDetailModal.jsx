@@ -1,3 +1,6 @@
+/**
+ * ItemDetailModal — Modal showing a budget item's assigned transactions with inline rename and edit access.
+ */
 import { useState, useEffect } from "react";
 import { getItemDetail, updateBudgetItem } from "../../api.js";
 import { fmt } from "../../utils/format.js";

@@ -1,3 +1,6 @@
+/**
+ * MonthPicker — Dropdown calendar for selecting a budget month and year.
+ */
 import { useState, useEffect, useRef } from "react";
 import { MONTH_NAMES } from "./budgetUtils.jsx";
 

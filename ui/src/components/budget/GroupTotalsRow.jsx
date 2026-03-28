@@ -1,3 +1,6 @@
+/**
+ * GroupTotalsRow — Summary row displaying a budget group's total planned, spent, and remaining amounts.
+ */
 import { fmt } from "../../utils/format.js";
 
 export default function GroupTotalsRow({ group, showSpent }) {

@@ -1,3 +1,6 @@
+/**
+ * AmountCell — Inline-editable dollar amount cell for budget planned values.
+ */
 import { useState, useRef } from "react";
 import { fmt } from "../../utils/format.js";
 

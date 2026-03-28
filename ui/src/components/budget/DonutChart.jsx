@@ -1,3 +1,6 @@
+/**
+ * DonutChart — SVG donut visualization of expense group totals (planned, spent, or remaining).
+ */
 import { getGroupColor } from "./budgetUtils.jsx";
 import { fmt } from "../../utils/format.js";
 

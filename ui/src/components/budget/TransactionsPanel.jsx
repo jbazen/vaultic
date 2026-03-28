@@ -1,3 +1,6 @@
+/**
+ * TransactionsPanel — Tabbed panel for managing pending, new, tracked, and deleted budget transactions.
+ */
 import { useState, useEffect } from "react";
 import {
   getUnassignedTransactions, getAssignedTransactions,

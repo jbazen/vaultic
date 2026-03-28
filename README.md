@@ -76,13 +76,15 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 
 ```
 vaultic/
+├── CLAUDE.md                # Coding standards (for AI and human contributors)
 ├── api/
 │   ├── main.py              # FastAPI app, middleware, router registration
 │   ├── database.py          # SQLite schema, migrations, connection context manager
 │   ├── auth.py              # JWT, bcrypt, TOTP (pyotp), user management
 │   ├── dependencies.py      # get_current_user, get_client_ip FastAPI deps
 │   ├── encryption.py        # Fernet encrypt/decrypt for Plaid access tokens
-│   ├── sage.py              # Sage AI engine: tool definitions, tool execution, Claude loop
+│   ├── sage.py              # Sage AI engine: tool definitions, Claude loop
+│   ├── sage_tools.py        # 21 Sage tool functions + TOOL_DISPATCH dict
 │   ├── security_log.py      # Audit logger: logins, API calls, syncs, Sage queries
 │   ├── coinbase_sync.py     # Coinbase Advanced Trade API: CDP JWT auth, fetch/store crypto balances
 │   ├── sync.py              # Plaid transaction sync (cursor-based), net worth snapshots
@@ -93,28 +95,49 @@ vaultic/
 │       ├── accounts.py      # /api/accounts/* — list, balances, transactions, rename
 │       ├── net_worth.py     # /api/net-worth/* — latest snapshot, history
 │       ├── manual.py        # /api/manual/* — CRUD for manual asset entries + holdings
-│       ├── sage.py          # /api/sage/* — chat endpoint, TTS endpoint (OpenAI fable voice)
+│       ├── sage.py          # /api/sage/* — chat endpoint, TTS endpoint
 │       ├── crypto.py        # /api/crypto/* — Coinbase account data
-│       └── pdf.py           # /api/pdf/* — PDF ingestion (pdfplumber + Sonnet), 4-tier account matching, holdings + activity summary, historical snapshots
+│       ├── budget.py        # /api/budget/* — groups, items, amounts, auto-assign, splits
+│       ├── tax.py           # /api/tax/* — returns, projections, W-4 wizard, 1040-ES
+│       ├── paystubs.py      # /api/paystubs/* — paystub upload and parsing
+│       ├── funds.py         # /api/funds/* — sinking fund CRUD
+│       ├── market.py        # /api/market/* — market rates
+│       ├── push.py          # /api/push/* — push notification subscriptions
+│       ├── sheet.py         # /api/sheet/* — Google Sheet fund financials proxy
+│       ├── vault.py         # /api/vault/* — document vault
+│       ├── pdf.py           # /api/pdf/* — PDF ingestion (Sonnet fallback), 4-tier matching
+│       └── pdf_nfs.py       # /api/pdf/nfs — deterministic NFS/Commonwealth parser ($0 cost)
 ├── ui/
 │   ├── public/
 │   │   └── favicon.png      # Tab icon + sidebar logo
 │   ├── src/
 │   │   ├── App.jsx          # Shell: sidebar nav, routes, auth gate, SageChat mount
-│   │   ├── App.css          # Global CSS variables, layout, components
+│   │   ├── App.css          # Global CSS variables, layout, utility classes
 │   │   ├── api.js           # All API calls (apiFetch wrapper with JWT + 401 handling)
 │   │   ├── pages/
 │   │   │   ├── Login.jsx        # Two-step login: credentials → 2FA code
-│   │   │   ├── Dashboard.jsx    # Master view: net worth, all accounts, charts, transactions
+│   │   │   ├── Dashboard.jsx    # Master view: net worth, accounts, charts
 │   │   │   ├── Accounts.jsx     # Account list with balance history charts
+│   │   │   ├── Budget.jsx       # Zero-based monthly budget (thin orchestrator)
+│   │   │   ├── Taxes.jsx        # Tax module (thin orchestrator)
 │   │   │   ├── Transactions.jsx # Transaction browser
-│   │   │   ├── Manual.jsx       # Manual entry CRUD
-│   │   │   ├── PDFImport.jsx    # Drag & drop PDF import, preview, confirm save
-│   │   │   └── Settings.jsx     # Password, 2FA enrollment, user management, security log
+│   │   │   ├── FundFinancials.jsx # Native funds + Google Sheet viewer
+│   │   │   ├── Import.jsx       # CSV/PDF import
+│   │   │   ├── Documents.jsx    # Document vault
+│   │   │   ├── Review.jsx       # Pending transaction review queue
+│   │   │   └── Settings.jsx     # Password, 2FA, user management, security log
 │   │   └── components/
-│   │       ├── SageChat.jsx     # Floating AI chat panel with Hey Sage, voice, session persistence
+│   │       ├── SageChat.jsx     # Floating AI chat panel with Hey Sage, voice
 │   │       ├── NetWorthChart.jsx
-│   │       └── PlaidLink.jsx
+│   │       ├── PlaidLink.jsx
+│   │       ├── budget/          # 11 sub-components (GroupSection, ItemRow, etc.)
+│   │       ├── dashboard/       # 3 sub-components (AccountsList, etc.)
+│   │       └── taxes/           # 7 sub-components (W4Wizard, EstPayments, etc.)
+│   ├── tests/e2e/
+│   │   ├── helpers.js       # Shared mock API setup for all E2E tests
+│   │   ├── auth.spec.js     # Login, wrong password, 2FA, logout
+│   │   ├── dashboard.spec.js # Net worth, accounts, navigation
+│   │   └── sage.spec.js     # Sage chat, response, persistence
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
@@ -818,16 +841,20 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend unit tests — 137 tests across:**
+**Backend unit tests — 232 tests across:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
 - `test_accounts.py` — Accounts, net worth (investable field, monthly aggregation), manual entries (all 10 categories)
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable
 - `test_users.py` — Create, delete, change password, admin endpoints
 - `test_sage.py` — Chat endpoint, tool dispatch, rate limiting (429)
-- `test_pdf.py` — PDF ingestion, `_salvage_json` recovery, duplicate prevention, holdings + activity_summary save
+- `test_pdf.py` — PDF ingestion (23 tests): `_salvage_json` recovery, duplicate prevention, Tier 1/2/3 matching, is_historical, force_holdings, `_normalize_acct`
+- `test_pdf_nfs.py` — NFS deterministic parser (31 tests): holding extraction, section parsing, cash sweeps, negative amounts
 - `test_rate_limit.py` — Sliding window rate limit behavior
 - `test_transactions.py` — Balance history endpoints, transaction insertion
-- `test_sheet.py` — Google Sheet CSV parser (17 tests): `_parse_dollar`, `_month_sort_key`, endpoint structure/values/auth/error handling, mocked HTTP
+- `test_sheet.py` — Google Sheet CSV parser (17 tests): `_parse_dollar`, `_month_sort_key`, endpoint structure/values/auth/error handling
+- `test_budget.py` — Budget CRUD (18 tests): auth guards, route-order regression, group/item CRUD, reorder, amounts, auto-assign, carryforward, CSV import
+- `test_funds.py` — Sinking fund CRUD (16 tests)
+- `test_tax.py` — Tax endpoints: returns, projections, W-4 wizard, estimated payments
 
 **Playwright E2E — 18 tests across:**
 - `tests/e2e/auth.spec.js` — Login, wrong password, 2FA step, logout
@@ -842,7 +869,6 @@ All E2E tests use mocked API routes — no live backend required.
 - ⬜ Plaid link token, token exchange, sync (requires Plaid SDK mock)
 - ⬜ OpenAI TTS endpoint (requires OpenAI mock)
 - ⬜ Security log endpoint
-- ⬜ Budget CRUD endpoints (groups, items, amounts, assignment, auto-assign)
 
 **Frontend:**
 - ⬜ No component unit tests (no Vitest/Jest setup)

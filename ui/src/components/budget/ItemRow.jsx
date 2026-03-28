@@ -1,3 +1,6 @@
+/**
+ * ItemRow — Single budget line item row with inline name editing, planned amount, and drag-to-reorder.
+ */
 import { useState } from "react";
 import { updateBudgetItem, deleteBudgetItem, setBudgetAmount } from "../../api.js";
 import { fmt } from "../../utils/format.js";

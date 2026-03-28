@@ -1,3 +1,6 @@
+/**
+ * SummaryPanel — Budget overview sidebar with donut chart, income/expense group breakdown, and balance indicator.
+ */
 import { useState } from "react";
 import DonutChart from "./DonutChart.jsx";
 import { getGroupColor } from "./budgetUtils.jsx";
