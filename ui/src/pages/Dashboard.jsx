@@ -82,6 +82,7 @@ export default function Dashboard() {
   }
 
   useEffect(() => {
+    mountedRef.current = true;   // Reset on remount (React 18 StrictMode re-runs effects)
     load();
     return () => { mountedRef.current = false; };
   }, []);

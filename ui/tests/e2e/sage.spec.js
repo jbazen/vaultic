@@ -16,7 +16,7 @@ test.describe("Sage Chat", () => {
   });
 
   test("Sage responds to typed message", async ({ page }) => {
-    await page.route("/api/sage/chat", r =>
+    await page.route("**/api/sage/chat", r =>
       r.fulfill({ json: { response: "Your net worth looks strong!", history: [] } }));
 
     await page.getByTitle("Chat with Sage").click();
@@ -28,14 +28,15 @@ test.describe("Sage Chat", () => {
   test("Sage panel persists when navigating between pages", async ({ page }) => {
     await page.getByTitle("Chat with Sage").click();
     await expect(page.getByText("I'm Sage")).toBeVisible();
-    // Navigate to another page
+    // Navigate to another page — expand the Finance group first
+    await page.getByRole("button", { name: /finance/i }).click();
     await page.getByRole("link", { name: /transactions/i }).click();
     // Sage panel should still be open
     await expect(page.getByText("I'm Sage")).toBeVisible();
   });
 
   test("closing and reopening Sage panel shows the same session", async ({ page }) => {
-    await page.route("/api/sage/chat", r =>
+    await page.route("**/api/sage/chat", r =>
       r.fulfill({ json: { response: "Hello! Your cash balance is $5,000.", history: [] } }));
 
     await page.getByTitle("Chat with Sage").click();

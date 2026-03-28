@@ -29,12 +29,14 @@ test.describe("Dashboard", () => {
   });
 
   test("navigation to transactions works", async ({ page }) => {
+    // Transactions is inside the collapsed "Finance" nav group — expand it first
+    await page.getByRole("button", { name: /finance/i }).click();
     await page.getByRole("link", { name: /transactions/i }).click();
     await expect(page).toHaveURL(/transactions/);
   });
 
   test("navigation back to dashboard works", async ({ page }) => {
-    await page.getByRole("link", { name: /transactions/i }).click();
+    await page.getByRole("link", { name: /settings/i }).click();
     await page.getByRole("link", { name: /dashboard/i }).click();
     await expect(page.getByText("Net Worth")).toBeVisible();
   });
