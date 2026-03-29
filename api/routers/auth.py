@@ -156,6 +156,24 @@ async def refresh_token(body: RefreshRequest, request: Request):
 
 # ── Logout ────────────────────────────────────────────────────────────────────
 
+@router.post("/revoke-all-sessions")
+async def revoke_all_sessions(request: Request, username: str = Depends(get_current_user)):
+    """Revoke every refresh token for the current user — signs out all mobile devices.
+
+    The caller's own web session (access token) remains valid until its 30-day
+    expiry; only the long-lived refresh tokens (mobile "keep me signed in") are
+    cleared. Useful when the mobile app has no logout UI.
+    """
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE username = ?",
+            (username,),
+        )
+    ip = get_client_ip(request)
+    security_log.log_token_event(ip, username, "ALL_SESSIONS_REVOKED")
+    return {"ok": True}
+
+
 @router.post("/logout")
 async def logout(
     request: Request,

@@ -155,6 +155,12 @@ export async function logout() {
   window.dispatchEvent(new Event("auth:logout"));
 }
 
+/** Revoke all refresh tokens for the current user (signs out all mobile devices). */
+export async function revokeAllSessions() {
+  const res = await apiFetch("/api/auth/revoke-all-sessions", { method: "POST" });
+  return res.json();
+}
+
 /**
  * True if the user has a valid (or refreshable) session.
  * - If access token is present and not expired → true

@@ -3,6 +3,7 @@ import {
   getMe, getUsers, createUser, deleteUser, changePassword,
   totpSetup, totpConfirm, disable2FA, getSecurityLog,
   subscribePush, unsubscribePush, getPushSubscription, sendTestPush,
+  revokeAllSessions,
 } from "../api.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -542,6 +543,40 @@ function PushNotifications() {
 }
 
 
+function ActiveSessions() {
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+
+  async function handleRevoke() {
+    if (!window.confirm("Sign out all mobile devices? They will need to log in again.")) return;
+    setLoading(true);
+    try {
+      await revokeAllSessions();
+      setDone(true);
+    } catch (e) {
+      alert(e.message || "Failed to revoke sessions.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 14 }}>
+        Signs out every device using a "Keep me signed in" session (mobile).
+        Your current web session stays active.
+      </p>
+      {done
+        ? <p style={{ color: "var(--green)", fontSize: 13 }}>All mobile sessions signed out.</p>
+        : <button className="btn-danger" onClick={handleRevoke} disabled={loading}>
+            {loading ? "Signing out…" : "Sign out all devices"}
+          </button>
+      }
+    </div>
+  );
+}
+
+
 export default function Settings() {
   const [me, setMe] = useState(null);
 
@@ -572,6 +607,10 @@ export default function Settings() {
 
       <Section title="Security Log">
         <SecurityLog />
+      </Section>
+
+      <Section title="Active Sessions">
+        <ActiveSessions />
       </Section>
 
       <Section title="Push Notifications">
