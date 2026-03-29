@@ -3,6 +3,8 @@ import io
 import re
 import time
 import uuid
+import hashlib
+import secrets
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -227,9 +229,80 @@ def seed_user_from_env():
             )
 
 
-def create_token(username: str) -> str:
+# ── Refresh token helpers ──────────────────────────────────────────────────────
+
+REFRESH_TOKEN_EXPIRE_DAYS = 90  # Rolling: resets on every use
+
+
+def _hash_token(raw: str) -> str:
+    """SHA-256 hash a raw token string for safe DB storage."""
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def create_refresh_token(username: str) -> str:
+    """Issue a new refresh token, store its hash in the DB, return the raw value.
+
+    The raw token is URL-safe base64 (48 bytes = 64 chars) — never stored in DB.
+    Only the SHA-256 hash is persisted so a DB leak can't be weaponised directly.
+    """
+    from api.database import get_db
+    raw = secrets.token_urlsafe(48)
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    ).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO refresh_tokens (token_hash, username, expires_at) VALUES (?, ?, ?)",
+            (_hash_token(raw), username, expires_at),
+        )
+    return raw
+
+
+def validate_refresh_token(raw: str) -> str | None:
+    """Return the username if the refresh token is valid and unexpired, else None."""
+    from api.database import get_db
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT username FROM refresh_tokens
+               WHERE token_hash = ? AND revoked = 0 AND expires_at > ?""",
+            (_hash_token(raw), now),
+        ).fetchone()
+    return row["username"] if row else None
+
+
+def rotate_refresh_token(old_raw: str, username: str) -> str:
+    """Revoke the old refresh token and issue a fresh one (rolling 90-day window)."""
+    from api.database import get_db
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?",
+            (_hash_token(old_raw),),
+        )
+    return create_refresh_token(username)
+
+
+def revoke_refresh_token(raw: str):
+    """Mark a refresh token as revoked — logout kills the session immediately."""
+    from api.database import get_db
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?",
+            (_hash_token(raw),),
+        )
+
+
+# ── Access token helpers ───────────────────────────────────────────────────────
+
+def create_token(username: str, hours: int | None = None) -> str:
+    """Issue a signed access token.
+
+    hours overrides TOKEN_EXPIRE_HOURS:
+      - Web (no remember_me): 720 h (30 days) — passed explicitly by the router
+      - Mobile (remember_me):   1 h — short-lived; paired with a refresh token
+    """
     now = datetime.now(timezone.utc)
-    exp = now + timedelta(hours=TOKEN_EXPIRE_HOURS)
+    exp = now + timedelta(hours=hours if hours is not None else TOKEN_EXPIRE_HOURS)
     payload = {"sub": username, "exp": exp, "iat": now, "jti": str(uuid.uuid4())}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 

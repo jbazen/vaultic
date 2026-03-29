@@ -1,8 +1,85 @@
-const getToken = () => localStorage.getItem("vaultic_token");
-const setToken = (t) => localStorage.setItem("vaultic_token", t);
-const clearToken = () => localStorage.removeItem("vaultic_token");
+// ── Token storage ─────────────────────────────────────────────────────────────
+// Access tokens and refresh tokens are both stored in localStorage.
+// localStorage survives browser close/reopen, so the user stays signed in
+// across sessions until expiry or logout.
+
+const getToken        = () => localStorage.getItem("vaultic_token");
+const setToken        = (t) => localStorage.setItem("vaultic_token", t);
+const clearToken      = () => localStorage.removeItem("vaultic_token");
+
+const getRefreshToken  = () => localStorage.getItem("vaultic_refresh_token");
+const setRefreshToken  = (t) => localStorage.setItem("vaultic_refresh_token", t);
+const clearRefreshToken = () => localStorage.removeItem("vaultic_refresh_token");
+
+// ── JWT expiry helper ─────────────────────────────────────────────────────────
+
+/** Decode the JWT expiry claim (no signature verification — timing only). */
+function getTokenExpiry(token) {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return (payload.exp || 0) * 1000; // exp is seconds → ms
+  } catch {
+    return 0;
+  }
+}
+
+// ── Silent refresh ────────────────────────────────────────────────────────────
+
+// Guard: prevents concurrent refresh calls if multiple requests fire simultaneously
+let _refreshing = null;
+
+/**
+ * If the access token is expired or within 2 minutes of expiry, and a refresh
+ * token is available, silently swap in a fresh access token before the request.
+ * Uses a shared promise (_refreshing) so concurrent calls don't double-refresh.
+ */
+async function ensureFreshToken() {
+  const token        = getToken();
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) return; // Web session — no silent refresh
+
+  // If no access token at all, or it expires within 2 minutes, refresh now
+  const TWO_MIN = 2 * 60 * 1000;
+  const needsRefresh = !token || (getTokenExpiry(token) - Date.now() < TWO_MIN);
+  if (!needsRefresh) return;
+
+  if (_refreshing) {
+    await _refreshing; // Another call already refreshing — wait for it
+    return;
+  }
+
+  _refreshing = (async () => {
+    try {
+      const res = await fetch("/api/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setToken(data.token);
+        setRefreshToken(data.refresh_token);
+      } else {
+        // Refresh token is invalid/expired — force full logout
+        clearToken();
+        clearRefreshToken();
+        window.dispatchEvent(new Event("auth:logout"));
+      }
+    } catch {
+      // Network error — don't force logout; the subsequent request will handle 401
+    }
+  })();
+
+  await _refreshing;
+  _refreshing = null;
+}
+
+// ── Core fetch wrapper ────────────────────────────────────────────────────────
 
 async function apiFetch(path, options = {}) {
+  // Silently refresh the access token if it's expired and we have a refresh token
+  await ensureFreshToken();
+
   const token = getToken();
   const headers = { "Content-Type": "application/json", ...options.headers };
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -11,6 +88,7 @@ async function apiFetch(path, options = {}) {
 
   if (res.status === 401) {
     clearToken();
+    clearRefreshToken();
     window.dispatchEvent(new Event("auth:logout"));
     throw new Error("Session expired");
   }
@@ -23,43 +101,71 @@ async function apiFetch(path, options = {}) {
   return res;
 }
 
-export async function login(username, password) {
+// ── Auth functions ────────────────────────────────────────────────────────────
+
+/**
+ * Log in with username + password.
+ * rememberMe=true issues a refresh token (mobile "keep me signed in").
+ * rememberMe=false issues a 30-day web access token only.
+ */
+export async function login(username, password, rememberMe = false) {
   const res = await fetch("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, remember_me: rememberMe }),
   });
   if (!res.ok) throw new Error("Invalid credentials");
   const data = await res.json();
   if (data.requires_2fa) return { requires_2fa: true, pending_token: data.pending_token };
   setToken(data.token);
+  if (data.refresh_token) setRefreshToken(data.refresh_token);
   return { requires_2fa: false };
 }
 
-export async function verify2FA(pendingToken, code) {
+/**
+ * Complete 2FA verification.
+ * rememberMe must match what was passed at the login step.
+ */
+export async function verify2FA(pendingToken, code, rememberMe = false) {
   const res = await fetch("/api/auth/verify-2fa", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pending_token: pendingToken, code }),
+    body: JSON.stringify({ pending_token: pendingToken, code, remember_me: rememberMe }),
   });
   if (!res.ok) throw new Error("Invalid or expired code");
-  const { token } = await res.json();
-  setToken(token);
+  const data = await res.json();
+  setToken(data.token);
+  if (data.refresh_token) setRefreshToken(data.refresh_token);
 }
 
 export async function logout() {
-  // Revoke the token server-side before clearing it locally
+  const refreshToken = getRefreshToken();
   try {
-    await apiFetch("/api/auth/logout", { method: "POST" });
+    // Send refresh token so the server revokes it immediately — prevents the
+    // 90-day window from surviving a logout on mobile.
+    await apiFetch("/api/auth/logout", {
+      method: "POST",
+      body: refreshToken ? JSON.stringify({ refresh_token: refreshToken }) : undefined,
+    });
   } catch {
     // If server is unreachable, still clear locally
   }
   clearToken();
+  clearRefreshToken();
   window.dispatchEvent(new Event("auth:logout"));
 }
 
+/**
+ * True if the user has a valid (or refreshable) session.
+ * - If access token is present and not expired → true
+ * - If access token is expired but refresh token exists → true (ensureFreshToken
+ *   will swap it in transparently on the next API call)
+ * - Otherwise → false (show login screen)
+ */
 export function isAuthed() {
-  return !!getToken();
+  const token = getToken();
+  if (token && getTokenExpiry(token) > Date.now()) return true;
+  return !!getRefreshToken(); // mobile: still authenticated, will refresh on next request
 }
 
 // --- Net worth ---

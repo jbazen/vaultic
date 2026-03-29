@@ -7,8 +7,9 @@ export default function Login({ onLogin }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
 
-  // 2FA state
+  // 2FA state — pendingToken bridges the login → verify-2fa step
   const [needs2FA, setNeeds2FA] = useState(false);
   const [pendingToken, setPendingToken] = useState("");
   const [code, setCode] = useState("");
@@ -18,7 +19,7 @@ export default function Login({ onLogin }) {
     setError("");
     setLoading(true);
     try {
-      const result = await login(username, password);
+      const result = await login(username, password, rememberMe);
       if (result.requires_2fa) {
         setPendingToken(result.pending_token);
         setNeeds2FA(true);
@@ -37,7 +38,9 @@ export default function Login({ onLogin }) {
     setError("");
     setLoading(true);
     try {
-      await verify2FA(pendingToken, code);
+      // rememberMe is carried through from the login form so the server issues
+      // the correct token type (short-lived + refresh vs 30-day web token)
+      await verify2FA(pendingToken, code, rememberMe);
       onLogin();
     } catch (err) {
       setError(err.message || "Invalid or expired code");
@@ -89,6 +92,19 @@ export default function Login({ onLogin }) {
                 </button>
               </div>
             </div>
+            {/* "Keep me signed in" — issues a long-lived refresh token so the
+                user never needs to log in again on this device (mobile use case).
+                Web users leave this unchecked; their session expires in 30 days. */}
+            <label style={{ display: "flex", alignItems: "center", gap: 8,
+              fontSize: "13px", color: "var(--text2)", marginBottom: "16px", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={e => setRememberMe(e.target.checked)}
+                style={{ accentColor: "var(--accent)", width: 15, height: 15 }}
+              />
+              Keep me signed in
+            </label>
             {error && <p style={{ color: "var(--red)", fontSize: "13px", marginBottom: "12px" }}>{error}</p>}
             <button className="btn btn-primary" type="submit" disabled={loading}
               style={{ width: "100%", justifyContent: "center", marginTop: "4px" }}>

@@ -620,6 +620,19 @@ MIGRATIONS = [
     )""",
     # Index for fast date-range queries (the most common access pattern)
     "CREATE INDEX IF NOT EXISTS idx_financial_events_user_date ON financial_events(username, start_dt, is_active)",
+
+    # ── Refresh tokens (mobile "keep me signed in") ─────────────────────────
+    # Only the SHA-256 hash of the raw token is stored — never the raw value.
+    # Rotation: each /auth/refresh call revokes the old row and inserts a new one.
+    # Logout: sets revoked=1 so even a stolen copy becomes useless immediately.
+    """CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        token_hash TEXT NOT NULL UNIQUE,
+        username   TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked    INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 
