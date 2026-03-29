@@ -553,3 +553,204 @@
   border: 1px solid #f59e0b;
   color: #f59e0b;
 }
+
+/* ── react-big-calendar dark theme overrides ─────────────────────────────── */
+
+/*
+ * RBC ships with a light theme. These overrides remap every RBC colour token
+ * to Vaultic CSS variables so the calendar matches the dark palette.
+ * Scoped to .calendar-rbc-wrapper to avoid bleeding into other components.
+ */
+
+.calendar-rbc-wrapper {
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Toolbar (header with month/week/day buttons + prev/next/today) */
+.calendar-rbc-wrapper .rbc-toolbar {
+  background: var(--bg2);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.calendar-rbc-wrapper .rbc-toolbar button {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.calendar-rbc-wrapper .rbc-toolbar button:hover {
+  background: var(--bg);
+}
+
+.calendar-rbc-wrapper .rbc-toolbar button.rbc-active {
+  background: var(--accent);
+  color: #0d0f14;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.calendar-rbc-wrapper .rbc-toolbar-label {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Calendar grid background */
+.calendar-rbc-wrapper .rbc-month-view,
+.calendar-rbc-wrapper .rbc-time-view,
+.calendar-rbc-wrapper .rbc-agenda-view {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+}
+
+/* Day / date header cells */
+.calendar-rbc-wrapper .rbc-header {
+  background: var(--bg3);
+  color: var(--text2);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 0;
+}
+
+.calendar-rbc-wrapper .rbc-header + .rbc-header {
+  border-left: 1px solid var(--border);
+}
+
+/* Month view day cells */
+.calendar-rbc-wrapper .rbc-day-bg {
+  background: var(--bg2);
+}
+
+.calendar-rbc-wrapper .rbc-day-bg + .rbc-day-bg,
+.calendar-rbc-wrapper .rbc-month-row + .rbc-month-row {
+  border-color: var(--border);
+}
+
+.calendar-rbc-wrapper .rbc-off-range-bg {
+  background: var(--bg); /* dimmer for days outside current month */
+}
+
+/* Today highlight */
+.calendar-rbc-wrapper .rbc-today {
+  background: rgba(79, 142, 247, 0.08);
+}
+
+/* Date number in month cell */
+.calendar-rbc-wrapper .rbc-date-cell {
+  color: var(--text2);
+  font-size: 0.78rem;
+  padding: 4px 6px;
+}
+
+.calendar-rbc-wrapper .rbc-date-cell.rbc-now {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Week/day time gutter */
+.calendar-rbc-wrapper .rbc-time-gutter .rbc-timeslot-group,
+.calendar-rbc-wrapper .rbc-time-header-gutter {
+  background: var(--bg3);
+}
+
+.calendar-rbc-wrapper .rbc-label {
+  color: var(--text2);
+  font-size: 0.72rem;
+}
+
+/* Time slot rows */
+.calendar-rbc-wrapper .rbc-timeslot-group {
+  border-bottom: 1px solid var(--border);
+}
+
+.calendar-rbc-wrapper .rbc-time-slot {
+  color: var(--text2);
+}
+
+/* All-day row in week/day view */
+.calendar-rbc-wrapper .rbc-allday-cell {
+  background: var(--bg3);
+}
+
+.calendar-rbc-wrapper .rbc-time-header-content {
+  border-left: 1px solid var(--border);
+}
+
+/* Event popups ("+N more") */
+.calendar-rbc-wrapper .rbc-overlay {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+
+.calendar-rbc-wrapper .rbc-overlay-header {
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: 0.78rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Show-more link */
+.calendar-rbc-wrapper .rbc-show-more {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: transparent;
+}
+
+/* Agenda view */
+.calendar-rbc-wrapper .rbc-agenda-view table {
+  background: var(--bg2);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.calendar-rbc-wrapper .rbc-agenda-date-cell,
+.calendar-rbc-wrapper .rbc-agenda-time-cell {
+  color: var(--text2);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.calendar-rbc-wrapper .rbc-agenda-event-cell {
+  color: var(--text);
+}
+
+/* Current-time indicator line in week/day view */
+.calendar-rbc-wrapper .rbc-current-time-indicator {
+  background-color: var(--accent);
+  height: 2px;
+}
+
+/* Slot selection highlight */
+.calendar-rbc-wrapper .rbc-slot-selection {
+  background: rgba(79, 142, 247, 0.15);
+  border: 1px solid var(--accent);
+}
+
+/* Selected event */
+.calendar-rbc-wrapper .rbc-selected {
+  filter: brightness(1.2);
+}
+
+/* General border cleanup */
+.calendar-rbc-wrapper .rbc-month-view,
+.calendar-rbc-wrapper .rbc-time-view {
+  border-color: var(--border);
+}
+
+.calendar-rbc-wrapper .rbc-row-segment {
+  padding: 1px 2px;
+}
+

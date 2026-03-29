@@ -596,6 +596,30 @@ MIGRATIONS = [
     # RBAC: admin flag for user management and security log access.
     # Existing users (jbazen, hbazen) are set to admin; new users default to non-admin.
     "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
+
+    # ── Financial Calendar ─────────────────────────────────────────────────────
+    # financial_events: one row per calendar event per user.
+    # auto_generated=1 rows are seeded by the system (tax deadlines, budget meetings).
+    # all_day=1: start_dt is "YYYY-MM-DD"; all_day=0: start_dt is "YYYY-MM-DDTHH:MM:SS".
+    # recurring is informational metadata — expansion into future instances is done
+    # at seed time (one row per concrete occurrence) rather than on-the-fly.
+    """CREATE TABLE IF NOT EXISTS financial_events (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        username             TEXT NOT NULL,
+        title                TEXT NOT NULL,
+        description          TEXT,
+        start_dt             TEXT NOT NULL,
+        end_dt               TEXT,
+        all_day              INTEGER DEFAULT 1,
+        event_type           TEXT NOT NULL DEFAULT 'custom',
+        recurring            TEXT NOT NULL DEFAULT 'none',
+        reminder_days_before INTEGER DEFAULT 3,
+        auto_generated       INTEGER DEFAULT 0,
+        is_active            INTEGER DEFAULT 1,
+        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # Index for fast date-range queries (the most common access pattern)
+    "CREATE INDEX IF NOT EXISTS idx_financial_events_user_date ON financial_events(username, start_dt, is_active)",
 ]
 
 

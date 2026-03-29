@@ -13,6 +13,7 @@ import PortfolioPerformanceCard from "../components/dashboard/PortfolioPerforman
 import { StatCard, AccountRow, ManualAccountRow } from "../components/dashboard/AccountRows.jsx";
 import { isRetirementAccount } from "../utils/accounts.js";
 import { fmt, fmtSigned, fmtDate } from "../utils/format.js";
+import CalendarSection from "../components/calendar/CalendarSection.jsx";
 
 // ── Category config ───────────────────────────────────────────────────────────
 
@@ -399,6 +400,9 @@ export default function Dashboard() {
           ))}
         </div>
       )}
+
+      {/* ── Financial Calendar ── */}
+      <CalendarSection />
     </div>
   );
 }

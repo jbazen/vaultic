@@ -873,3 +873,30 @@ export async function deviceAuth() {
   }
 }
 
+
+// ── Financial Calendar ─────────────────────────────────────────────────────────
+export async function getUpcomingEvents(days = 14) {
+  const res = await apiFetch(`/api/calendar/upcoming?days=${days}`);
+  return res.json();
+}
+export async function seedCalendarEvents() {
+  const res = await apiFetch("/api/calendar/seed", { method: "POST" });
+  return res.json();
+}
+export async function getCalendarEvents(fromDate, toDate) {
+  const params = fromDate && toDate ? `?from_date=${fromDate}&to_date=${toDate}` : "";
+  const res = await apiFetch(`/api/calendar${params}`);
+  return res.json();
+}
+export async function createCalendarEvent(data) {
+  const res = await apiFetch("/api/calendar", { method: "POST", body: JSON.stringify(data) });
+  return res.json();
+}
+export async function updateCalendarEvent(id, data) {
+  const res = await apiFetch(`/api/calendar/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+  return res.json();
+}
+export async function deleteCalendarEvent(id) {
+  const res = await apiFetch(`/api/calendar/${id}`, { method: "DELETE" });
+  return res.json();
+}

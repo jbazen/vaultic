@@ -40,6 +40,15 @@ export async function mockAllAPIs(page) {
   await page.route("**/api/market/rates*", r =>
     r.fulfill({ json: { rates: [] } }));
 
+  // ── Calendar ──
+  // Sub-routes first (specific before parameterized), then base
+  await page.route("**/api/calendar/upcoming*", r =>
+    r.fulfill({ json: [] }));
+  await page.route("**/api/calendar/seed", r =>
+    r.fulfill({ json: { ok: true, inserted: 3 } }));
+  await page.route("**/api/calendar*", r =>
+    r.fulfill({ json: [] }));
+
   // ── Sage ──
   await page.route("**/api/sage/chat", r =>
     r.fulfill({ json: { response: "Hello! I'm Sage, your financial assistant.", history: [] } }));

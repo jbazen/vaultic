@@ -602,6 +602,37 @@ def tool_get_tax_history(inputs, username):
     return str(result)
 
 
+# ── Calendar tool ─────────────────────────────────────────────────────────────
+
+def tool_get_upcoming_events(inputs, username):
+    """Return the next N days of financial calendar events for this user.
+
+    Useful for proactive reminders — call this at the start of a session to
+    notice upcoming tax deadlines, budget meetings, or payday markers.
+    """
+    from datetime import date as _date, timedelta
+    days = min(inputs.get("days", 30), 90)
+    today = _date.today()
+    until = (today + timedelta(days=days)).isoformat()
+    today_str = today.isoformat()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT title, description, start_dt, end_dt, all_day, event_type, days_until
+               FROM (
+                 SELECT title, description, start_dt, end_dt, all_day, event_type,
+                        CAST(julianday(DATE(start_dt)) - julianday(?) AS INTEGER) AS days_until
+                 FROM financial_events
+                 WHERE username = ? AND is_active = 1
+                   AND DATE(start_dt) BETWEEN ? AND ?
+               ) ORDER BY start_dt""",
+            (today_str, username, today_str, until),
+        ).fetchall()
+    if not rows:
+        return f"No upcoming financial events in the next {days} days."
+    result = [dict(r) for r in rows]
+    return f"Upcoming events (next {days} days):\n" + str(result)
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 TOOL_DISPATCH = {
@@ -626,4 +657,5 @@ TOOL_DISPATCH = {
     "get_draft_return":           tool_get_draft_return,
     "get_tax_projection":         tool_get_tax_projection,
     "get_tax_history":            tool_get_tax_history,
+    "get_upcoming_events":        tool_get_upcoming_events,
 }

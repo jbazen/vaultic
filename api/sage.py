@@ -285,6 +285,20 @@ TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "get_upcoming_events",
+        "description": "Get upcoming financial calendar events (tax deadlines, estimated tax payments, budget meetings, paydays, custom events). Use this proactively to notice and mention upcoming deadlines. Also useful when the user asks 'what's coming up?' or 'when is my next tax payment?'",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "How many days ahead to look (default 30, max 90)"
+                }
+            },
+            "required": [],
+        },
+    },
 ]
 
 
