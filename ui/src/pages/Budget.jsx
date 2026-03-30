@@ -34,6 +34,7 @@ export default function Budget() {
   const [month, setMonth] = useState(currentMonth);
   const [budget, setBudget] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [rightTab, setRightTab] = useState("summary"); // summary | transactions
   // Mobile: one panel visible at a time. "budget" = left groups panel,
   // "summary" / "transactions" = right panel tabs.
@@ -65,8 +66,9 @@ export default function Budget() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try { setBudget(await getBudget(month)); }
-    catch { setBudget(null); }
+    catch { setBudget(null); setLoadError(true); }
     finally { setLoading(false); }
   }, [month]);
 
@@ -222,8 +224,20 @@ export default function Budget() {
         </div>
       )}
 
+      {/* ── Load error — tap to retry ── */}
+      {!loading && loadError && (
+        <div className="card" style={{ textAlign: "center", padding: "48px 24px" }}>
+          <div style={{ fontSize: 14, color: "var(--text2)", marginBottom: 16 }}>
+            Could not load budget data.
+          </div>
+          <button className="btn btn-primary" onClick={load}>
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* ── Empty state ── */}
-      {!loading && !hasGroups && (
+      {!loading && !loadError && !hasGroups && (
         <div className="card" style={{ textAlign: "center", padding: "48px 24px" }}>
           <div style={{ fontSize: 40, marginBottom: 16 }}>📋</div>
           <div style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>No budget categories yet</div>

@@ -49,11 +49,13 @@ export default function Dashboard() {
   const [portfolioPerf, setPortfolioPerf] = useState([]);
   const [marketRates, setMarketRates] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const mountedRef = useRef(true);
 
   async function load() {
+    setLoadError(false);
     try {
       const [nwData, hist, accts, manual, txns, items, perf, rates] = await Promise.all([
         getNetWorthLatest(),
@@ -76,7 +78,7 @@ export default function Dashboard() {
       setMarketRates(rates?.rates ?? []);
     } catch (e) {
       if (!mountedRef.current) return;
-      console.error(e);
+      setLoadError(true);
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -145,6 +147,17 @@ export default function Dashboard() {
   const total = nw?.total ?? null;
 
   if (loading) return <div style={{ color: "var(--text2)", padding: 40, textAlign: "center" }}>Loading…</div>;
+
+  if (loadError && !nw) return (
+    <div className="card" style={{ textAlign: "center", padding: "48px 24px", margin: "40px auto", maxWidth: 400 }}>
+      <div style={{ fontSize: 14, color: "var(--text2)", marginBottom: 16 }}>
+        Could not load dashboard data.
+      </div>
+      <button className="btn btn-primary" onClick={() => { setLoading(true); load(); }}>
+        Retry
+      </button>
+    </div>
+  );
 
   return (
     <div>

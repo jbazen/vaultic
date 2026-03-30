@@ -99,10 +99,19 @@ function loadSession() {
   return null;
 }
 
+// Debounced save: serializing large chat histories with JSON.stringify is
+// synchronous and blocks the main thread. On mobile, this was causing 20-30s
+// navigation freezes because the effect fired on every messages/history change,
+// and SageChat is always mounted. The 500ms debounce ensures we only write once
+// after a burst of state updates (e.g. streaming response + history append).
+let _saveTimer = null;
 function saveSession(messages, history) {
-  try {
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ messages, history }));
-  } catch {}
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ messages, history }));
+    } catch {}
+  }, 500);
 }
 
 // Cache loaded session so lazy initializers don't parse JSON twice

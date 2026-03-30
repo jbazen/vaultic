@@ -859,16 +859,20 @@ export default function Accounts() {
   const [accounts, setAccounts] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [coinbaseStatus, setCoinbaseStatus] = useState(null);
   const [manualEntries, setManualEntries] = useState([]);
 
   async function load() {
+    setLoadError(false);
     try {
       const [accts, its, manual] = await Promise.all([getAccounts(), getPlaidItems(), getManualEntries()]);
       setAccounts(accts);
       setItems(its);
       setManualEntries(manual);
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -931,6 +935,15 @@ export default function Accounts() {
 
       {loading ? (
         <div style={{ color: "var(--text2)" }}>Loading…</div>
+      ) : loadError && accounts.length === 0 ? (
+        <div className="card" style={{ textAlign: "center", padding: "48px 24px" }}>
+          <div style={{ fontSize: 14, color: "var(--text2)", marginBottom: 16 }}>
+            Could not load accounts.
+          </div>
+          <button className="btn btn-primary" onClick={() => { setLoading(true); load(); }}>
+            Retry
+          </button>
+        </div>
       ) : accounts.length === 0 ? (
         <div className="card empty-state">
           <p>No accounts connected yet.</p>

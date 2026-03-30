@@ -84,7 +84,23 @@ async function apiFetch(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...options.headers };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(path, { ...options, headers });
+  // Timeout: abort after 30s (or caller-supplied value). Without this, fetch
+  // hangs indefinitely on slow mobile networks, piling up pending requests that
+  // block React from processing navigation events.
+  const timeout = options.timeout || 30000;
+  const controller = new AbortController();
+  if (options.signal) {
+    // If caller supplied their own signal (e.g. page-unmount abort), forward it
+    options.signal.addEventListener("abort", () => controller.abort());
+  }
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  let res;
+  try {
+    res = await fetch(path, { ...options, headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (res.status === 401) {
     clearToken();
