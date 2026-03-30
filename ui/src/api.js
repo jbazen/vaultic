@@ -918,6 +918,11 @@ export async function getTaxProjection(year) {
   return res.json();
 }
 
+export async function getTaxChecklist(year) {
+  const res = await apiFetch(`/api/tax/checklist/${year}`);
+  return res.json();
+}
+
 export async function getW4s() {
   const res = await apiFetch("/api/tax/w4s");
   return res.json();

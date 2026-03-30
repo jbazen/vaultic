@@ -8,7 +8,7 @@
  *   EstimatedPaymentsSection, W4WithholdingManager, PaystubsSummaryTable
  */
 import { useState, useEffect, useRef } from "react";
-import { getTaxSummary, uploadTaxPdf, getPaystubs, getTaxProjection, getW4s, getTaxDocs, getDraftReturn, getEstimatedPayments } from "../api.js";
+import { getTaxSummary, uploadTaxPdf, getPaystubs, getTaxProjection, getW4s, getTaxDocs, getDraftReturn, getEstimatedPayments, getTaxChecklist } from "../api.js";
 import { fmt as fmtBase, fmtPercent } from "../utils/format.js";
 
 import W4WizardModal from "../components/taxes/W4WizardModal.jsx";
@@ -18,6 +18,7 @@ import TaxProjectionCard from "../components/taxes/TaxProjectionCard.jsx";
 import EstimatedPaymentsSection from "../components/taxes/EstimatedPaymentsSection.jsx";
 import W4WithholdingManager from "../components/taxes/W4WithholdingManager.jsx";
 import PaystubsSummaryTable from "../components/taxes/PaystubsSummaryTable.jsx";
+import TaxDocumentChecklist from "../components/taxes/TaxDocumentChecklist.jsx";
 
 // Tax page uses whole-dollar formatting and 1-decimal percentages
 function fmt(v) { return fmtBase(v, { maximumFractionDigits: 0, minimumFractionDigits: 0 }); }
@@ -40,6 +41,7 @@ export default function Taxes() {
   const [taxYear] = useState(2025);
   const [taxDocs, setTaxDocs] = useState([]);
   const [draftReturn, setDraftReturn] = useState(null);
+  const [docChecklist, setDocChecklist] = useState(null);
 
   function loadSummary() {
     getTaxSummary()
@@ -56,6 +58,7 @@ export default function Taxes() {
     getW4s().then(setW4s).catch(() => {});
     getTaxDocs(2025).then(setTaxDocs).catch(() => {});
     getDraftReturn(2025).then(setDraftReturn).catch(() => {});
+    getTaxChecklist(2025).then(setDocChecklist).catch(() => {});
   }, []);
 
   // Color for refund (green) vs owed (red)
@@ -283,6 +286,7 @@ export default function Taxes() {
 
           {/* Extracted sub-components */}
           <TaxDocumentsSection taxYear={taxYear} taxDocs={taxDocs} setTaxDocs={setTaxDocs} setDraftReturn={setDraftReturn} />
+          <TaxDocumentChecklist checklist={docChecklist} />
           <DraftReturnCard taxYear={taxYear} draftReturn={draftReturn} />
           <TaxProjectionCard projection={projection} />
           <EstimatedPaymentsSection estPayments={estPayments} setEstPayments={setEstPayments} />

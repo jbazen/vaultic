@@ -915,6 +915,185 @@ async def delete_tax_doc(doc_id: int, _user: str = Depends(get_current_user)):
     return {"ok": True}
 
 
+# ── Tax Document Checklist ────────────────────────────────────────────────────
+
+# Maps account types/subtypes to the tax documents they typically generate.
+# Each entry: (doc_type, label, condition_note)
+_ACCOUNT_DOC_MAP = {
+    # Banking — interest-bearing accounts generate 1099-INT
+    ("depository", "checking"):  [("1099_int", "1099-INT Interest", "if interest > $10")],
+    ("depository", "savings"):   [("1099_int", "1099-INT Interest", "if interest > $10")],
+    ("depository", "money market"): [("1099_int", "1099-INT Interest", "if interest > $10")],
+    ("depository", "cd"):        [("1099_int", "1099-INT Interest", "if interest > $10")],
+    # Investment — dividends, capital gains, and sales
+    ("investment", "brokerage"): [
+        ("1099_div", "1099-DIV Dividends", "if dividends paid"),
+        ("1099_b", "1099-B Investment Sales", "if you sold securities"),
+    ],
+    ("investment", "401k"):      [("1099_r", "1099-R Retirement", "only if distributions taken")],
+    ("investment", "ira"):       [("1099_r", "1099-R Retirement", "only if distributions taken")],
+    ("investment", "roth"):      [("1099_r", "1099-R Retirement", "only if distributions taken")],
+    ("investment", "401a"):      [("1099_r", "1099-R Retirement", "only if distributions taken")],
+    ("investment", "403b"):      [("1099_r", "1099-R Retirement", "only if distributions taken")],
+    # Loan/mortgage
+    ("loan", "mortgage"):        [("1098", "1098 Mortgage Interest", "")],
+    # HSA
+    ("investment", "hsa"):       [
+        ("1098_sa", "1098-SA HSA Distributions", "if HSA funds used"),
+        ("5498_sa", "5498-SA HSA Contributions", ""),
+    ],
+    ("depository", "hsa"):       [
+        ("1098_sa", "1098-SA HSA Distributions", "if HSA funds used"),
+        ("5498_sa", "5498-SA HSA Contributions", ""),
+    ],
+    # Crypto (Coinbase issues 1099-MISC/1099-B for significant activity)
+    ("investment", "crypto exchange"): [
+        ("1099_b", "1099-B Investment Sales", "if you sold crypto"),
+    ],
+}
+
+
+@router.get("/checklist/{year}")
+async def tax_document_checklist(year: int, _user: str = Depends(get_current_user)):
+    """Auto-generate a tax document checklist based on connected accounts.
+
+    Scans active accounts and paystub employers to determine which tax
+    documents the user should expect for the given year. Cross-references
+    with already-uploaded tax_docs to show received vs missing status.
+
+    Returns a list of expected documents, each with:
+      - doc_type, label, source (account/employer name)
+      - received (bool), condition (when the doc may not apply)
+      - uploaded_doc_id (if matched)
+    """
+    with get_db() as conn:
+        accounts = conn.execute("""
+            SELECT id, name, display_name, type, subtype, institution_name, source
+            FROM accounts WHERE is_active = 1
+        """).fetchall()
+
+        # Employers from paystubs for W-2 expectations
+        employers = conn.execute("""
+            SELECT DISTINCT employer FROM paystubs WHERE employer IS NOT NULL
+        """).fetchall()
+
+        # Manual entries with category 'invested' may indicate investment accounts
+        # (Parker Financial etc.) that also generate tax docs
+        manual_invested = conn.execute("""
+            SELECT name FROM manual_entries
+            WHERE category = 'invested' AND exclude_from_net_worth = 0
+        """).fetchall()
+
+        # Already-uploaded docs for this year
+        uploaded = conn.execute(
+            "SELECT id, doc_type, issuer FROM tax_docs WHERE tax_year = ?",
+            (year,)
+        ).fetchall()
+
+    uploaded = [dict(u) for u in uploaded]
+
+    def _find_uploaded(doc_type, source_name):
+        """Check if a matching document has been uploaded."""
+        source_lower = (source_name or "").lower()
+        for u in uploaded:
+            if u["doc_type"] == doc_type:
+                issuer_lower = (u["issuer"] or "").lower()
+                # Match if issuer contains the source name or vice versa
+                if source_lower and issuer_lower and (
+                    source_lower in issuer_lower or issuer_lower in source_lower
+                ):
+                    return u["id"]
+        return None
+
+    checklist = []
+    seen = set()  # (doc_type, source) to avoid duplicates
+
+    # W-2s from paystub employers
+    for emp_row in employers:
+        employer = emp_row["employer"]
+        key = ("w2", employer)
+        if key not in seen:
+            seen.add(key)
+            doc_id = _find_uploaded("w2", employer)
+            checklist.append({
+                "doc_type": "w2",
+                "label": "W-2",
+                "source": employer,
+                "condition": "",
+                "received": doc_id is not None,
+                "uploaded_doc_id": doc_id,
+            })
+
+    # Documents from connected accounts
+    for acct in accounts:
+        acct = dict(acct)
+        acct_type = (acct.get("type") or "").lower()
+        acct_subtype = (acct.get("subtype") or "").lower()
+        inst = acct.get("institution_name") or acct.get("display_name") or acct.get("name") or ""
+
+        doc_specs = _ACCOUNT_DOC_MAP.get((acct_type, acct_subtype), [])
+        for doc_type, label, condition in doc_specs:
+            key = (doc_type, inst)
+            if key not in seen:
+                seen.add(key)
+                doc_id = _find_uploaded(doc_type, inst)
+                checklist.append({
+                    "doc_type": doc_type,
+                    "label": label,
+                    "source": inst,
+                    "condition": condition,
+                    "received": doc_id is not None,
+                    "uploaded_doc_id": doc_id,
+                })
+
+    # Manual investment entries (Parker Financial, etc.)
+    for me in manual_invested:
+        me = dict(me)
+        source = me.get("name") or ""
+        if not source:
+            continue
+        for doc_type, label, condition in [
+            ("1099_div", "1099-DIV Dividends", "if dividends paid"),
+            ("1099_b", "1099-B Investment Sales", "if securities sold"),
+        ]:
+            key = (doc_type, source)
+            if key not in seen:
+                seen.add(key)
+                doc_id = _find_uploaded(doc_type, source)
+                checklist.append({
+                    "doc_type": doc_type,
+                    "label": label,
+                    "source": source,
+                    "condition": condition,
+                    "received": doc_id is not None,
+                    "uploaded_doc_id": doc_id,
+                })
+
+    # Always expect charitable giving statement if prior year had one
+    giving_uploaded = _find_uploaded("giving_statement", "")
+    # Only add if there isn't one already in the list
+    if ("giving_statement", "") not in seen:
+        checklist.append({
+            "doc_type": "giving_statement",
+            "label": "Charitable Giving Statement",
+            "source": "Church / charities",
+            "condition": "if charitable donations made",
+            "received": giving_uploaded is not None,
+            "uploaded_doc_id": giving_uploaded,
+        })
+
+    # Summary stats
+    total = len(checklist)
+    received = sum(1 for c in checklist if c["received"])
+
+    return {
+        "year": year,
+        "total_expected": total,
+        "total_received": received,
+        "checklist": checklist,
+    }
+
+
 @router.get("/draft/{year}")
 async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
     """Calculate a complete draft 1040 from all uploaded documents for the year.

@@ -274,3 +274,94 @@ class TestEstimatedPayments:
         data = r.json()
         expected_az = data["arizona"]["taxable_income"] * 0.025
         assert abs(data["arizona"]["tax"] - expected_az) < 0.02
+
+
+# ── Tax document checklist endpoint tests ─────────────────────────────────────
+
+def _seed_accounts(client, auth_headers):
+    """Insert test accounts into the DB for checklist generation."""
+    from api.database import get_db
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO accounts (id, name, type, subtype, institution_name, is_active, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (9001, "Checking", "depository", "checking", "Chase", 1, "plaid"))
+        conn.execute("""
+            INSERT OR IGNORE INTO accounts (id, name, type, subtype, institution_name, is_active, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (9002, "401k", "investment", "401k", "Vanguard", 1, "plaid"))
+        conn.execute("""
+            INSERT OR IGNORE INTO accounts (id, name, type, subtype, institution_name, is_active, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (9003, "Mortgage", "loan", "mortgage", "Rocket Mortgage", 1, "plaid"))
+        conn.commit()
+
+
+class TestTaxChecklist:
+    """GET /api/tax/checklist/{year} — auto-generated document checklist."""
+
+    def test_checklist_requires_auth(self, client):
+        r = client.get("/api/tax/checklist/2025")
+        assert r.status_code == 401 or r.status_code == 403
+
+    def test_checklist_with_accounts(self, client, auth_headers):
+        _seed_accounts(client, auth_headers)
+        r = client.get("/api/tax/checklist/2025", headers=auth_headers)
+        assert r.status_code == 200
+        data = r.json()
+
+        assert data["year"] == 2025
+        assert data["total_expected"] >= 1
+        assert "checklist" in data
+
+        # Should have W-2 from the paystub employer (seeded in projection tests)
+        w2s = [c for c in data["checklist"] if c["doc_type"] == "w2"]
+        assert len(w2s) >= 1
+        assert w2s[0]["source"] == "Acme Corp"
+
+    def test_checklist_includes_account_docs(self, client, auth_headers):
+        """Connected accounts should generate expected documents."""
+        r = client.get("/api/tax/checklist/2025", headers=auth_headers)
+        data = r.json()
+        doc_types = {c["doc_type"] for c in data["checklist"]}
+
+        # Chase checking → 1099-INT
+        assert "1099_int" in doc_types
+        # Vanguard 401k → 1099-R
+        assert "1099_r" in doc_types
+        # Rocket Mortgage → 1098
+        assert "1098" in doc_types
+
+    def test_checklist_received_status(self, client, auth_headers):
+        """Uploaded docs should be marked as received."""
+        r = client.get("/api/tax/checklist/2025", headers=auth_headers)
+        data = r.json()
+
+        # W-2 from Acme Corp was uploaded in _seed_tax_docs
+        w2_acme = [c for c in data["checklist"] if c["doc_type"] == "w2" and "Acme" in c["source"]]
+        assert len(w2_acme) >= 1
+        assert w2_acme[0]["received"] is True
+
+    def test_checklist_summary_counts(self, client, auth_headers):
+        r = client.get("/api/tax/checklist/2025", headers=auth_headers)
+        data = r.json()
+        assert data["total_received"] <= data["total_expected"]
+        received = sum(1 for c in data["checklist"] if c["received"])
+        assert received == data["total_received"]
+
+    def test_checklist_no_duplicates(self, client, auth_headers):
+        """Each (doc_type, source) pair should appear only once."""
+        r = client.get("/api/tax/checklist/2025", headers=auth_headers)
+        data = r.json()
+        seen = set()
+        for c in data["checklist"]:
+            key = (c["doc_type"], c["source"])
+            assert key not in seen, f"Duplicate checklist entry: {key}"
+            seen.add(key)
+
+    def test_checklist_includes_giving(self, client, auth_headers):
+        """Charitable giving statement should always appear."""
+        r = client.get("/api/tax/checklist/2025", headers=auth_headers)
+        data = r.json()
+        giving = [c for c in data["checklist"] if c["doc_type"] == "giving_statement"]
+        assert len(giving) == 1
