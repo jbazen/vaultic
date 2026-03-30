@@ -5,10 +5,11 @@
  *
  * Sub-components extracted to components/taxes/ for maintainability:
  *   W4WizardModal, TaxDocumentsSection, DraftReturnCard, TaxProjectionCard,
- *   EstimatedPaymentsSection, W4WithholdingManager, PaystubsSummaryTable
+ *   EstimatedPaymentsSection, W4WithholdingManager, PaystubsSummaryTable,
+ *   TaxDocumentChecklist, CryptoGainsSection
  */
 import { useState, useEffect, useRef } from "react";
-import { getTaxSummary, uploadTaxPdf, getPaystubs, getTaxProjection, getW4s, getTaxDocs, getDraftReturn, getEstimatedPayments, getTaxChecklist } from "../api.js";
+import { getTaxSummary, uploadTaxPdf, getPaystubs, getTaxProjection, getW4s, getTaxDocs, getDraftReturn, getEstimatedPayments, getTaxChecklist, syncCryptoTrades, calculateCryptoGains, getCryptoGains, getCryptoTrades } from "../api.js";
 import { fmt as fmtBase, fmtPercent } from "../utils/format.js";
 
 import W4WizardModal from "../components/taxes/W4WizardModal.jsx";
@@ -19,6 +20,7 @@ import EstimatedPaymentsSection from "../components/taxes/EstimatedPaymentsSecti
 import W4WithholdingManager from "../components/taxes/W4WithholdingManager.jsx";
 import PaystubsSummaryTable from "../components/taxes/PaystubsSummaryTable.jsx";
 import TaxDocumentChecklist from "../components/taxes/TaxDocumentChecklist.jsx";
+import CryptoGainsSection from "../components/taxes/CryptoGainsSection.jsx";
 
 // Tax page uses whole-dollar formatting and 1-decimal percentages
 function fmt(v) { return fmtBase(v, { maximumFractionDigits: 0, minimumFractionDigits: 0 }); }
@@ -42,6 +44,9 @@ export default function Taxes() {
   const [taxDocs, setTaxDocs] = useState([]);
   const [draftReturn, setDraftReturn] = useState(null);
   const [docChecklist, setDocChecklist] = useState(null);
+  const [cryptoGains, setCryptoGains] = useState(null);
+  const [cryptoTrades, setCryptoTrades] = useState([]);
+  const [cryptoSyncing, setCryptoSyncing] = useState(false);
 
   function loadSummary() {
     getTaxSummary()
@@ -59,6 +64,8 @@ export default function Taxes() {
     getTaxDocs(2025).then(setTaxDocs).catch(() => {});
     getDraftReturn(2025).then(setDraftReturn).catch(() => {});
     getTaxChecklist(2025).then(setDocChecklist).catch(() => {});
+    getCryptoGains(2025).then(setCryptoGains).catch(() => {});
+    getCryptoTrades().then(setCryptoTrades).catch(() => {});
   }, []);
 
   // Color for refund (green) vs owed (red)
@@ -99,6 +106,18 @@ export default function Taxes() {
     loadSummary();
     // Reset input so the same file can be re-uploaded if needed
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function handleCryptoSync() {
+    setCryptoSyncing(true);
+    try {
+      await syncCryptoTrades();
+      await calculateCryptoGains();
+      const [gains, trades] = await Promise.all([getCryptoGains(2025), getCryptoTrades()]);
+      setCryptoGains(gains);
+      setCryptoTrades(trades);
+    } catch { /* handled by empty state */ }
+    setCryptoSyncing(false);
   }
 
   return (
@@ -290,6 +309,7 @@ export default function Taxes() {
           <DraftReturnCard taxYear={taxYear} draftReturn={draftReturn} />
           <TaxProjectionCard projection={projection} />
           <EstimatedPaymentsSection estPayments={estPayments} setEstPayments={setEstPayments} />
+          <CryptoGainsSection gains={cryptoGains} trades={cryptoTrades} onSync={handleCryptoSync} syncing={cryptoSyncing} />
           <W4WithholdingManager w4s={w4s} setW4s={setW4s} onOpenWizard={() => setWizardOpen(true)} />
           <PaystubsSummaryTable paystubs={paystubs} setPaystubs={setPaystubs} />
 

@@ -617,6 +617,59 @@ def tool_get_tax_history(inputs, username):
     return str(result)
 
 
+# ── Crypto gains tool ────────────────────────────────────────────────────────
+
+def tool_get_crypto_gains(inputs, username):
+    """Return realized crypto capital gains/losses for a tax year.
+
+    Uses pre-computed FIFO lots and gains from the crypto_gains table.
+    Returns per-currency breakdown with short-term vs long-term totals.
+    """
+    year = inputs.get("year", 2025)
+    start = f"{year}-01-01"
+    end = f"{year}-12-31"
+    with get_db() as conn:
+        gains = conn.execute("""
+            SELECT * FROM crypto_gains
+            WHERE sale_date >= ? AND sale_date <= ?
+            ORDER BY sale_date ASC
+        """, (start, end)).fetchall()
+        # Also get open lots for unrealized context
+        open_lots = conn.execute("""
+            SELECT currency, SUM(quantity_remaining) as qty, SUM(quantity_remaining * cost_per_unit) as cost_basis
+            FROM crypto_lots WHERE quantity_remaining > 0
+            GROUP BY currency
+        """).fetchall()
+
+    gains = [dict(g) for g in gains]
+    if not gains and not open_lots:
+        return f"No crypto trades or gains data for {year}. Sync trades from Coinbase first (POST /api/crypto/sync-trades), then calculate gains (POST /api/crypto/calculate-gains)."
+
+    short_term = [g for g in gains if g["gain_type"] == "short_term"]
+    long_term = [g for g in gains if g["gain_type"] == "long_term"]
+    st_net = sum(g["gain_loss"] for g in short_term)
+    lt_net = sum(g["gain_loss"] for g in long_term)
+    total_proceeds = sum(g["proceeds"] for g in gains)
+    total_cost = sum(g["cost_basis"] for g in gains)
+
+    open_lots_summary = [dict(r) for r in open_lots] if open_lots else []
+
+    return str({
+        "year": year,
+        "transaction_count": len(gains),
+        "short_term_net": round(st_net, 2),
+        "long_term_net": round(lt_net, 2),
+        "net_gain_loss": round(st_net + lt_net, 2),
+        "total_proceeds": round(total_proceeds, 2),
+        "total_cost_basis": round(total_cost, 2),
+        "open_lots": open_lots_summary,
+        "note": (
+            f"{len(short_term)} short-term and {len(long_term)} long-term dispositions. "
+            f"Short-term gains are taxed as ordinary income; long-term at preferential rates."
+        ),
+    })
+
+
 # ── Calendar tool ─────────────────────────────────────────────────────────────
 
 def tool_get_upcoming_events(inputs, username):
@@ -673,4 +726,5 @@ TOOL_DISPATCH = {
     "get_tax_projection":         tool_get_tax_projection,
     "get_tax_history":            tool_get_tax_history,
     "get_upcoming_events":        tool_get_upcoming_events,
+    "get_crypto_gains":           tool_get_crypto_gains,
 }

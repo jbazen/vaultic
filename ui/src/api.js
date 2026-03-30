@@ -428,6 +428,41 @@ export async function syncCoinbase() {
   return res.json();
 }
 
+// Fetch trade fills from Coinbase and store locally (idempotent)
+export async function syncCryptoTrades() {
+  const res = await apiFetch("/api/crypto/sync-trades", { method: "POST" });
+  return res.json();
+}
+
+// List stored crypto trades with optional date filter
+export async function getCryptoTrades(startDate, endDate, limit = 200) {
+  let url = `/api/crypto/trades?limit=${limit}`;
+  if (startDate) url += `&start_date=${startDate}`;
+  if (endDate) url += `&end_date=${endDate}`;
+  const res = await apiFetch(url);
+  return res.json();
+}
+
+// Recompute FIFO cost basis lots and capital gains from stored trades
+export async function calculateCryptoGains() {
+  const res = await apiFetch("/api/crypto/calculate-gains", { method: "POST" });
+  return res.json();
+}
+
+// Get realized crypto gains/losses for a tax year with short/long term breakdown
+export async function getCryptoGains(year) {
+  const res = await apiFetch(`/api/crypto/gains/${year}`);
+  return res.json();
+}
+
+// List all FIFO cost basis lots, optionally filtered by currency
+export async function getCryptoLots(currency) {
+  let url = "/api/crypto/lots";
+  if (currency) url += `?currency=${encodeURIComponent(currency)}`;
+  const res = await apiFetch(url);
+  return res.json();
+}
+
 // --- Plaid investment data ---
 // Fetches current holdings snapshot for one investment account, joined with security
 // metadata (name, ticker, type) and computed gain/loss fields.

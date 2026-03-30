@@ -286,6 +286,17 @@ TOOLS = [
         },
     },
     {
+        "name": "get_crypto_gains",
+        "description": "Get realized crypto capital gains and losses for a tax year. Returns FIFO-computed short-term vs long-term gains, total proceeds, cost basis, and open lot positions. Use when the user asks about crypto taxes, capital gains, Coinbase trades, or Schedule D reporting.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "year": {"type": "integer", "description": "Tax year (e.g. 2025). Defaults to 2025."}
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_upcoming_events",
         "description": "Get upcoming financial calendar events (tax deadlines, estimated tax payments, budget meetings, paydays, custom events). Use this proactively to notice and mention upcoming deadlines. Also useful when the user asks 'what's coming up?' or 'when is my next tax payment?'",
         "input_schema": {

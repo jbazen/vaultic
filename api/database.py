@@ -633,6 +633,53 @@ MIGRATIONS = [
         revoked    INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
+
+    # ── Crypto Capital Gains Tracking ────────────────────────────────────────
+    # crypto_trades: individual fills fetched from Coinbase Advanced Trade API.
+    # Each row represents a single fill (partial or complete) of an order.
+    # side='BUY' or 'SELL'; product_id like 'BTC-USD'.
+    """CREATE TABLE IF NOT EXISTS crypto_trades (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        trade_id        TEXT UNIQUE NOT NULL,
+        order_id        TEXT,
+        product_id      TEXT NOT NULL,
+        side            TEXT NOT NULL,
+        size            REAL NOT NULL,
+        price           REAL NOT NULL,
+        fee             REAL DEFAULT 0,
+        trade_time      TEXT NOT NULL,
+        created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # crypto_lots: FIFO cost basis tracking. One row per acquisition lot.
+    # quantity_remaining decreases as lots are sold; fully sold lots have 0.
+    """CREATE TABLE IF NOT EXISTS crypto_lots (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        currency            TEXT NOT NULL,
+        acquisition_date    DATE NOT NULL,
+        quantity            REAL NOT NULL,
+        quantity_remaining  REAL NOT NULL,
+        cost_per_unit       REAL NOT NULL,
+        total_cost          REAL NOT NULL,
+        source_trade_id     TEXT,
+        created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # crypto_gains: one row per realized gain/loss event (disposal).
+    # gain_type = 'short_term' (held <= 1 year) or 'long_term' (held > 1 year).
+    """CREATE TABLE IF NOT EXISTS crypto_gains (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        currency        TEXT NOT NULL,
+        sale_trade_id   TEXT NOT NULL,
+        sale_date       DATE NOT NULL,
+        quantity        REAL NOT NULL,
+        proceeds        REAL NOT NULL,
+        cost_basis      REAL NOT NULL,
+        gain_loss       REAL NOT NULL,
+        gain_type       TEXT NOT NULL,
+        created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_crypto_trades_time ON crypto_trades(trade_time)",
+    "CREATE INDEX IF NOT EXISTS idx_crypto_lots_currency ON crypto_lots(currency, quantity_remaining)",
+    "CREATE INDEX IF NOT EXISTS idx_crypto_gains_year ON crypto_gains(sale_date)",
 ]
 
 
