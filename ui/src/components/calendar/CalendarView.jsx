@@ -64,6 +64,7 @@ export default function CalendarView({
         onSelectEvent={onSelectEvent}
         onSelectSlot={onSelectSlot}
         selectable                      /* enables click-on-slot to create */
+        drilldownView={null}            /* clicking a day opens create-modal, not day view */
         eventPropGetter={eventPropGetter}
         /* Provide agenda row style via components.eventWrapper */
         components={{ eventWrapper: ({ event, children }) => (
@@ -71,7 +72,7 @@ export default function CalendarView({
         )}}
         views={["month", "week", "day"]}
         defaultView="month"
-        style={{ height: 600 }}
+        style={{ height: 400 }}
         popup                           /* month view: "+N more" opens popup */
         showMultiDayTimes               /* timed events show time in week/day */
         step={30}                       /* 30-min slot intervals in week/day */

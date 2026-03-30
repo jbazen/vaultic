@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
-  getAccounts, getManualEntries, getRecentTransactions,
+  getAccounts, getManualEntries,
   getPlaidItems, removePlaidItem, syncCoinbase, getPortfolioPerformance,
   getMarketRates,
 } from "../api.js";
@@ -44,7 +44,6 @@ export default function Dashboard() {
   const [history, setHistory] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [manualEntries, setManualEntries] = useState([]);
-  const [transactions, setTransactions] = useState([]);
   const [plaidItems, setPlaidItems] = useState([]);
   const [portfolioPerf, setPortfolioPerf] = useState([]);
   const [marketRates, setMarketRates] = useState([]);
@@ -57,12 +56,11 @@ export default function Dashboard() {
   async function load() {
     setLoadError(false);
     try {
-      const [nwData, hist, accts, manual, txns, items, perf, rates] = await Promise.all([
+      const [nwData, hist, accts, manual, items, perf, rates] = await Promise.all([
         getNetWorthLatest(),
         getNetWorthHistory(1825),
         getAccounts(),
         getManualEntries(),
-        getRecentTransactions(20),
         getPlaidItems(),
         getPortfolioPerformance(1825),
         getMarketRates().catch(() => ({ rates: [] })),
@@ -72,7 +70,6 @@ export default function Dashboard() {
       setHistory(hist);
       setAccounts(accts);
       setManualEntries(manual);
-      setTransactions(txns);
       setPlaidItems(items);
       setPortfolioPerf(perf);
       setMarketRates(rates?.rates ?? []);
@@ -275,10 +272,17 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── Portfolio Performance ── */}
-      {portfolioPerf.length >= 2 && (
-        <PortfolioPerformanceCard data={portfolioPerf} />
-      )}
+      {/* ── Portfolio Performance + Calendar (side by side) ── */}
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start", marginBottom: 20 }}>
+        {portfolioPerf.length >= 2 && (
+          <div style={{ flex: "1 1 400px", minWidth: 0 }}>
+            <PortfolioPerformanceCard data={portfolioPerf} />
+          </div>
+        )}
+        <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+          <CalendarSection />
+        </div>
+      </div>
 
       {/* ── Accounts: 2-column grid, each institution/section its own card ── */}
       <div className="account-grid">
@@ -384,38 +388,6 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* ── Recent Transactions ── */}
-      {transactions.length > 0 && (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>Recent Transactions</div>
-            <a href="/transactions" style={{ fontSize: 13, color: "var(--accent)", textDecoration: "none" }}>
-              View all →
-            </a>
-          </div>
-          {transactions.map((t, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, color: "var(--text)", fontWeight: 500 }}>
-                  {t.merchant_name || t.name}
-                </div>
-                <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>
-                  {t.account_name} · {fmtDate(t.date)}
-                  {t.pending ? " · pending" : ""}
-                </div>
-              </div>
-              <div style={{ fontSize: 14, fontWeight: 600,
-                color: t.amount < 0 ? "var(--green)" : "var(--text)" }}>
-                {t.amount < 0 ? "+" : "-"}{fmt(Math.abs(t.amount))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Financial Calendar ── */}
-      <CalendarSection />
     </div>
   );
 }

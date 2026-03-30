@@ -109,10 +109,10 @@ export default function CalendarSection() {
   const defaultStart = modalMode === "create" ? slotStart : null;
 
   return (
-    <section className="dashboard-section" style={{ gridColumn: "1 / -1" }}>
+    <div className="card" style={{ margin: 0 }}>
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>Financial Calendar</h2>
+        <div className="card-title" style={{ margin: 0 }}>Financial Calendar</div>
         <button
           className="btn-primary"
           style={{ fontSize: "0.82rem", padding: "4px 12px" }}
@@ -123,8 +123,8 @@ export default function CalendarSection() {
       </div>
 
       {/* Status messages */}
-      {loading && <p className="loading-text">Loading calendar…</p>}
-      {error   && <p className="error-text">{error}</p>}
+      {loading && <p style={{ color: "var(--text2)", fontSize: 13 }}>Loading calendar…</p>}
+      {error   && <p style={{ color: "var(--red)", fontSize: 13 }}>{error}</p>}
 
       {/* Calendar — render even while loading so RBC doesn't flash layout */}
       {!loading && (
@@ -148,6 +148,6 @@ export default function CalendarSection() {
         initialEvent={initialEvent}
         defaultStart={defaultStart}
       />
-    </section>
+    </div>
   );
 }

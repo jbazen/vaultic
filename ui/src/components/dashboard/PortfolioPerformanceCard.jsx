@@ -60,11 +60,11 @@ export default function PortfolioPerformanceCard({ data }) {
   };
 
   return (
-    <div className="card">
+    <div className="card" style={{ margin: 0 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div>
           <div className="card-title" style={{ marginBottom: 4 }}>Portfolio Performance</div>
-          <div style={{ fontSize: 11, color: "var(--text2)" }}>Investment &amp; retirement accounts · excl. banking &amp; crypto</div>
+          <div style={{ fontSize: 11, color: "var(--text2)" }}>All investment &amp; retirement accounts</div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 22, fontWeight: 700, color: isPositive ? "var(--green)" : "var(--red)" }}>

@@ -129,22 +129,41 @@ async def portfolio_performance(
     _user: str = Depends(get_current_user),
 ):
     """
-    Daily total value of all Plaid investment/retirement accounts combined.
+    Daily total value of all investment/retirement accounts combined.
     Used for the Portfolio Performance chart on the Dashboard.
     Returns ASC (oldest first) with each row: snapped_at, total_value.
-    Only includes active accounts with type='investment'.
+
+    Includes BOTH:
+      - Plaid investment accounts (type='investment', e.g. Vanguard 401k)
+      - PDF-imported manual entries (category='invested', e.g. Parker Financial IRAs)
     """
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT b.snapped_at, SUM(b.current) AS total_value
-            FROM account_balances b
-            JOIN accounts a ON a.id = b.account_id
-            WHERE a.type = 'investment'
-              AND a.is_active = 1
-              AND b.snapped_at >= date('now', '-' || ? || ' days')
-            GROUP BY b.snapped_at
-            ORDER BY b.snapped_at ASC
-        """, (days,)).fetchall()
+            SELECT snapped_at, SUM(value) AS total_value
+            FROM (
+                -- Plaid investment account daily balances
+                SELECT b.snapped_at, b.current AS value
+                FROM account_balances b
+                JOIN accounts a ON a.id = b.account_id
+                WHERE a.type = 'investment'
+                  AND a.is_active = 1
+                  AND b.snapped_at >= date('now', '-' || ? || ' days')
+
+                UNION ALL
+
+                -- PDF-imported / manual investment account snapshots
+                -- Exclude summary/parent entries (exclude_from_net_worth=1)
+                -- to avoid double-counting (e.g. "Overall Portfolio")
+                SELECT s.snapped_at, s.value
+                FROM manual_entry_snapshots s
+                JOIN manual_entries m ON m.name = s.name AND m.category = s.category
+                WHERE s.category = 'invested'
+                  AND m.exclude_from_net_worth = 0
+                  AND s.snapped_at >= date('now', '-' || ? || ' days')
+            )
+            GROUP BY snapped_at
+            ORDER BY snapped_at ASC
+        """, (days, days)).fetchall()
     return [dict(row) for row in rows]
 
 
