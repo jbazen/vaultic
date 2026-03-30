@@ -153,15 +153,28 @@ export default function EventFormModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 600,
+        background: "rgba(0,0,0,0.6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20,
+      }}
+    >
       <div
-        className="modal-box"
-        style={{ maxWidth: 480 }}
         onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--bg2)", border: "1px solid var(--border)",
+          borderRadius: 12, padding: 24, width: "100%", maxWidth: 480,
+          maxHeight: "90vh", overflowY: "auto",
+        }}
       >
-        <h2 className="modal-title">{isEdit ? "Edit Event" : "New Event"}</h2>
+        <h2 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 700, color: "var(--text)" }}>
+          {isEdit ? "Edit Event" : "New Event"}
+        </h2>
 
-        {error && <div className="banner-error" style={{ marginBottom: 12 }}>{error}</div>}
+        {error && <div style={{ background: "rgba(239,68,68,0.15)", color: "var(--red)", padding: "8px 12px", borderRadius: 6, fontSize: 13, marginBottom: 12 }}>{error}</div>}
 
         {/* Title */}
         <label className="form-label">Title *</label>

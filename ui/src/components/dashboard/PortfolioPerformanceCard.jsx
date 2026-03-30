@@ -60,7 +60,7 @@ export default function PortfolioPerformanceCard({ data }) {
   };
 
   return (
-    <div className="card" style={{ margin: 0 }}>
+    <div className="card" style={{ margin: 0, flex: 1, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
         <div>
           <div className="card-title" style={{ marginBottom: 4 }}>Portfolio Performance</div>
@@ -82,7 +82,8 @@ export default function PortfolioPerformanceCard({ data }) {
         ))}
       </div>
 
-      <ResponsiveContainer width="100%" height={180}>
+      <div style={{ flex: 1, minHeight: 180 }}>
+      <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={filtered} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
@@ -113,6 +114,7 @@ export default function PortfolioPerformanceCard({ data }) {
           />
         </AreaChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }

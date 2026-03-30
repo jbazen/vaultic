@@ -109,7 +109,7 @@ export default function CalendarSection() {
   const defaultStart = modalMode === "create" ? slotStart : null;
 
   return (
-    <div className="card" style={{ margin: 0 }}>
+    <div className="card" style={{ margin: 0, flex: 1, display: "flex", flexDirection: "column" }}>
       {/* Header row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div className="card-title" style={{ margin: 0 }}>Financial Calendar</div>
