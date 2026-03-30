@@ -362,7 +362,8 @@ from api.tax_calc import (
     STANDARD_DEDUCTIONS as _STANDARD_DEDUCTIONS_SHARED,
     CHILD_CREDIT_PER_CHILD as _CHILD_CREDIT_SHARED,
     NUM_CHILDREN as _NUM_CHILDREN_SHARED,
-    SALT_CAP, calc_tax, get_brackets, get_standard_deduction,
+    SALT_CAP, calc_tax, calc_az_tax, AZ_FLAT_RATE,
+    get_brackets, get_standard_deduction,
 )
 
 # Aliases for backward compatibility within this file
@@ -407,6 +408,7 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
     # Sum YTD figures across all employers
     ytd_gross = sum(s.get("ytd_gross") or 0 for s in stubs)
     ytd_federal = sum(s.get("ytd_federal") or 0 for s in stubs)
+    ytd_state = sum(s.get("ytd_state") or 0 for s in stubs)
 
     # Determine fraction of year elapsed from most recent pay date
     latest_pay_date_str = max(s["pay_date"] for s in stubs if s.get("pay_date"))
@@ -420,6 +422,7 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
     # Extrapolate to full year
     proj_gross = round(ytd_gross / year_fraction) if year_fraction > 0 else ytd_gross
     proj_federal_withheld = round(ytd_federal / year_fraction) if year_fraction > 0 else ytd_federal
+    proj_state_withheld = round(ytd_state / year_fraction) if year_fraction > 0 else ytd_state
 
     # Deduction: use prior year itemized if it beat standard, else standard
     prior_itemized = prior.get("total_itemized") or 0
@@ -436,11 +439,24 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
     child_credit = _NUM_CHILDREN * CHILD_TAX_CREDIT_PER_CHILD
     net_tax = max(0, gross_tax - child_credit)
 
-    # Result
+    # Federal result
     delta = proj_federal_withheld - net_tax
     refund = round(delta) if delta > 0 else None
     owed = round(-delta) if delta < 0 else None
     effective_rate = round(net_tax / proj_gross * 100, 2) if proj_gross > 0 else None
+
+    # Arizona state tax (flat 2.5% on same taxable income as federal)
+    az_tax = calc_az_tax(taxable_income)
+    az_delta = proj_state_withheld - az_tax
+    az_refund = round(az_delta) if az_delta > 0 else None
+    az_owed = round(-az_delta) if az_delta < 0 else None
+
+    # Combined federal + state
+    combined_tax = round(net_tax + az_tax)
+    combined_withheld = proj_federal_withheld + proj_state_withheld
+    combined_delta = combined_withheld - combined_tax
+    combined_refund = round(combined_delta) if combined_delta > 0 else None
+    combined_owed = round(-combined_delta) if combined_delta < 0 else None
 
     return {
         "year": year,
@@ -458,7 +474,21 @@ async def get_tax_projection(year: int, _user: str = Depends(get_current_user)):
         "refund": refund,
         "owed": owed,
         "effective_rate": effective_rate,
-        "employers": [{"employer": s["employer"], "ytd_gross": s.get("ytd_gross"), "ytd_federal": s.get("ytd_federal"), "pay_date": s.get("pay_date")} for s in stubs],
+        "arizona": {
+            "rate": AZ_FLAT_RATE,
+            "taxable_income": round(taxable_income),
+            "tax": az_tax,
+            "proj_state_withheld": proj_state_withheld,
+            "refund": az_refund,
+            "owed": az_owed,
+        },
+        "combined": {
+            "total_tax": combined_tax,
+            "total_withheld": combined_withheld,
+            "refund": combined_refund,
+            "owed": combined_owed,
+        },
+        "employers": [{"employer": s["employer"], "ytd_gross": s.get("ytd_gross"), "ytd_federal": s.get("ytd_federal"), "ytd_state": s.get("ytd_state"), "pay_date": s.get("pay_date")} for s in stubs],
     }
 
 
@@ -531,6 +561,7 @@ async def get_estimated_payments(
     # ── Project current year income & withholding from YTD paystubs ─────────
     ytd_gross   = sum(s.get("ytd_gross")   or 0 for s in stubs)
     ytd_federal = sum(s.get("ytd_federal") or 0 for s in stubs)
+    ytd_state   = sum(s.get("ytd_state")   or 0 for s in stubs)
 
     latest_pay_date_str = max(s["pay_date"] for s in stubs if s.get("pay_date"))
     latest_pay_date = _date.fromisoformat(latest_pay_date_str)
@@ -542,6 +573,7 @@ async def get_estimated_payments(
 
     proj_gross    = (ytd_gross   / year_frac) if year_frac > 0 else ytd_gross
     proj_withheld = (ytd_federal / year_frac) if year_frac > 0 else ytd_federal
+    proj_state_withheld = (ytd_state / year_frac) if year_frac > 0 else ytd_state
 
     # Add any non-W2 income the user provided (crypto gains, self-employment, etc.)
     total_proj_income = proj_gross + other_income
@@ -654,6 +686,12 @@ async def get_estimated_payments(
         "recommended_total": round(recommended_total),
         "quarters": quarters,
         "notes": notes,
+        "arizona": {
+            "rate": AZ_FLAT_RATE,
+            "taxable_income": round(taxable),
+            "tax": calc_az_tax(taxable),
+            "proj_state_withheld": round(proj_state_withheld),
+        },
     }
 
 
@@ -955,12 +993,26 @@ async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
         if d.get("doc_type") != "w2"
     )
     total_withheld = w2_withheld + other_withheld
+    state_withheld = _sum("w2_state_withheld")
 
-    # ── Result ────────────────────────────────────────────────────────────────
+    # ── Federal result ────────────────────────────────────────────────────────────────
     delta = total_withheld - net_tax
     refund = round(delta) if delta >= 0 else None
     owed = round(-delta) if delta < 0 else None
     effective_rate = round(net_tax / agi * 100, 2) if agi > 0 else None
+
+    # ── Arizona state tax (flat 2.5%) ──
+    az_tax = calc_az_tax(taxable_income)
+    az_delta = state_withheld - az_tax
+    az_refund = round(az_delta) if az_delta >= 0 else None
+    az_owed = round(-az_delta) if az_delta < 0 else None
+
+    # ── Combined federal + state ──
+    combined_tax = round(net_tax + az_tax)
+    combined_withheld = total_withheld + state_withheld
+    combined_delta = combined_withheld - combined_tax
+    combined_refund = round(combined_delta) if combined_delta >= 0 else None
+    combined_owed = round(-combined_delta) if combined_delta < 0 else None
 
     doc_summary = {}
     for d in docs:
@@ -1007,6 +1059,20 @@ async def get_draft_return(year: int, _user: str = Depends(get_current_user)):
         "refund": refund,
         "owed": owed,
         "effective_rate": effective_rate,
+        "arizona": {
+            "rate": AZ_FLAT_RATE,
+            "taxable_income": round(taxable_income, 2),
+            "tax": az_tax,
+            "state_withheld": round(state_withheld, 2),
+            "refund": az_refund,
+            "owed": az_owed,
+        },
+        "combined": {
+            "total_tax": combined_tax,
+            "total_withheld": combined_withheld,
+            "refund": combined_refund,
+            "owed": combined_owed,
+        },
         "filed_return": filed,
     }
 

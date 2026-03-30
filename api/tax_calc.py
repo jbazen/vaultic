@@ -1,7 +1,8 @@
 """Shared tax calculation constants and functions.
 
-Used by both api/routers/tax.py and api/sage.py to avoid duplicating
-bracket tables, standard deductions, and the progressive tax algorithm.
+Used by api/routers/tax.py, api/sage_tools.py, and api/sage.py to avoid
+duplicating bracket tables, standard deductions, the progressive federal
+tax algorithm, and the Arizona flat-rate state tax computation.
 """
 
 # 2025 MFJ tax brackets (IRS Rev. Proc. 2024-40)
@@ -59,6 +60,14 @@ CHILD_CREDIT_PER_CHILD = 2000
 NUM_CHILDREN = 2  # Bazen family default
 
 SALT_CAP = 10000
+
+# Arizona flat income tax rate (effective 2023+, A.R.S. § 43-1011)
+AZ_FLAT_RATE = 0.025
+
+
+def calc_az_tax(taxable_income: float) -> float:
+    """Arizona flat 2.5% state income tax on taxable income."""
+    return round(max(0.0, taxable_income) * AZ_FLAT_RATE, 2)
 
 
 def calc_tax(taxable_income: float, brackets: list[tuple[float, float]]) -> float:

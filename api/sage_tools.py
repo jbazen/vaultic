@@ -482,7 +482,7 @@ def tool_optimize_w4(inputs, username):
 
 
 def tool_get_draft_return(inputs, username):
-    from api.tax_calc import calc_tax, get_brackets, get_standard_deduction, CHILD_CREDIT_PER_CHILD, NUM_CHILDREN, SALT_CAP
+    from api.tax_calc import calc_tax, calc_az_tax, get_brackets, get_standard_deduction, CHILD_CREDIT_PER_CHILD, NUM_CHILDREN, SALT_CAP
     year = inputs.get("year", 2025)
     with get_db() as conn:
         docs = conn.execute(
@@ -519,7 +519,10 @@ def tool_get_draft_return(inputs, username):
     child_credit = NUM_CHILDREN * CHILD_CREDIT_PER_CHILD
     net_tax = max(0, gross_tax - child_credit)
     withheld = _sum("w2_fed_withheld") + sum((d.get("fed_withheld") or 0) for d in docs if d.get("doc_type") != "w2")
+    state_withheld = _sum("w2_state_withheld")
     delta = withheld - net_tax
+    az_tax = calc_az_tax(taxable)
+    az_delta = state_withheld - az_tax
     return str({
         "year": year, "docs_uploaded": doc_types,
         "missing_docs": missing,
@@ -532,13 +535,17 @@ def tool_get_draft_return(inputs, username):
         "refund": round(delta) if delta >= 0 else None,
         "owed": round(-delta) if delta < 0 else None,
         "effective_rate": round(net_tax / agi * 100, 2) if agi else None,
+        "arizona_tax": round(az_tax), "az_state_withheld": round(state_withheld),
+        "az_refund": round(az_delta) if az_delta >= 0 else None,
+        "az_owed": round(-az_delta) if az_delta < 0 else None,
+        "combined_tax": round(net_tax + az_tax),
         "note": f"Missing documents: {missing}" if missing else "All key documents present."
     })
 
 
 def tool_get_tax_projection(inputs, username):
     try:
-        from api.tax_calc import calc_tax, get_brackets, get_standard_deduction, CHILD_CREDIT_PER_CHILD, NUM_CHILDREN
+        from api.tax_calc import calc_tax, calc_az_tax, get_brackets, get_standard_deduction, CHILD_CREDIT_PER_CHILD, NUM_CHILDREN
         from datetime import date as _date
         with get_db() as conn:
             stubs = conn.execute("""
@@ -554,12 +561,14 @@ def tool_get_tax_projection(inputs, username):
         prior = dict(prior) if prior else {}
         ytd_gross = sum(s.get("ytd_gross") or 0 for s in stubs)
         ytd_federal = sum(s.get("ytd_federal") or 0 for s in stubs)
+        ytd_state = sum(s.get("ytd_state") or 0 for s in stubs)
         latest_date = max(s["pay_date"] for s in stubs if s.get("pay_date"))
         ld = _date.fromisoformat(latest_date)
         frac = ((ld - _date(2025, 1, 1)).days + 1) / 365
         frac = max(0.01, min(frac, 1.0))
         proj_gross = round(ytd_gross / frac)
         proj_withheld = round(ytd_federal / frac)
+        proj_state_withheld = round(ytd_state / frac)
         prior_itemized = prior.get("total_itemized") or 0
         std_ded = get_standard_deduction(2025)
         deduction = prior_itemized if prior_itemized > std_ded else std_ded
@@ -568,6 +577,8 @@ def tool_get_tax_projection(inputs, username):
         child_credit = NUM_CHILDREN * CHILD_CREDIT_PER_CHILD
         net_tax = max(0, gross_tax - child_credit)
         delta = proj_withheld - net_tax
+        az_tax = calc_az_tax(taxable)
+        az_delta = proj_state_withheld - az_tax
         return str({
             "year": 2025, "as_of": latest_date,
             "proj_gross": proj_gross, "deduction": deduction,
@@ -576,7 +587,11 @@ def tool_get_tax_projection(inputs, username):
             "refund": round(delta) if delta > 0 else None,
             "owed": round(-delta) if delta < 0 else None,
             "effective_rate": round(net_tax / proj_gross * 100, 2) if proj_gross else None,
-            "note": "Projection based on YTD paystub data extrapolated to full year. Deduction estimated from prior year Schedule A if itemized > standard."
+            "arizona_tax": round(az_tax), "az_state_withheld": proj_state_withheld,
+            "az_refund": round(az_delta) if az_delta > 0 else None,
+            "az_owed": round(-az_delta) if az_delta < 0 else None,
+            "combined_tax": round(net_tax + az_tax),
+            "note": "Projection based on YTD paystub data extrapolated to full year. Includes AZ flat 2.5% state tax."
         })
     except Exception as e:
         return f"Could not compute projection: {e}"

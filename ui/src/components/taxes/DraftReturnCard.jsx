@@ -1,6 +1,12 @@
 /**
  * DraftReturnCard — Calculated draft tax return from uploaded documents.
- * Shows income breakdown, key tax lines, effective rate, and itemized vs standard comparison.
+ *
+ * Displays:
+ *   - Income breakdown (W-2 wages, interest, dividends, cap gains, retirement)
+ *   - Federal: AGI, deduction, taxable income, gross tax, credits, net tax, withholding
+ *   - Arizona: flat 2.5% state tax, state withholding, state refund/owed
+ *   - Combined: total federal + AZ tax, total withheld, net refund/owed
+ *   - Effective rate and itemized vs standard comparison
  */
 
 /** Whole-dollar formatter */
@@ -72,9 +78,60 @@ export default function DraftReturnCard({ taxYear, draftReturn }) {
         ))}
       </div>
 
+      {/* Arizona State Tax */}
+      {draftReturn.arizona && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8, marginBottom: 16 }}>
+          <div style={{ gridColumn: "1 / -1", fontWeight: 600, fontSize: 13, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+            Arizona State Tax (flat {(draftReturn.arizona.rate * 100).toFixed(1)}%)
+          </div>
+          {[
+            { label: "AZ Tax", value: fmt(draftReturn.arizona.tax) },
+            { label: "AZ Withheld", value: fmt(draftReturn.arizona.state_withheld) },
+            {
+              label: draftReturn.arizona.refund != null ? "AZ Refund" : "AZ Owed",
+              value: draftReturn.arizona.refund != null ? `+${fmt(draftReturn.arizona.refund)}` : `-${fmt(draftReturn.arizona.owed)}`,
+              color: draftReturn.arizona.refund != null ? "var(--green)" : "var(--red)",
+              bold: true,
+            },
+          ].map(item => (
+            <div key={item.label} style={{ background: "var(--bg3)", borderRadius: 8, padding: "10px 12px", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 11, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 2 }}>{item.label}</div>
+              <div style={{ fontWeight: item.bold ? 700 : 500, fontSize: 15, color: item.color || "inherit" }}>{item.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Combined Federal + State */}
+      {draftReturn.combined && (
+        <div style={{
+          background: "var(--bg3)", borderRadius: 8, padding: "10px 12px", marginBottom: 16,
+          border: `1px solid ${draftReturn.combined.refund != null ? "var(--green)" : "var(--red)"}`,
+        }}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "baseline" }}>
+            <div>
+              <span style={{ fontSize: 11, color: "var(--text2)", textTransform: "uppercase" }}>Combined Fed + AZ Tax: </span>
+              <strong style={{ fontSize: 15 }}>{fmt(draftReturn.combined.total_tax)}</strong>
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: "var(--text2)", textTransform: "uppercase" }}>Total Withheld: </span>
+              <strong style={{ fontSize: 15 }}>{fmt(draftReturn.combined.total_withheld)}</strong>
+            </div>
+            <div>
+              <span style={{ fontSize: 11, color: "var(--text2)", textTransform: "uppercase" }}>
+                {draftReturn.combined.refund != null ? "Refund: " : "Owed: "}
+              </span>
+              <strong style={{ fontSize: 17, color: draftReturn.combined.refund != null ? "var(--green)" : "var(--red)" }}>
+                {draftReturn.combined.refund != null ? `+${fmt(draftReturn.combined.refund)}` : `-${fmt(draftReturn.combined.owed)}`}
+              </strong>
+            </div>
+          </div>
+        </div>
+      )}
+
       {draftReturn.effective_rate && (
         <div style={{ fontSize: 13, color: "var(--text2)" }}>
-          Effective rate: <strong style={{ color: "#f59e0b" }}>{draftReturn.effective_rate}%</strong>
+          Federal effective rate: <strong style={{ color: "#f59e0b" }}>{draftReturn.effective_rate}%</strong>
           {draftReturn.deductions?.method === "itemized" && (
             <span style={{ marginLeft: 12 }}>
               Itemized saves <strong style={{ color: "var(--purple)" }}>{fmt(draftReturn.deductions.total_itemized - draftReturn.deductions.standard_deduction)}</strong> vs standard

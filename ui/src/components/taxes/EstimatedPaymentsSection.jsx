@@ -1,6 +1,12 @@
 /**
  * EstimatedPaymentsSection — 1040-ES quarterly estimated tax payments card.
- * Shows status banner, quarterly schedule, safe harbor comparison, and notes.
+ *
+ * Displays:
+ *   - Status banner (green if covered, yellow if shortfall)
+ *   - Quarter-by-quarter schedule with due dates and status
+ *   - Safe harbor A vs B comparison tiles
+ *   - Arizona state tax summary (flat 2.5%, withholding vs liability)
+ *   - Informational notes from the calculator
  */
 import { useState } from "react";
 import { getEstimatedPayments } from "../../api.js";
@@ -116,6 +122,35 @@ export default function EstimatedPaymentsSection({ estPayments, setEstPayments }
               );
             })}
           </div>
+
+          {/* Arizona state tax summary */}
+          {estPayments.arizona && (
+            <div style={{ background: "var(--bg3)", borderRadius: 9, padding: "11px 14px", border: "1px solid var(--border)", marginBottom: 14 }}>
+              <div className="section-label">Arizona State Tax (flat {(estPayments.arizona.rate * 100).toFixed(1)}%)</div>
+              <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 6 }}>
+                <div>
+                  <span style={{ fontSize: 12, color: "var(--text2)" }}>Projected AZ Tax: </span>
+                  <strong>{fmt(estPayments.arizona.tax)}</strong>
+                </div>
+                <div>
+                  <span style={{ fontSize: 12, color: "var(--text2)" }}>AZ Withheld: </span>
+                  <strong>{fmt(estPayments.arizona.proj_state_withheld)}</strong>
+                </div>
+                {(() => {
+                  const azShortfall = (estPayments.arizona.tax || 0) - (estPayments.arizona.proj_state_withheld || 0);
+                  if (azShortfall <= 0) return (
+                    <div style={{ color: "var(--green)", fontWeight: 600, fontSize: 13 }}>AZ withholding covers state tax</div>
+                  );
+                  return (
+                    <div>
+                      <span style={{ fontSize: 12, color: "var(--text2)" }}>AZ Shortfall: </span>
+                      <strong style={{ color: "var(--red)" }}>{fmt(azShortfall)}</strong>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
 
           {/* Informational notes from the calculator */}
           {(estPayments.notes || []).length > 0 && (
