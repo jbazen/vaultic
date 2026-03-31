@@ -76,9 +76,11 @@ def _spent_for_item(conn, item_id: int, month: str) -> float:
     transaction_splits (multi-item splits) so the total is always correct
     regardless of how the user categorized each transaction.
     """
-    # Direct assignments: use the full transaction amount
+    # Direct assignments: use the full transaction amount.
+    # Sign is preserved: positive = debit (adds to spending),
+    # negative = credit/refund (reduces spending).
     direct = conn.execute("""
-        SELECT COALESCE(SUM(ABS(t.amount)), 0) AS spent
+        SELECT COALESCE(SUM(t.amount), 0) AS spent
         FROM transaction_assignments ta
         JOIN transactions t ON t.transaction_id = ta.transaction_id
         WHERE ta.item_id = ?
@@ -405,10 +407,11 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
         ).fetchall():
             all_amounts[row["item_id"]] = float(row["planned"])
 
-        # Aggregate direct assignment spending per item for this month
+        # Aggregate direct assignment spending per item for this month.
+        # Sign preserved: positive = debit, negative = credit/refund.
         direct_spent = {}
         for row in conn.execute("""
-            SELECT ta.item_id, COALESCE(SUM(ABS(t.amount)), 0) AS spent
+            SELECT ta.item_id, COALESCE(SUM(t.amount), 0) AS spent
             FROM transaction_assignments ta
             JOIN transactions t ON t.transaction_id = ta.transaction_id
             WHERE strftime('%Y-%m', t.date) = ? AND t.pending = 0
@@ -1188,10 +1191,12 @@ async def get_item_detail(
         # Transactions assigned to this item: either directly (transaction_assignments)
         # or as part of a split (transaction_splits). UNION combines both sources.
         # display_amount is the split amount for splits, full amount for direct assigns.
+        # Sign preserved: positive amount = debit/expense, negative = credit/refund.
+        # The UI uses the sign to color-code transactions (red debit, green credit).
         txn_rows = conn.execute("""
             SELECT t.transaction_id, t.date, t.name, t.merchant_name,
-                   ABS(t.amount) AS full_amount,
-                   ABS(t.amount) AS display_amount,
+                   t.amount AS full_amount,
+                   t.amount AS display_amount,
                    0 AS is_split,
                    a.name AS account_name, a.mask AS account_mask,
                    a.subtype AS account_subtype
@@ -1203,7 +1208,7 @@ async def get_item_detail(
               AND t.pending = 0
             UNION ALL
             SELECT t.transaction_id, t.date, t.name, t.merchant_name,
-                   ABS(t.amount) AS full_amount,
+                   t.amount AS full_amount,
                    ts.amount AS display_amount,
                    1 AS is_split,
                    a.name AS account_name, a.mask AS account_mask,
@@ -1384,13 +1389,16 @@ async def save_transaction_splits(
 
     with get_db() as conn:
         txn = conn.execute(
-            "SELECT ABS(amount) AS amount FROM transactions WHERE transaction_id = ?",
+            "SELECT amount FROM transactions WHERE transaction_id = ?",
             (transaction_id,)
         ).fetchone()
         if not txn:
             raise HTTPException(status_code=404, detail="Transaction not found")
 
-        total = round(float(txn["amount"]), 2)
+        # Validate against the absolute amount — splits are always entered as
+        # positive values by the user, regardless of whether the original
+        # transaction is a debit or credit/refund.
+        total = round(abs(float(txn["amount"])), 2)
         split_sum = round(sum(s.amount for s in body.splits), 2)
         if abs(split_sum - total) > 0.02:
             raise HTTPException(

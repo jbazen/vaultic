@@ -191,8 +191,8 @@ export default function ItemDetailModal({ itemId, itemName, month, allGroups, on
                       <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 1 }}>{t.date}</div>
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", flexShrink: 0, gap: 2 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--red)" }}>
-                        -{fmt(t.amount)}
+                      <div style={{ fontSize: 13, fontWeight: 700, color: t.amount < 0 ? "var(--green)" : "var(--red)" }}>
+                        {t.amount < 0 ? "+" : "-"}{fmt(Math.abs(t.amount))}
                       </div>
                       {t.is_split && (
                         <div style={{

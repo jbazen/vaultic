@@ -431,3 +431,114 @@ class TestCSVImport:
             files=[("files", ("test.csv", io.BytesIO(csv_data), "text/csv"))],
         )
         assert res.status_code == 401
+
+
+# ── Refund / credit handling ─────────────────────────────────────────────────
+
+class TestRefundHandling:
+    """Verify that credit/refund transactions (negative amounts) reduce spending
+    instead of adding to it, and are displayed correctly in item detail."""
+
+    def test_refund_reduces_spent(self, client, auth_headers):
+        """A refund (negative amount) assigned to a budget item should reduce its spent total."""
+        acct_id = _seed_test_account(client, auth_headers)
+        g = _create_group(client, auth_headers, "Refund Test Group")
+        item = _create_item(client, auth_headers, g["id"], "Refund Test Item")
+        client.put(
+            f"/api/budget/items/{item['id']}/amount",
+            json={"month": "2031-01", "planned": 200.0},
+            headers=auth_headers,
+        )
+
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            # Insert a debit ($50 purchase) and a credit (-$20 refund)
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions
+                    (transaction_id, account_id, amount, date, merchant_name, pending)
+                VALUES ('refund-debit-001', ?, 50.00, '2031-01-10', 'Amazon', 0)
+            """, (acct_id,))
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions
+                    (transaction_id, account_id, amount, date, merchant_name, pending)
+                VALUES ('refund-credit-001', ?, -20.00, '2031-01-12', 'Amazon', 0)
+            """, (acct_id,))
+            # Assign both to the same budget item
+            conn.execute("""
+                INSERT OR IGNORE INTO transaction_assignments (transaction_id, item_id, status)
+                VALUES ('refund-debit-001', ?, 'manual')
+            """, (item["id"],))
+            conn.execute("""
+                INSERT OR IGNORE INTO transaction_assignments (transaction_id, item_id, status)
+                VALUES ('refund-credit-001', ?, 'manual')
+            """, (item["id"],))
+
+        res = client.get("/api/budget/2031-01", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+
+        # Find our test group+item
+        test_group = next(g for g in data["groups"] if g["name"] == "Refund Test Group")
+        test_item = next(i for i in test_group["items"] if i["name"] == "Refund Test Item")
+
+        # Spent should be 50 - 20 = 30, NOT 50 + 20 = 70
+        assert test_item["spent"] == 30.0
+        assert test_item["remaining"] == 170.0  # 200 planned - 30 spent
+
+    def test_refund_item_detail_preserves_sign(self, client, auth_headers):
+        """Item detail endpoint should show negative amount for refund transactions."""
+        acct_id = _seed_test_account(client, auth_headers)
+        g = _create_group(client, auth_headers, "Detail Refund Group")
+        item = _create_item(client, auth_headers, g["id"], "Detail Refund Item")
+
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions
+                    (transaction_id, account_id, amount, date, merchant_name, pending)
+                VALUES ('detail-refund-001', ?, -25.00, '2031-03-10', 'Target', 0)
+            """, (acct_id,))
+            conn.execute("""
+                INSERT OR IGNORE INTO transaction_assignments (transaction_id, item_id, status)
+                VALUES ('detail-refund-001', ?, 'manual')
+            """, (item["id"],))
+
+        res = client.get(f"/api/budget/items/{item['id']}/detail?month=2031-03",
+                         headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        # The refund transaction should have a negative display_amount
+        refund_txn = next(t for t in data["transactions"] if t["transaction_id"] == "detail-refund-001")
+        assert refund_txn["amount"] < 0  # Preserved sign, not ABS'd
+
+    def test_refund_only_item_shows_negative_spent(self, client, auth_headers):
+        """A budget item with only refunds should have negative spent total."""
+        acct_id = _seed_test_account(client, auth_headers)
+        g = _create_group(client, auth_headers, "Refund Only Group")
+        item = _create_item(client, auth_headers, g["id"], "Refund Only Item")
+        client.put(
+            f"/api/budget/items/{item['id']}/amount",
+            json={"month": "2031-02", "planned": 100.0},
+            headers=auth_headers,
+        )
+
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions
+                    (transaction_id, account_id, amount, date, merchant_name, pending)
+                VALUES ('refund-only-001', ?, -35.15, '2031-02-05', 'Amazon', 0)
+            """, (acct_id,))
+            conn.execute("""
+                INSERT OR IGNORE INTO transaction_assignments (transaction_id, item_id, status)
+                VALUES ('refund-only-001', ?, 'manual')
+            """, (item["id"],))
+
+        res = client.get("/api/budget/2031-02", headers=auth_headers)
+        data = res.json()
+        test_group = next(g for g in data["groups"] if g["name"] == "Refund Only Group")
+        test_item = next(i for i in test_group["items"] if i["name"] == "Refund Only Item")
+
+        # Spent should be -35.15 (credit), remaining should be 135.15
+        assert test_item["spent"] == -35.15
+        assert test_item["remaining"] == 135.15
