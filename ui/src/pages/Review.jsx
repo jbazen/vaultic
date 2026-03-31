@@ -109,7 +109,7 @@ function CategoryPicker({ currentItemId, onSelect, onCancel }) {
               ...g,
               items: g.items
                 // Active budget items only (+ always include current suggestion)
-                .filter(item => item.planned > 0 || item.spent > 0 || item.id === currentItemId)
+                .filter(item => item.planned > 0 || item.spent !== 0 || item.id === currentItemId)
                 // Fuzzy search: match item name or group name
                 .filter(item => !q || item.name.toLowerCase().includes(q) || g.name.toLowerCase().includes(q)),
             }))
@@ -198,7 +198,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
         const flat = [];
         for (const grp of g) {
           for (const item of grp.items) {
-            if (item.planned > 0 || item.spent > 0) {
+            if (item.planned > 0 || item.spent !== 0) {
               flat.push({
                 id: item.id,
                 name: item.name,

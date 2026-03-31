@@ -76,7 +76,7 @@ export default function GroupSection({ group, month, colorIndex, onUpdate, onOpe
     if (dragItemId === targetItemId) {
       setDragItemId(null); setDragOverItemId(null); return;
     }
-    const visibleItems = group.items.filter(i => i.planned > 0 || i.spent > 0);
+    const visibleItems = group.items.filter(i => i.planned > 0 || i.spent !== 0);
     const ids = visibleItems.map(i => i.id);
     const fromIdx = ids.indexOf(dragItemId);
     const toIdx   = ids.indexOf(targetItemId);
@@ -205,7 +205,7 @@ export default function GroupSection({ group, month, colorIndex, onUpdate, onOpe
                Items from prior months that have no activity this month simply don't
                appear; they'll show again in any month where they have data. */}
           {group.items
-            .filter(i => i.planned > 0 || i.spent > 0)
+            .filter(i => i.planned > 0 || i.spent !== 0)
             .map(item => (
               <ItemRow key={item.id} item={item} month={month}
                 groupType={group.type} showSpent={showSpent}

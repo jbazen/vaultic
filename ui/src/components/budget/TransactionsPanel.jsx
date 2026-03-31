@@ -335,7 +335,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                 }}>
                 <option value="" disabled>Correct to different item…</option>
                 {allGroups.map(g => {
-                  const activeItems = g.items.filter(i => i.planned > 0 || i.spent > 0);
+                  const activeItems = g.items.filter(i => i.planned > 0 || i.spent !== 0);
                   if (activeItems.length === 0) return null;
                   return (
                     <optgroup key={g.id} label={g.name}>
@@ -359,7 +359,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                 }}>
                 <option value="" disabled>Assign to budget item…</option>
                 {allGroups.map(g => {
-                  const activeItems = g.items.filter(i => i.planned > 0 || i.spent > 0);
+                  const activeItems = g.items.filter(i => i.planned > 0 || i.spent !== 0);
                   if (activeItems.length === 0) return null;
                   return (
                     <optgroup key={g.id} label={g.name}>
