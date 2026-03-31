@@ -680,6 +680,9 @@ MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_crypto_trades_time ON crypto_trades(trade_time)",
     "CREATE INDEX IF NOT EXISTS idx_crypto_lots_currency ON crypto_lots(currency, quantity_remaining)",
     "CREATE INDEX IF NOT EXISTS idx_crypto_gains_year ON crypto_gains(sale_date)",
+    # Store Plaid's detailed personal finance category (e.g. "GENERAL_SERVICES_REFUNDS_AND_RETURNS")
+    # so we can reliably detect refunds even when Plaid's amount sign is wrong.
+    "ALTER TABLE transactions ADD COLUMN category_detail TEXT",
 ]
 
 

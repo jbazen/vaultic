@@ -112,6 +112,24 @@ async def list_items(_user: str = Depends(get_current_user)):
     return [dict(row) for row in items]
 
 
+@router.post("/resync")
+async def force_resync(_user: str = Depends(get_current_user)):
+    """Reset Plaid sync cursors so the next sync re-fetches all transactions.
+
+    This forces Plaid to resend every transaction, which lets the sync pipeline
+    re-apply sign correction for refunds and store updated category_detail.
+    Existing transactions are upserted (not duplicated) via ON CONFLICT.
+    """
+    with get_db() as conn:
+        conn.execute("UPDATE plaid_items SET cursor = ''")
+    try:
+        await asyncio.to_thread(sync.sync_all)
+        return {"ok": True, "message": "Full resync complete — all transactions re-fetched with corrected refund signs"}
+    except Exception as e:
+        logger.error(f"Resync error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.delete("/items/{item_id}")
 async def remove_item(item_id: str, _user: str = Depends(get_current_user)):
     with get_db() as conn:

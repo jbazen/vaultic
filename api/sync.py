@@ -363,27 +363,45 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
             if not account_row:
                 continue
             category = None
+            category_detail = None
             if txn.personal_finance_category:
                 category = txn.personal_finance_category.primary
+                category_detail = getattr(txn.personal_finance_category, "detailed", None)
+
+            # Fix Plaid sign inconsistency for refunds: Plaid sometimes sends
+            # refunds with a positive amount (money out) even though the bank
+            # statement shows a credit. The detailed category reliably identifies
+            # refunds regardless of the sign. If the detailed category says it's
+            # a refund/return but the amount is positive, negate it.
+            amount = txn.amount
+            if amount > 0 and category_detail and any(
+                tag in category_detail.upper()
+                for tag in ("REFUND", "RETURN", "CREDIT_CARD_PAYMENT")
+            ):
+                amount = -amount
+
             conn.execute("""
                 INSERT INTO transactions
-                    (transaction_id, account_id, amount, date, name, merchant_name, category, pending)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (transaction_id, account_id, amount, date, name, merchant_name,
+                     category, category_detail, pending)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(transaction_id) DO UPDATE SET
                     amount = excluded.amount,
                     date = excluded.date,
                     name = excluded.name,
                     merchant_name = excluded.merchant_name,
                     category = excluded.category,
+                    category_detail = excluded.category_detail,
                     pending = excluded.pending
             """, (
                 txn.transaction_id,
                 account_row["id"],
-                txn.amount,
+                amount,
                 txn.date.isoformat() if hasattr(txn.date, "isoformat") else str(txn.date),
                 txn.name,
                 txn.merchant_name,
                 category,
+                category_detail,
                 int(txn.pending),
             ))
 
