@@ -246,9 +246,10 @@ export async function triggerSync() {
   return res.json();
 }
 
-// Reset Plaid cursors and re-fetch all transactions with corrected refund signs
+// Reset Plaid cursors and re-fetch all transactions with corrected refund signs.
+// Uses 5-minute timeout — full resync pulls thousands of transactions across all items.
 export async function forceResync() {
-  const res = await apiFetch("/api/plaid/resync", { method: "POST" });
+  const res = await apiFetch("/api/plaid/resync", { method: "POST", timeout: 300000 });
   return res.json();
 }
 
