@@ -3,7 +3,7 @@ import {
   getMe, getUsers, createUser, deleteUser, changePassword,
   totpSetup, totpConfirm, disable2FA, getSecurityLog,
   subscribePush, unsubscribePush, getPushSubscription, sendTestPush,
-  revokeAllSessions,
+  revokeAllSessions, forceResync,
 } from "../api.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -577,6 +577,51 @@ function ActiveSessions() {
 }
 
 
+function DataManagement() {
+  const [syncing, setSyncing] = useState(false);
+  const [result, setResult] = useState(null);
+
+  async function handleResync() {
+    if (!window.confirm("Re-fetch all transactions from Plaid? This corrects refund signs and updates categories. May take a minute.")) return;
+    setSyncing(true);
+    setResult(null);
+    try {
+      const res = await forceResync();
+      setResult({ ok: true, text: res.message || "Resync complete" });
+    } catch (e) {
+      setResult({ ok: false, text: e.message || "Resync failed" });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 14 }}>
+        Force a full re-fetch of all Plaid transactions. Corrects refund signs,
+        updates categories, and backfills any missing data fields.
+      </p>
+      <button
+        onClick={handleResync}
+        disabled={syncing}
+        style={{
+          padding: "8px 16px", borderRadius: 8, background: "var(--accent)",
+          color: "#fff", border: "none", fontSize: 13, fontWeight: 600,
+          cursor: syncing ? "not-allowed" : "pointer", opacity: syncing ? 0.7 : 1,
+        }}
+      >
+        {syncing ? "Resyncing..." : "Force Full Resync"}
+      </button>
+      {result && (
+        <p style={{ marginTop: 10, fontSize: 13, color: result.ok ? "var(--green)" : "var(--red)" }}>
+          {result.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+
 export default function Settings() {
   const [me, setMe] = useState(null);
 
@@ -611,6 +656,10 @@ export default function Settings() {
 
       <Section title="Active Sessions">
         <ActiveSessions />
+      </Section>
+
+      <Section title="Data Management">
+        <DataManagement />
       </Section>
 
       <Section title="Push Notifications">

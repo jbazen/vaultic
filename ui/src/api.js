@@ -246,6 +246,12 @@ export async function triggerSync() {
   return res.json();
 }
 
+// Reset Plaid cursors and re-fetch all transactions with corrected refund signs
+export async function forceResync() {
+  const res = await apiFetch("/api/plaid/resync", { method: "POST" });
+  return res.json();
+}
+
 export async function getPlaidItems() {
   const res = await apiFetch("/api/plaid/items");
   return res.json();

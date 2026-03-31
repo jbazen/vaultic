@@ -683,6 +683,23 @@ MIGRATIONS = [
     # Store Plaid's detailed personal finance category (e.g. "GENERAL_SERVICES_REFUNDS_AND_RETURNS")
     # so we can reliably detect refunds even when Plaid's amount sign is wrong.
     "ALTER TABLE transactions ADD COLUMN category_detail TEXT",
+    # Additional Plaid fields for richer transaction data.
+    # payment_channel: "online", "in store", or "other" — spending channel analysis
+    "ALTER TABLE transactions ADD COLUMN payment_channel TEXT",
+    # authorized_date: when the bank authorized the transaction (vs date = posted date)
+    "ALTER TABLE transactions ADD COLUMN authorized_date TEXT",
+    # original_description: raw bank description before Plaid's cleanup/normalization
+    "ALTER TABLE transactions ADD COLUMN original_description TEXT",
+    # merchant_entity_id: Plaid's normalized merchant identifier for cross-transaction linking
+    "ALTER TABLE transactions ADD COLUMN merchant_entity_id TEXT",
+    # check_number: check number from Plaid (also stored in transaction_metadata if user-entered)
+    "ALTER TABLE transactions ADD COLUMN check_number TEXT",
+    # logo_url: merchant logo for UI display
+    "ALTER TABLE transactions ADD COLUMN logo_url TEXT",
+    # website: merchant website URL
+    "ALTER TABLE transactions ADD COLUMN website TEXT",
+    # transaction_code: Plaid-specific code (e.g. for refunds, direct deposits)
+    "ALTER TABLE transactions ADD COLUMN transaction_code TEXT",
 ]
 
 

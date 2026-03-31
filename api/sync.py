@@ -380,11 +380,22 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
             ):
                 amount = -amount
 
+            # Extract optional fields — use getattr to handle older Plaid SDK versions
+            authorized_date = getattr(txn, "authorized_date", None)
+            if authorized_date and hasattr(authorized_date, "isoformat"):
+                authorized_date = authorized_date.isoformat()
+
+            transaction_code = getattr(txn, "transaction_code", None)
+            if transaction_code and hasattr(transaction_code, "value"):
+                transaction_code = transaction_code.value
+
             conn.execute("""
                 INSERT INTO transactions
                     (transaction_id, account_id, amount, date, name, merchant_name,
-                     category, category_detail, pending)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     category, category_detail, pending, payment_channel,
+                     authorized_date, original_description, merchant_entity_id,
+                     check_number, logo_url, website, transaction_code)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(transaction_id) DO UPDATE SET
                     amount = excluded.amount,
                     date = excluded.date,
@@ -392,7 +403,15 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
                     merchant_name = excluded.merchant_name,
                     category = excluded.category,
                     category_detail = excluded.category_detail,
-                    pending = excluded.pending
+                    pending = excluded.pending,
+                    payment_channel = excluded.payment_channel,
+                    authorized_date = excluded.authorized_date,
+                    original_description = excluded.original_description,
+                    merchant_entity_id = excluded.merchant_entity_id,
+                    check_number = excluded.check_number,
+                    logo_url = excluded.logo_url,
+                    website = excluded.website,
+                    transaction_code = excluded.transaction_code
             """, (
                 txn.transaction_id,
                 account_row["id"],
@@ -403,6 +422,14 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
                 category,
                 category_detail,
                 int(txn.pending),
+                getattr(txn, "payment_channel", None),
+                authorized_date,
+                getattr(txn, "original_description", None),
+                getattr(txn, "merchant_entity_id", None),
+                getattr(txn, "check_number", None),
+                getattr(txn, "logo_url", None),
+                getattr(txn, "website", None),
+                transaction_code,
             ))
 
         for txn in removed:
