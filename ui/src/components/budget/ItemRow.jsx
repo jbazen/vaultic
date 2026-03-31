@@ -26,15 +26,15 @@ export default function ItemRow({ item, month, groupType, showSpent, onUpdate, o
   function valueCell() {
     if (isIncome) {
       return (
-        <span style={{ fontSize: 13, color: item.spent > 0 ? "#22c55e" : "var(--text2)" }}>
-          {item.spent > 0 ? fmt(item.spent) : "—"}
+        <span style={{ fontSize: 13, color: item.spent !== 0 ? "#22c55e" : "var(--text2)" }}>
+          {item.spent !== 0 ? fmt(Math.abs(item.spent)) : "—"}
         </span>
       );
     }
     if (showSpent) {
       return (
-        <span style={{ fontSize: 13, fontWeight: 600, color: item.spent > 0 ? "#22c55e" : "var(--text2)" }}>
-          {item.spent > 0 ? fmt(item.spent) : "—"}
+        <span style={{ fontSize: 13, fontWeight: 600, color: item.spent !== 0 ? "#22c55e" : "var(--text2)" }}>
+          {item.spent !== 0 ? fmt(Math.abs(item.spent)) : "—"}
         </span>
       );
     }
