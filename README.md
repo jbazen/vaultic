@@ -40,7 +40,7 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 - **PDF import** — parse Investor360/NFS account statements for Parker Financial accounts that Plaid cannot reach; NFS statements use a free deterministic regex parser (no AI cost); other PDFs fall back to Claude Sonnet extraction
 - **Manual entries** — home value, car value, credit score, and any other asset or liability
 - **Net worth history** — daily snapshots, historical charts
-- **Zero-based budget module** — monthly budget with Plaid transaction auto-assignment, drag-to-reorder groups and items, carryforward of planned amounts month-to-month; balanced indicator shows when income = expenses
+- **Zero-based budget module** — monthly budget with Plaid transaction auto-assignment, drag-to-reorder groups and items, carryforward of planned amounts month-to-month; balanced indicator shows when income = expenses; manual transaction creation; archive system for historical imported items
 - **Tax module** — upload 1040s, W-4s, paystubs; year-over-year tax history charts; live tax projection; W-4 multi-job withholding optimizer; quarterly estimated tax calculator (1040-ES) with IRS safe harbor analysis; Arizona flat 2.5% state tax; auto-generated tax document checklist; crypto capital gains tracker (Coinbase FIFO, Schedule D)
 - **Fund Financials** — read-only Google Sheets viewer for savings category running totals (6M / 1Y / 2Y / 5Y / All range selector); native sinking fund tracker also built in
 - **Voice interface** — "Hey Sage" wake word, push-to-talk (Whisper), hands-free voice mode, OpenAI TTS (fable voice) or free browser TTS
@@ -944,7 +944,7 @@ NFS/Commonwealth statements are parsed by a **free deterministic regex parser** 
 - [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth (complete)
 - [x] **Continuous backup** — Litestream → Cloudflare R2, 7-day retention, one-command restore (complete)
 - [x] **Plaid Production** — approved 2026-03-17; non-OAuth institutions live; OAuth (Chase, Rocket Mortgage, Health Equity) pending approval (~early April 2026)
-- [x] **Test suite** — 339 backend unit tests + 26 Playwright E2E tests (complete)
+- [x] **Test suite** — 353 backend unit tests + 26 Playwright E2E tests (complete)
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
 - [ ] **River Bitcoin** — no retail API; plan to transfer BTC to Coinbase
 - ✅ **Sage budget tools** — `get_budget`, `get_budget_history` so Sage can answer "how much did I spend on groceries last month?"

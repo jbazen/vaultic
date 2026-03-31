@@ -157,9 +157,12 @@ def _auto_categorize_new(conn, transaction_ids: list[str]):
             rules[row["merchant"]] = (row["item_id"], row["match_count"])
 
     for txn_id in transaction_ids:
-        # Skip if already assigned
+        # Skip if already assigned (direct assignment OR split across items)
         existing = conn.execute(
-            "SELECT 1 FROM transaction_assignments WHERE transaction_id = ?", (txn_id,)
+            "SELECT 1 FROM transaction_assignments WHERE transaction_id = ? "
+            "UNION ALL "
+            "SELECT 1 FROM transaction_splits WHERE transaction_id = ?",
+            (txn_id, txn_id)
         ).fetchone()
         if existing:
             continue
@@ -199,7 +202,10 @@ def _auto_categorize_new(conn, transaction_ids: list[str]):
     remaining_ids = []
     for txn_id in transaction_ids:
         assigned = conn.execute(
-            "SELECT 1 FROM transaction_assignments WHERE transaction_id = ?", (txn_id,)
+            "SELECT 1 FROM transaction_assignments WHERE transaction_id = ? "
+            "UNION ALL "
+            "SELECT 1 FROM transaction_splits WHERE transaction_id = ?",
+            (txn_id, txn_id)
         ).fetchone()
         if not assigned:
             remaining_ids.append(txn_id)

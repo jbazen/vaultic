@@ -137,6 +137,17 @@ class SplitsBody(BaseModel):
     notes: str | None = None         # free-form note on the transaction (optional)
 
 
+class ManualTransactionBody(BaseModel):
+    """Request body for POST /manual-transaction."""
+    amount: float
+    date: str            # YYYY-MM-DD
+    merchant_name: str
+    is_income: bool = False
+    item_id: int | None = None      # budget item to assign to (optional)
+    check_number: str | None = None
+    notes: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # GET /pending-review — all pending_review transactions across all months
 # Used by the mobile Review Queue screen (/review) so the user sees every
@@ -353,6 +364,138 @@ async def budget_restore_transaction(
 
 
 # ---------------------------------------------------------------------------
+# POST /manual-transaction — create a user-entered transaction
+# ---------------------------------------------------------------------------
+
+@router.post("/manual-transaction")
+async def create_manual_transaction(
+    body: ManualTransactionBody,
+    _user: str = Depends(get_current_user),
+):
+    """Create a manual transaction and optionally assign it to a budget item.
+
+    Manual transactions have a 'manual_' prefix on their transaction_id so they
+    are distinguishable from Plaid-synced transactions. They use the sentinel
+    'Manual Transactions' account (seeded by migration) and pending=0 so they
+    appear immediately in spending totals and the tracked transactions list.
+    """
+    import uuid
+
+    if body.amount <= 0:
+        raise HTTPException(status_code=422, detail="Amount must be greater than 0")
+    if not body.date or not re.match(r"^\d{4}-\d{2}-\d{2}$", body.date):
+        raise HTTPException(status_code=422, detail="Date must be YYYY-MM-DD")
+    if not body.merchant_name or not body.merchant_name.strip():
+        raise HTTPException(status_code=422, detail="Merchant name is required")
+
+    transaction_id = f"manual_{uuid.uuid4().hex}"
+    # Plaid convention: positive = outflow (expense), negative = inflow (income/refund)
+    amount = -body.amount if body.is_income else body.amount
+
+    with get_db() as conn:
+        # Look up the sentinel "Manual Transactions" account (seeded by migration)
+        manual_acct = conn.execute(
+            "SELECT id FROM accounts WHERE plaid_account_id = '__manual__'"
+        ).fetchone()
+        if not manual_acct:
+            raise HTTPException(status_code=500, detail="Manual account not found — run migrations")
+        manual_account_id = manual_acct["id"]
+
+        conn.execute("""
+            INSERT INTO transactions (transaction_id, account_id, amount, date, name, merchant_name, pending)
+            VALUES (?, ?, ?, ?, ?, ?, 0)
+        """, (transaction_id, manual_account_id, amount, body.date, body.merchant_name.strip(), body.merchant_name.strip()))
+
+        # Assign to budget item if specified
+        if body.item_id is not None:
+            conn.execute(
+                "INSERT INTO transaction_assignments (transaction_id, item_id, status)"
+                " VALUES (?, ?, 'manual')",
+                (transaction_id, body.item_id)
+            )
+
+        # Store check_number / notes in transaction_metadata if provided
+        if body.check_number or body.notes:
+            conn.execute("""
+                INSERT INTO transaction_metadata (transaction_id, check_number, notes)
+                VALUES (?, ?, ?)
+                ON CONFLICT(transaction_id) DO UPDATE SET
+                    check_number = excluded.check_number,
+                    notes = excluded.notes
+            """, (transaction_id, body.check_number, body.notes))
+
+    return {"ok": True, "transaction_id": transaction_id}
+
+
+# ---------------------------------------------------------------------------
+# GET /visibility-check/{month} — diagnostic: compare old vs new filtering
+# ---------------------------------------------------------------------------
+
+@router.get("/visibility-check/{month}")
+async def visibility_check(month: str, _user: str = Depends(get_current_user)):
+    """Diagnostic endpoint: shows what groups/items are visible under old vs new filter.
+
+    Returns both lists so we can verify nothing is lost in the transition to
+    is_archived-based filtering. Safe to remove once verified.
+    """
+    _validate_month(month)
+    current_month = date.today().strftime("%Y-%m")
+    is_current_or_future = month >= current_month
+
+    budget = await get_budget(month, _user)
+    groups = budget["groups"]
+
+    old_filter_groups = []
+    new_filter_groups = []
+
+    for g in groups:
+        has_activity = g["total_planned"] > 0 or g["total_spent"] != 0
+
+        # Old filter: only show groups with activity
+        old_visible = has_activity
+        # New filter: for current/future months, also show non-archived groups
+        new_visible = has_activity or (is_current_or_future and not g.get("is_archived"))
+
+        # Item-level filtering (new only — old filter didn't filter items)
+        old_items = [i["name"] for i in g["items"]] if old_visible else []
+        if new_visible:
+            new_items = [
+                i["name"] for i in g["items"]
+                if (i["planned"] > 0 or i["spent"] != 0) or
+                   (is_current_or_future and not i.get("is_archived"))
+            ]
+        else:
+            new_items = []
+
+        if old_visible:
+            old_filter_groups.append({
+                "name": g["name"], "type": g["type"],
+                "total_planned": g["total_planned"], "total_spent": g["total_spent"],
+                "items": old_items,
+            })
+        if new_visible:
+            new_filter_groups.append({
+                "name": g["name"], "type": g["type"],
+                "total_planned": g["total_planned"], "total_spent": g["total_spent"],
+                "is_archived": g.get("is_archived", False),
+                "items": new_items,
+            })
+
+    # Diff: what's new and what's gone
+    old_names = {g["name"] for g in old_filter_groups}
+    new_names = {g["name"] for g in new_filter_groups}
+
+    return {
+        "month": month,
+        "is_current_or_future": is_current_or_future,
+        "old_filter": {"count": len(old_filter_groups), "groups": old_filter_groups},
+        "new_filter": {"count": len(new_filter_groups), "groups": new_filter_groups},
+        "added_groups": sorted(new_names - old_names),
+        "removed_groups": sorted(old_names - new_names),
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /{month} — full budget for a given month
 # ---------------------------------------------------------------------------
 
@@ -391,13 +534,13 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
         # Exclude soft-deleted groups — is_deleted=1 means the user "deleted" the
         # group from the UI; the row stays in DB to preserve budget_history references.
         groups = conn.execute(
-            "SELECT id, name, type, display_order FROM budget_groups"
+            "SELECT id, name, type, display_order, is_archived FROM budget_groups"
             " WHERE is_deleted = 0 ORDER BY display_order, name"
         ).fetchall()
 
         # Pre-fetch all items, planned amounts, and spending in bulk (avoids N+1)
         all_items = conn.execute(
-            "SELECT id, name, group_id FROM budget_items"
+            "SELECT id, name, group_id, is_archived FROM budget_items"
             " WHERE is_deleted = 0 ORDER BY display_order, name"
         ).fetchall()
 
@@ -457,6 +600,7 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
                     "planned": planned,
                     "spent": spent,
                     "remaining": planned - spent,
+                    "is_archived": bool(item["is_archived"]),
                 })
 
                 group_planned += planned
@@ -469,6 +613,7 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
                 "display_order": group["display_order"],
                 "total_planned": group_planned,
                 "total_spent": group_spent,
+                "is_archived": bool(group["is_archived"]),
                 "items": items_out,
             })
 

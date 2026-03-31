@@ -719,6 +719,15 @@ export async function getDeletedTransactions(month) {
   return res.json();
 }
 
+// Create a manual transaction (user-entered, not from Plaid)
+export async function createManualTransaction(data) {
+  const res = await apiFetch("/api/budget/manual-transaction", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
 // ── Edit Expense / transaction split API ──────────────────────────────────────
 
 /** Fetch full transaction details + current assignment/splits for the edit modal. */

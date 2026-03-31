@@ -700,6 +700,16 @@ MIGRATIONS = [
     "ALTER TABLE transactions ADD COLUMN website TEXT",
     # transaction_code: Plaid-specific code (e.g. for refunds, direct deposits)
     "ALTER TABLE transactions ADD COLUMN transaction_code TEXT",
+    # Seed a "Manual Transactions" account for user-created transactions.
+    # is_manual=1 flags it as non-Plaid; plaid_account_id='__manual__' satisfies UNIQUE.
+    """INSERT OR IGNORE INTO accounts (plaid_account_id, name, type, subtype, is_manual)
+       VALUES ('__manual__', 'Manual Transactions', 'other', 'manual', 1)""",
+    # Archive flag for budget groups/items — distinguishes "active but $0 this month"
+    # from "old historical item only relevant when viewing past months."
+    # is_archived=0 (default): always shown in current/future months.
+    # is_archived=1: only shown in months where total_planned > 0 or total_spent != 0.
+    "ALTER TABLE budget_groups ADD COLUMN is_archived INTEGER DEFAULT 0",
+    "ALTER TABLE budget_items ADD COLUMN is_archived INTEGER DEFAULT 0",
 ]
 
 
@@ -735,6 +745,60 @@ def _migrate_encrypt_totp_secrets(conn):
             conn.execute(f"UPDATE users SET {cols} WHERE id = ?", (*updates.values(), uid))
 
 
+def _migrate_auto_archive_budget(conn):
+    """One-time migration: archive budget groups and items with no recent activity.
+
+    Archives groups/items that have NO budget_amounts rows for any month in the
+    last 3 months. This separates old imported historical data from the active
+    budget without losing anything — archived items still appear when viewing
+    past months where they had data.
+    """
+    from datetime import date, timedelta
+    today = date.today()
+    # Build the last 3 month strings (e.g. ['2026-01', '2026-02', '2026-03'])
+    recent_months = []
+    for i in range(3):
+        d = today.replace(day=1) - timedelta(days=i * 28)
+        recent_months.append(d.strftime("%Y-%m"))
+
+    placeholders = ",".join("?" * len(recent_months))
+
+    # Archive items that have no planned amounts in any of the recent months.
+    # Exclude "Other Deposits" — it's an active income catch-all for refunds and
+    # misc deposits that intentionally has $0 planned most months.
+    conn.execute(f"""
+        UPDATE budget_items SET is_archived = 1
+        WHERE is_deleted = 0
+          AND is_archived = 0
+          AND LOWER(name) != 'other deposits'
+          AND id NOT IN (
+              SELECT DISTINCT item_id FROM budget_amounts
+              WHERE month IN ({placeholders})
+              AND planned > 0
+          )
+    """, recent_months)
+
+    # Archive groups where ALL their non-deleted items are archived
+    conn.execute("""
+        UPDATE budget_groups SET is_archived = 1
+        WHERE is_deleted = 0
+          AND is_archived = 0
+          AND id NOT IN (
+              SELECT DISTINCT group_id FROM budget_items
+              WHERE is_deleted = 0 AND is_archived = 0
+          )
+    """)
+
+    archived_items = conn.execute(
+        "SELECT COUNT(*) AS c FROM budget_items WHERE is_archived = 1"
+    ).fetchone()["c"]
+    archived_groups = conn.execute(
+        "SELECT COUNT(*) AS c FROM budget_groups WHERE is_archived = 1"
+    ).fetchone()["c"]
+    if archived_items > 0 or archived_groups > 0:
+        logger.info("Auto-archived %d budget items and %d budget groups", archived_items, archived_groups)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -761,6 +825,11 @@ def init_db():
             _migrate_encrypt_totp_secrets(conn)
         except Exception as exc:
             logger.warning("TOTP encryption migration failed: %s", exc)
+        # One-time: archive old budget items/groups with no recent planned amounts
+        try:
+            _migrate_auto_archive_budget(conn)
+        except Exception as exc:
+            logger.warning("Budget auto-archive migration failed: %s", exc)
 
 
 @contextmanager

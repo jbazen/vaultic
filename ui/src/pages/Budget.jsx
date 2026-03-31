@@ -28,6 +28,7 @@ import SummaryPanel from "../components/budget/SummaryPanel.jsx";
 import TransactionsPanel from "../components/budget/TransactionsPanel.jsx";
 import GroupSection from "../components/budget/GroupSection.jsx";
 import ItemDetailModal from "../components/budget/ItemDetailModal.jsx";
+import CreateTransactionModal from "../components/budget/CreateTransactionModal.jsx";
 
 // ── Main Budget page ──────────────────────────────────────────────────────────
 export default function Budget() {
@@ -51,6 +52,7 @@ export default function Budget() {
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupType, setNewGroupType] = useState("expense");
   const [activeItem, setActiveItem] = useState(null); // item clicked for detail modal
+  const [showCreateTxn, setShowCreateTxn] = useState(false);
 
   // ── Drag-and-drop state ──────────────────────────────────────────────────
   // Groups and items use separate drag state so they don't interfere.
@@ -98,13 +100,28 @@ export default function Budget() {
   const remainingToBudget = summary?.remaining_to_budget ?? 0;
   const fullyBudgeted = Math.abs(remainingToBudget) < 0.01;
 
-  // Auto-hide groups that have no items with planned > 0 or spent > 0 this month.
-  // Groups whose every item is $0/$0 for the viewed month are not shown — they'll
-  // reappear in any month where they have data. Deleted groups never come from the
-  // API (is_deleted=1 filtered server-side), so no extra check needed here.
-  const visibleGroups = groups.filter(
-    g => g.total_planned > 0 || g.total_spent > 0
-  );
+  // Visibility filter — two modes depending on whether we're viewing the current
+  // (or future) month vs a past month:
+  //   • Past months: only show groups/items with actual activity (planned > 0 or
+  //     spent != 0). This keeps historical views accurate — you only see the budget
+  //     categories that were in use that month, not today's active categories.
+  //   • Current/future: also show non-archived groups/items even if they have $0/$0.
+  //     This ensures active budget categories like "Other Deposits" are always
+  //     visible so the user can plan and assign transactions to them.
+  // The is_archived flag (set by auto-migration) separates "active but empty this
+  // month" from "old imported historical item that shouldn't clutter the view."
+  const isCurrentOrFuture = month >= currentMonth();
+  const visibleGroups = groups.filter(g => {
+    const hasActivity = g.total_planned > 0 || g.total_spent !== 0;
+    return hasActivity || (isCurrentOrFuture && !g.is_archived);
+  }).map(g => {
+    // Item-level filtering within visible groups — same logic
+    const visibleItems = g.items.filter(i => {
+      const hasActivity = i.planned > 0 || i.spent !== 0;
+      return hasActivity || (isCurrentOrFuture && !i.is_archived);
+    });
+    return { ...g, items: visibleItems };
+  });
 
   // Assign a stable color index to each expense group (income stays green)
   let expIdx = 0;
@@ -184,6 +201,18 @@ export default function Budget() {
         <button className="btn btn-secondary" style={{ padding: "6px 16px", fontSize: 18, lineHeight: 1 }}
           onClick={() => setMonth(nextMonth)} aria-label="Next month">
           ›
+        </button>
+
+        <button
+          onClick={() => setShowCreateTxn(true)}
+          style={{
+            padding: "6px 14px", borderRadius: 6, border: "none",
+            background: "var(--accent)", color: "#fff",
+            fontSize: 12, fontWeight: 600, cursor: "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          + New Transaction
         </button>
       </div>
 
@@ -376,9 +405,9 @@ export default function Budget() {
               </div>
 
               {rightTab === "summary" ? (
-                <SummaryPanel groups={groups} summary={summary} />
+                <SummaryPanel groups={visibleGroups} summary={summary} />
               ) : (
-                <TransactionsPanel month={month} allGroups={groups} onBudgetUpdate={silentLoad} />
+                <TransactionsPanel month={month} allGroups={visibleGroups} onBudgetUpdate={silentLoad} />
               )}
             </div>
           </div>
@@ -392,9 +421,19 @@ export default function Budget() {
           itemId={activeItem.id}
           itemName={activeItem.name}
           month={month}
-          allGroups={groups}
+          allGroups={visibleGroups}
           onClose={() => setActiveItem(null)}
           onUpdate={load}
+        />
+      )}
+
+      {/* Create manual transaction modal */}
+      {showCreateTxn && (
+        <CreateTransactionModal
+          month={month}
+          allGroups={visibleGroups}
+          onClose={() => setShowCreateTxn(false)}
+          onSaved={load}
         />
       )}
     </div>

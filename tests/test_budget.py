@@ -435,6 +435,175 @@ class TestCSVImport:
 
 # ── Refund / credit handling ─────────────────────────────────────────────────
 
+class TestManualTransaction:
+    """POST /manual-transaction — create user-entered transactions."""
+
+    def test_create_manual_transaction_requires_auth(self, client):
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 50.0, "date": "2031-05-01", "merchant_name": "Test"
+        })
+        assert res.status_code == 401
+
+    def test_create_manual_expense(self, client, auth_headers):
+        """Creates an expense transaction (positive amount) and it appears in budget."""
+        g = _create_group(client, auth_headers, "Manual Test Group")
+        item = _create_item(client, auth_headers, g["id"], "Manual Test Item")
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": "2031-05", "planned": 500.0}, headers=auth_headers)
+
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 75.50,
+            "date": "2031-05-15",
+            "merchant_name": "Home Depot",
+            "is_income": False,
+            "item_id": item["id"],
+        }, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["ok"] is True
+        assert data["transaction_id"].startswith("manual_")
+
+        # Verify it shows up in budget spending
+        budget = client.get("/api/budget/2031-05", headers=auth_headers).json()
+        test_group = next(g for g in budget["groups"] if g["name"] == "Manual Test Group")
+        test_item = next(i for i in test_group["items"] if i["name"] == "Manual Test Item")
+        assert test_item["spent"] == 75.50
+
+    def test_create_manual_income(self, client, auth_headers):
+        """Creates an income transaction (negative amount stored)."""
+        g = _create_group(client, auth_headers, "Manual Income Group", gtype="income")
+        item = _create_item(client, auth_headers, g["id"], "Side Income")
+
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 200.0,
+            "date": "2031-05-01",
+            "merchant_name": "Freelance Payment",
+            "is_income": True,
+            "item_id": item["id"],
+        }, headers=auth_headers)
+        assert res.status_code == 200
+
+        # Verify stored amount is negative (Plaid convention for inflow)
+        from tests.conftest import _test_get_db
+        tid = res.json()["transaction_id"]
+        with _test_get_db() as conn:
+            row = conn.execute("SELECT amount FROM transactions WHERE transaction_id = ?", (tid,)).fetchone()
+        assert row["amount"] == -200.0
+
+    def test_create_unassigned_transaction(self, client, auth_headers):
+        """Creates a transaction with no budget item — goes to unassigned queue."""
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 30.0,
+            "date": "2031-06-10",
+            "merchant_name": "Gas Station",
+        }, headers=auth_headers)
+        assert res.status_code == 200
+
+        # Should appear in unassigned transactions for that month
+        unassigned = client.get("/api/budget/unassigned/2031-06", headers=auth_headers).json()
+        manual_txns = [t for t in unassigned if t["transaction_id"].startswith("manual_")]
+        assert len(manual_txns) >= 1
+        assert any(t["merchant_name"] == "Gas Station" for t in manual_txns)
+
+    def test_create_with_metadata(self, client, auth_headers):
+        """Check # and notes are stored in transaction_metadata."""
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 100.0,
+            "date": "2031-05-20",
+            "merchant_name": "Landlord",
+            "check_number": "1042",
+            "notes": "May rent",
+        }, headers=auth_headers)
+        assert res.status_code == 200
+        tid = res.json()["transaction_id"]
+
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            meta = conn.execute(
+                "SELECT check_number, notes FROM transaction_metadata WHERE transaction_id = ?",
+                (tid,)
+            ).fetchone()
+        assert meta["check_number"] == "1042"
+        assert meta["notes"] == "May rent"
+
+    def test_validation_rejects_zero_amount(self, client, auth_headers):
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 0, "date": "2031-05-01", "merchant_name": "Test"
+        }, headers=auth_headers)
+        assert res.status_code == 422
+
+    def test_validation_rejects_empty_merchant(self, client, auth_headers):
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 50.0, "date": "2031-05-01", "merchant_name": "   "
+        }, headers=auth_headers)
+        assert res.status_code == 422
+
+    def test_validation_rejects_bad_date(self, client, auth_headers):
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 50.0, "date": "not-a-date", "merchant_name": "Test"
+        }, headers=auth_headers)
+        assert res.status_code == 422
+
+
+class TestArchiveVisibility:
+    """Verify is_archived flag controls group/item visibility correctly."""
+
+    def test_budget_returns_is_archived_flags(self, client, auth_headers):
+        """GET /{month} includes is_archived on groups and items."""
+        g = _create_group(client, auth_headers, "Archive Test Group")
+        item = _create_item(client, auth_headers, g["id"], "Archive Test Item")
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": "2031-07", "planned": 100.0}, headers=auth_headers)
+
+        res = client.get("/api/budget/2031-07", headers=auth_headers)
+        data = res.json()
+        test_group = next(g for g in data["groups"] if g["name"] == "Archive Test Group")
+        assert "is_archived" in test_group
+        assert test_group["is_archived"] is False
+        test_item = next(i for i in test_group["items"] if i["name"] == "Archive Test Item")
+        assert "is_archived" in test_item
+        assert test_item["is_archived"] is False
+
+    def test_archived_group_still_returned_by_api(self, client, auth_headers):
+        """Archived groups are still returned by the API — filtering is client-side."""
+        g = _create_group(client, auth_headers, "Archived Group Test")
+        item = _create_item(client, auth_headers, g["id"], "Archived Item Test")
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": "2031-08", "planned": 50.0}, headers=auth_headers)
+
+        # Manually archive the group and item
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            conn.execute("UPDATE budget_groups SET is_archived = 1 WHERE id = ?", (g["id"],))
+            conn.execute("UPDATE budget_items SET is_archived = 1 WHERE id = ?", (item["id"],))
+
+        res = client.get("/api/budget/2031-08", headers=auth_headers)
+        data = res.json()
+        # The group should still be in the API response (archived is a display hint)
+        test_group = next(
+            (g for g in data["groups"] if g["name"] == "Archived Group Test"), None
+        )
+        assert test_group is not None
+        assert test_group["is_archived"] is True
+        assert test_group["items"][0]["is_archived"] is True
+
+    def test_visibility_check_endpoint(self, client, auth_headers):
+        """GET /visibility-check/{month} returns both old and new filter views."""
+        g = _create_group(client, auth_headers, "Vis Check Group")
+        item = _create_item(client, auth_headers, g["id"], "Vis Check Item")
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": "2031-09", "planned": 200.0}, headers=auth_headers)
+
+        res = client.get("/api/budget/visibility-check/2031-09", headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "old_filter" in data
+        assert "new_filter" in data
+        assert "added_groups" in data
+        assert "removed_groups" in data
+        assert len(data["removed_groups"]) == 0  # new filter never removes
+
+
 class TestRefundHandling:
     """Verify that credit/refund transactions (negative amounts) reduce spending
     instead of adding to it, and are displayed correctly in item detail."""
