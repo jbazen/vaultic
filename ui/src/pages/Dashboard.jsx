@@ -14,6 +14,7 @@ import { StatCard, AccountRow, ManualAccountRow } from "../components/dashboard/
 import { isRetirementAccount } from "../utils/accounts.js";
 import { fmt, fmtSigned, fmtDate } from "../utils/format.js";
 import CalendarSection from "../components/calendar/CalendarSection.jsx";
+import NewsFeedPanel from "../components/dashboard/NewsFeedPanel.jsx";
 
 // ── Category config ───────────────────────────────────────────────────────────
 
@@ -283,6 +284,9 @@ export default function Dashboard() {
           <CalendarSection />
         </div>
       </div>
+
+      {/* ── Market & News Feed ── */}
+      <NewsFeedPanel />
 
       {/* ── Accounts: 2-column grid, each institution/section its own card ── */}
       <div className="account-grid">

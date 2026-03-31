@@ -701,6 +701,51 @@ def tool_get_upcoming_events(inputs, username):
     return f"Upcoming events (next {days} days):\n" + str(result)
 
 
+def tool_get_ticker_quotes(inputs, username):
+    """Return cached price quotes for all held tickers."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT symbol, asset_type, price, change_pct, source, fetched_at "
+            "FROM ticker_quotes ORDER BY asset_type, symbol"
+        ).fetchall()
+    if not rows:
+        return "No ticker quotes cached yet. The user should visit the Dashboard to trigger a price refresh, or you can suggest they check back shortly."
+    lines = []
+    for r in rows:
+        chg = f" ({r['change_pct']:+.2f}%)" if r["change_pct"] is not None else ""
+        lines.append(f"{r['symbol']} ({r['asset_type']}): ${r['price']:,.2f}{chg} [via {r['source']}, {r['fetched_at']}]")
+    return "Current portfolio quotes:\n" + "\n".join(lines)
+
+
+def tool_get_financial_news(inputs, username):
+    """Return cached financial news articles."""
+    limit = min(inputs.get("limit", 10), 20)
+    topic = inputs.get("topic", "")
+
+    with get_db() as conn:
+        if topic:
+            rows = conn.execute(
+                "SELECT title, url, source_name, snippet, relevance, published_at "
+                "FROM news_articles WHERE relevance = ? "
+                "ORDER BY fetched_at DESC, published_at DESC LIMIT ?",
+                (topic, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT title, url, source_name, snippet, relevance, published_at "
+                "FROM news_articles ORDER BY fetched_at DESC, published_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+    if not rows:
+        return "No cached news articles. The user should visit the Dashboard to trigger a news refresh."
+    lines = []
+    for r in rows:
+        src = f" ({r['source_name']})" if r["source_name"] else ""
+        lines.append(f"[{r['relevance']}] {r['title']}{src}\n  {r['snippet'][:200]}\n  {r['url']}")
+    return f"Financial news ({len(rows)} articles):\n\n" + "\n\n".join(lines)
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 TOOL_DISPATCH = {
@@ -727,4 +772,6 @@ TOOL_DISPATCH = {
     "get_tax_history":            tool_get_tax_history,
     "get_upcoming_events":        tool_get_upcoming_events,
     "get_crypto_gains":           tool_get_crypto_gains,
+    "get_ticker_quotes":          tool_get_ticker_quotes,
+    "get_financial_news":         tool_get_financial_news,
 }

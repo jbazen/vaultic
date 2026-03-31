@@ -710,6 +710,31 @@ MIGRATIONS = [
     # is_archived=1: only shown in months where total_planned > 0 or total_spent != 0.
     "ALTER TABLE budget_groups ADD COLUMN is_archived INTEGER DEFAULT 0",
     "ALTER TABLE budget_items ADD COLUMN is_archived INTEGER DEFAULT 0",
+    # ── Ticker Feed ────────────────────────────────────────────────────────────
+    # Cached price quotes for held tickers (crypto + equity/mutual funds).
+    # UNIQUE(symbol) so INSERT OR REPLACE naturally refreshes stale rows.
+    """CREATE TABLE IF NOT EXISTS ticker_quotes (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol      TEXT NOT NULL UNIQUE,
+        asset_type  TEXT NOT NULL,
+        price       REAL,
+        change_pct  REAL,
+        prev_close  REAL,
+        market_cap  REAL,
+        source      TEXT,
+        fetched_at  DATETIME NOT NULL
+    )""",
+    # Cached news articles from Tavily, deduplicated by URL.
+    """CREATE TABLE IF NOT EXISTS news_articles (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        title        TEXT NOT NULL,
+        url          TEXT NOT NULL UNIQUE,
+        source_name  TEXT,
+        snippet      TEXT,
+        relevance    TEXT,
+        published_at TEXT,
+        fetched_at   DATETIME NOT NULL
+    )""",
 ]
 
 

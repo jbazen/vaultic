@@ -1084,3 +1084,18 @@ export async function deleteCalendarEvent(id) {
   const res = await apiFetch(`/api/calendar/${id}`, { method: "DELETE" });
   return res.json();
 }
+
+
+// ── Ticker Feed ──────────────────────────────────────────────────────────────
+export async function getFeedSummary() {
+  const res = await apiFetch("/api/feed/summary");
+  return res.json();
+}
+export async function refreshFeedQuotes() {
+  const res = await apiFetch("/api/feed/quotes/refresh", { method: "POST" });
+  return res.json();
+}
+export async function refreshFeedNews() {
+  const res = await apiFetch("/api/feed/news/refresh", { method: "POST" });
+  return res.json();
+}

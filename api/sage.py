@@ -55,6 +55,8 @@ Their tax profile:
 - Parker Financial IRAs and college fund
 - Full budget and transaction history
 - Tax returns 2019-2024, current-year documents, paystubs, W-4s, draft return
+- Real-time price quotes for all held tickers (crypto via Coinbase, equity/funds via Yahoo Finance) — use get_ticker_quotes
+- Curated financial news relevant to their holdings and financial situation — use get_financial_news
 
 On every new conversation, read your notes first — they contain important context about the user's goals and preferences. Update notes whenever you learn something worth remembering.
 
@@ -306,6 +308,23 @@ TOOLS = [
                     "type": "integer",
                     "description": "How many days ahead to look (default 30, max 90)"
                 }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_ticker_quotes",
+        "description": "Get current/recent prices for all tickers the user holds (crypto from Coinbase, equity/mutual funds from Yahoo Finance). Includes price, 24h change %, and when the quote was last fetched. Use this when the user asks about current prices, portfolio performance, or market movements.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_financial_news",
+        "description": "Get recent financial news articles curated for the user's holdings and financial situation. Covers their crypto (BTC, ETH, SOL, etc.), equity funds (FXAIX), mortgage rates, and macro news affecting retirement accounts. Use when the user asks 'what's in the news?', about market news, or you want to proactively share relevant developments.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Optional filter: 'crypto', 'equity', 'macro', or omit for all"},
+                "limit": {"type": "integer", "description": "Max articles to return (default 10)"},
             },
             "required": [],
         },
