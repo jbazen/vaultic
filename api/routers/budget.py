@@ -406,7 +406,10 @@ async def create_manual_transaction(
             VALUES (?, ?, ?, ?, ?, ?, 0)
         """, (transaction_id, manual_account_id, amount, body.date, body.merchant_name.strip(), body.merchant_name.strip()))
 
-        # Assign to budget item if specified
+        # Assign to budget item if specified.
+        # Status='manual' (not 'pending_review') because the user created this
+        # transaction with explicit knowledge of its category — it counts toward
+        # spending immediately without needing approval.
         if body.item_id is not None:
             conn.execute(
                 "INSERT INTO transaction_assignments (transaction_id, item_id, status)"

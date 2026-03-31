@@ -755,13 +755,15 @@ def _migrate_auto_archive_budget(conn):
     """
     from datetime import date, timedelta
     today = date.today()
-    # Build the last 3 month strings (e.g. ['2026-01', '2026-02', '2026-03'])
+    # Build the last 3 month strings (e.g. ['2026-01', '2026-02', '2026-03']).
+    # 28-day intervals ensure we always land in a different month regardless of
+    # month length. Items with planned > 0 in ANY of these months stay non-archived.
     recent_months = []
     for i in range(3):
         d = today.replace(day=1) - timedelta(days=i * 28)
         recent_months.append(d.strftime("%Y-%m"))
 
-    placeholders = ",".join("?" * len(recent_months))
+    placeholders = ",".join("?" * len(recent_months))  # (?, ?, ?) for parameterized query
 
     # Archive items that have no planned amounts in any of the recent months.
     # Exclude "Other Deposits" — it's an active income catch-all for refunds and
@@ -778,7 +780,9 @@ def _migrate_auto_archive_budget(conn):
           )
     """, recent_months)
 
-    # Archive groups where ALL their non-deleted items are archived
+    # Archive groups where ALL their non-deleted items are archived.
+    # A group with any active (non-archived) item stays visible so users
+    # can still access its contents on the current month's budget page.
     conn.execute("""
         UPDATE budget_groups SET is_archived = 1
         WHERE is_deleted = 0

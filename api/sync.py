@@ -157,7 +157,11 @@ def _auto_categorize_new(conn, transaction_ids: list[str]):
             rules[row["merchant"]] = (row["item_id"], row["match_count"])
 
     for txn_id in transaction_ids:
-        # Skip if already assigned (direct assignment OR split across items)
+        # Skip if already assigned — check both assignment types:
+        # 1. transaction_assignments: single-item direct assignment
+        # 2. transaction_splits: multi-item split (e.g. $100 → $60 food + $40 household)
+        # Without this dual check, split transactions reappear as pending after
+        # a cursor-reset resync because they have no transaction_assignments row.
         existing = conn.execute(
             "SELECT 1 FROM transaction_assignments WHERE transaction_id = ? "
             "UNION ALL "
@@ -198,7 +202,8 @@ def _auto_categorize_new(conn, transaction_ids: list[str]):
             (txn_id, item_id, confidence)
         )
 
-    # Pass 2: AI categorization for transactions still unassigned after the rule pass
+    # Pass 2: AI categorization for transactions still unassigned after the rule pass.
+    # Re-check both tables since Pass 1 above may have created assignments.
     remaining_ids = []
     for txn_id in transaction_ids:
         assigned = conn.execute(
