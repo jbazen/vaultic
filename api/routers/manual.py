@@ -203,7 +203,12 @@ async def delete_entry(entry_id: int, _user: str = Depends(get_current_user)):
     """
     Delete a manual entry. Associated holdings are removed automatically via
     the ON DELETE CASCADE constraint on manual_holdings.manual_entry_id.
+    Triggers a net worth snapshot so the Dashboard reflects the removal immediately.
     """
     with get_db() as conn:
         conn.execute("DELETE FROM manual_entries WHERE id = ?", (entry_id,))
+    try:
+        sync._take_net_worth_snapshot(date.today().isoformat())
+    except Exception:
+        pass
     return {"ok": True}
