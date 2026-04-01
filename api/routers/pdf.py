@@ -337,11 +337,17 @@ def _find_existing(conn, acct_num: str | None, summary: dict, name: str, categor
         return row, 4
 
     # Tier 5: fuzzy name match within same category.
-    # Tokenizes both names, requires significant overlap (>= 50% of tokens).
+    # Tokenizes both names, requires significant MEANINGFUL overlap.
     # Handles manually-created entries with slightly different names, e.g.
     # "Insperity 401k Plan" vs "INSPERITY INC. 401(K) RETIREMENT PLAN".
     # Only matches when exactly one candidate qualifies (unambiguous).
-    inc_tokens = set(_re.sub(r"[^a-z0-9]", " ", name.lower()).split())
+    # Common financial terms are excluded to prevent false matches
+    # (e.g. "Parker IRA" matching "Vanguard IRA" on the word "ira").
+    STOPWORDS = {"ira", "roth", "401k", "401", "plan", "account", "fund",
+                 "savings", "checking", "investment", "retirement", "the",
+                 "inc", "llc", "corp", "company", "financial", "bank",
+                 "a", "an", "of", "for", "and", "with"}
+    inc_tokens = set(_re.sub(r"[^a-z0-9]", " ", name.lower()).split()) - STOPWORDS
     if inc_tokens:
         cat_rows = conn.execute(
             "SELECT id, name, account_number, summary_json FROM manual_entries WHERE category = ?",
@@ -351,12 +357,27 @@ def _find_existing(conn, acct_num: str | None, summary: dict, name: str, categor
         for row in cat_rows:
             if pre_existing_ids is not None and row["id"] not in pre_existing_ids:
                 continue
-            row_tokens = set(_re.sub(r"[^a-z0-9]", " ", row["name"].lower()).split())
+            # Only fuzzy-match entries without account_numbers. If an entry
+            # HAS an account_number and didn't match on Tier 1, it's a
+            # different account — fuzzy name similarity is coincidental.
+            if row["account_number"]:
+                continue
+            row_tokens = set(_re.sub(r"[^a-z0-9]", " ", row["name"].lower()).split()) - STOPWORDS
             if not row_tokens:
                 continue
             overlap = inc_tokens & row_tokens
-            # Require at least 50% token overlap in either direction
-            if len(overlap) >= max(1, min(len(inc_tokens), len(row_tokens)) * 0.5):
+            if not overlap:
+                continue
+            # When only 1 token overlaps, both names must reduce to that
+            # single distinctive word (e.g. "Insperity 401k" → {"insperity"}
+            # matching "INSPERITY INC PLAN" → {"insperity"}). If either side
+            # has additional distinctive tokens, one shared word is coincidental
+            # (e.g. "Parker Roth IRA" → {"parker"} should NOT match
+            # "Parker IRA Unique" → {"parker","unique"}).
+            if len(overlap) == 1 and (len(inc_tokens) > 1 or len(row_tokens) > 1):
+                continue
+            smaller = min(len(inc_tokens), len(row_tokens))
+            if len(overlap) >= max(1, smaller * 0.5):
                 fuzzy_matches.append(row)
         if len(fuzzy_matches) == 1:
             if acct_num and not fuzzy_matches[0]["account_number"]:
