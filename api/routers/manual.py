@@ -66,11 +66,20 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
         raise HTTPException(status_code=400, detail=f"category must be one of {sorted(VALID_CATEGORIES)}")
     entered_at = body.entered_at or date.today().isoformat()
     acct_num = re.sub(r"[^A-Z0-9]", "", body.account_number.upper()) if body.account_number else None
+
+    # Categories that are inherently single-value (one entry per category, no account_number)
+    SINGLETON_CATEGORIES = {"home_value", "car_value", "credit_score"}
+
     with get_db() as conn:
         existing = None
         if acct_num:
             existing = conn.execute(
                 "SELECT id FROM manual_entries WHERE account_number = ?", (acct_num,)
+            ).fetchone()
+        if not existing and body.category in SINGLETON_CATEGORIES:
+            existing = conn.execute(
+                "SELECT id FROM manual_entries WHERE category = ? ORDER BY entered_at DESC LIMIT 1",
+                (body.category,)
             ).fetchone()
         if existing:
             conn.execute("""

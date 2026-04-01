@@ -139,8 +139,8 @@ jobs:
             fi
 
             # One-time fixes
+            python3 scripts/fix_singleton_dupes.py || true
             python3 scripts/dedup_manual_entries.py || true
-            python3 scripts/fix_other_deposits_april.py || true
             python3 scripts/list_manual_entries.py || true
 
             echo "Deploy complete"
