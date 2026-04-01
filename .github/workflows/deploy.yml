@@ -138,4 +138,7 @@ jobs:
               exit 1
             fi
 
+            # One-time: deduplicate manual entries (Optum duplicate from missing account_number match)
+            python3 scripts/dedup_manual_entries.py || true
+
             echo "Deploy complete"

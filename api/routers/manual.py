@@ -67,10 +67,22 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
     entered_at = body.entered_at or date.today().isoformat()
     acct_num = re.sub(r"[^A-Z0-9]", "", body.account_number.upper()) if body.account_number else None
     with get_db() as conn:
-        conn.execute("""
-            INSERT INTO manual_entries (name, category, value, notes, entered_at, account_number)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (body.name, body.category, body.value, body.notes, entered_at, acct_num or None))
+        existing = None
+        if acct_num:
+            existing = conn.execute(
+                "SELECT id FROM manual_entries WHERE account_number = ?", (acct_num,)
+            ).fetchone()
+        if existing:
+            conn.execute("""
+                UPDATE manual_entries
+                SET name = ?, category = ?, value = ?, notes = ?, entered_at = ?
+                WHERE id = ?
+            """, (body.name, body.category, body.value, body.notes, entered_at, existing["id"]))
+        else:
+            conn.execute("""
+                INSERT INTO manual_entries (name, category, value, notes, entered_at, account_number)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (body.name, body.category, body.value, body.notes, entered_at, acct_num or None))
     try:
         sync._take_net_worth_snapshot(date.today().isoformat())
     except Exception:
