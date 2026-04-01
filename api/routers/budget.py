@@ -989,6 +989,12 @@ async def approve_assignment(body: ApproveBody, _user: str = Depends(get_current
 
         merchant = txn["merchant"]
 
+        # Clear any existing splits — approval replaces splits entirely
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (body.transaction_id,),
+        )
+
         # Upsert assignment with approved status
         conn.execute("""
             INSERT INTO transaction_assignments (transaction_id, item_id, status)
@@ -1023,6 +1029,11 @@ async def assign_transaction(body: AssignBody, _user: str = Depends(get_current_
     is a single idempotent call — no need to unassign first.
     """
     with get_db() as conn:
+        # Clear any existing splits — direct assignment replaces splits entirely
+        conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (body.transaction_id,),
+        )
         conn.execute("""
             INSERT OR REPLACE INTO transaction_assignments (transaction_id, item_id)
             VALUES (?, ?)
@@ -1111,6 +1122,10 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
+              AND NOT EXISTS (
+                  SELECT 1 FROM transaction_splits ts
+                  WHERE ts.transaction_id = t.transaction_id
+              )
         """, (month,)).fetchall()
 
         if not unassigned:

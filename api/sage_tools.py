@@ -254,6 +254,10 @@ def tool_assign_transaction(inputs, username):
             (txn_id,)
         )
         conn.execute(
+            "DELETE FROM transaction_splits WHERE transaction_id = ?",
+            (txn_id,)
+        )
+        conn.execute(
             "INSERT INTO transaction_assignments (transaction_id, item_id, status)"
             " VALUES (?, ?, 'auto')",
             (txn_id, item_id)
