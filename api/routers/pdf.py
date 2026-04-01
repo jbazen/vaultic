@@ -336,6 +336,25 @@ def _find_existing(conn, acct_num: str | None, summary: dict, name: str, categor
                          (acct_num, row["id"]))
         return row, 4
 
+    # Tier 4.5: manually-created entry upgrade path.
+    # When a PDF provides an account_number but tiers 1-4 missed, check for
+    # entries in the SAME category that have NO account_number and NO summary_json
+    # (i.e., were created via manual import, not PDF). If exactly one such entry
+    # exists, it's almost certainly the same account being upgraded to PDF import.
+    if acct_num:
+        orphans = conn.execute(
+            "SELECT id, name, account_number, summary_json FROM manual_entries "
+            "WHERE category = ? AND (account_number IS NULL OR account_number = '') "
+            "AND (summary_json IS NULL OR summary_json = '')",
+            (category,)
+        ).fetchall()
+        if pre_existing_ids is not None:
+            orphans = [r for r in orphans if r["id"] in pre_existing_ids]
+        if len(orphans) == 1:
+            conn.execute("UPDATE manual_entries SET account_number=? WHERE id=?",
+                         (acct_num, orphans[0]["id"]))
+            return orphans[0], 4
+
     # Tier 5: fuzzy name match within same category.
     # Tokenizes both names, requires significant MEANINGFUL overlap.
     # Handles manually-created entries with slightly different names, e.g.
