@@ -83,6 +83,20 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
                 INSERT INTO manual_entries (name, category, value, notes, entered_at, account_number)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (body.name, body.category, body.value, body.notes, entered_at, acct_num or None))
+
+        # Write to manual_entry_snapshots so balance history builds up over
+        # time, same as PDF imports do. Keyed by account_number when available.
+        if acct_num:
+            conn.execute(
+                "DELETE FROM manual_entry_snapshots WHERE account_number=? AND snapped_at=?",
+                (acct_num, entered_at)
+            )
+        conn.execute("""
+            INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(name, snapped_at) DO UPDATE SET
+                value=excluded.value, account_number=excluded.account_number
+        """, (body.name, acct_num, body.category, body.value, entered_at))
     try:
         sync._take_net_worth_snapshot(date.today().isoformat())
     except Exception:
