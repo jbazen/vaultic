@@ -10,7 +10,8 @@ conn = sqlite3.connect(str(db))
 conn.row_factory = sqlite3.Row
 
 rows = conn.execute("""
-    SELECT id, name, category, value, account_number, summary_json, entered_at
+    SELECT id, name, category, value, account_number, summary_json,
+           entered_at, exclude_from_net_worth
     FROM manual_entries
     ORDER BY category, name
 """).fetchall()
