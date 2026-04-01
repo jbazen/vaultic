@@ -534,6 +534,20 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
                     WHERE month = ?
                 """, (month, prior_month["month"]))
 
+            # Ensure every active (non-archived, non-deleted) item has a
+            # budget_amounts row for this month. Items like "Other Deposits"
+            # may have spending but no planned amount in the prior month,
+            # so the copy above misses them. This guarantees they appear in
+            # the new month's budget with $0 planned rather than vanishing.
+            conn.execute("""
+                INSERT OR IGNORE INTO budget_amounts (item_id, month, planned)
+                SELECT bi.id, ?, 0
+                FROM budget_items bi
+                JOIN budget_groups bg ON bg.id = bi.group_id
+                WHERE bi.is_deleted = 0 AND bi.is_archived = 0
+                  AND bg.is_deleted = 0 AND bg.is_archived = 0
+            """, (month,))
+
         # Exclude soft-deleted groups — is_deleted=1 means the user "deleted" the
         # group from the UI; the row stays in DB to preserve budget_history references.
         groups = conn.execute(

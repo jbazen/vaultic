@@ -242,6 +242,27 @@ class TestCarryforward:
         assert match, "item not found after carryforward"
         assert match[0]["planned"] == 500.0
 
+    def test_carryforward_includes_items_without_prior_planned(self, client, auth_headers):
+        """Items with no planned amount in the prior month still appear in the new month."""
+        g = _create_group(client, auth_headers, "CF Mixed")
+        item_with = _create_item(client, auth_headers, g["id"], "Has Planned")
+        item_without = _create_item(client, auth_headers, g["id"], "No Planned")
+        # Only set planned for one item in the base month
+        client.put(f"/api/budget/items/{item_with['id']}/amount",
+                   json={"month": "2028-05", "planned": 200.0},
+                   headers=auth_headers)
+        # item_without has no budget_amounts row for 2028-05
+
+        # GET a future month — carryforward should create rows for BOTH items
+        res = client.get("/api/budget/2028-06", headers=auth_headers)
+        assert res.status_code == 200
+        groups = res.json()["groups"]
+        all_items = [i for grp in groups for i in grp.get("items", [])]
+        match_with = [i for i in all_items if i["id"] == item_with["id"]]
+        match_without = [i for i in all_items if i["id"] == item_without["id"]]
+        assert match_with and match_with[0]["planned"] == 200.0
+        assert match_without and match_without[0]["planned"] == 0.0
+
     def test_carryforward_does_not_overwrite(self, client, auth_headers):
         """If the target month already has an amount, carryforward doesn't run."""
         g = _create_group(client, auth_headers, "CF No Overwrite")
