@@ -678,7 +678,10 @@ def _take_net_worth_snapshot(today: str):
 
         real_estate  = _latest("home_value")
         vehicles     = _latest("car_value")
-        liabilities += _latest("other_liability")
+        # Liabilities from manual entries (mortgage, etc.) may be stored as
+        # negative values from PDF import. Use abs() so they always ADD to
+        # the liabilities total (which is subtracted from net worth later).
+        liabilities += abs(_sum_manual("other_liability"))
 
         # invested / liquid / crypto / real_estate / vehicles use _sum_manual because a
         # user can have multiple PDF-imported accounts in the same category (e.g. IRA + 529).
