@@ -151,7 +151,11 @@ async def portfolio_performance(
         # Check if real snapshot history exists for manual entries
         has_snapshots = conn.execute("""
             SELECT 1 FROM manual_entry_snapshots s
-            JOIN manual_entries m ON m.name = s.name AND m.category = s.category
+            JOIN manual_entries m ON (
+                (m.account_number IS NOT NULL AND m.account_number != '' AND
+                 SUBSTR(m.account_number, -4) = SUBSTR(s.account_number, -4))
+                OR m.name = s.name
+            ) AND m.category = s.category
             WHERE s.category = 'invested' AND m.exclude_from_net_worth = 0
             LIMIT 1
         """).fetchone()
@@ -169,7 +173,11 @@ async def portfolio_performance(
                     UNION ALL
                     SELECT s.snapped_at, s.value
                     FROM manual_entry_snapshots s
-                    JOIN manual_entries m ON m.name = s.name AND m.category = s.category
+                    JOIN manual_entries m ON (
+                        (m.account_number IS NOT NULL AND m.account_number != '' AND
+                         SUBSTR(m.account_number, -4) = SUBSTR(s.account_number, -4))
+                        OR m.name = s.name
+                    ) AND m.category = s.category
                     WHERE s.category = 'invested' AND m.exclude_from_net_worth = 0
                       AND s.snapped_at >= date('now', '-' || ? || ' days')
                 )

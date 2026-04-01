@@ -140,12 +140,16 @@ async def get_entry_history(entry_id: int, days: int = 1825, _user: str = Depend
         # Match snapshots by account_number when available — survives renames and
         # PDF name variations. Fall back to name for entries without account numbers.
         if row["account_number"]:
+            # Match by exact account_number, or by last-4 digits as fallback
+            # (account number format varies between NFS statements and Investor360 reports)
+            last4 = row["account_number"][-4:] if len(row["account_number"]) >= 4 else row["account_number"]
             rows = conn.execute("""
                 SELECT snapped_at, value AS current
                 FROM manual_entry_snapshots
-                WHERE account_number = ? AND snapped_at >= date('now', '-' || ? || ' days')
+                WHERE (account_number = ? OR account_number LIKE ?)
+                  AND snapped_at >= date('now', '-' || ? || ' days')
                 ORDER BY snapped_at ASC
-            """, (row["account_number"], days)).fetchall()
+            """, (row["account_number"], f"%{last4}", days)).fetchall()
         else:
             rows = conn.execute("""
                 SELECT snapped_at, value AS current

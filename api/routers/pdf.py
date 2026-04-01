@@ -430,6 +430,8 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                 entry_id = existing["id"]
                 canonical_name = existing["name"]
             else:
+                old_acct_num = existing["account_number"] if existing else None
+                old_name = existing["name"] if existing else None
                 if existing:
                     conn.execute("DELETE FROM manual_entries WHERE id = ?", (existing["id"],))
                 cursor = conn.execute(
@@ -441,6 +443,19 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                 entry_id = cursor.lastrowid
                 canonical_name = name
                 saved += 1
+
+                # Migrate old snapshots when account_number or name changes so
+                # performance history stays connected to the current entry.
+                if old_acct_num and acct_num and old_acct_num != acct_num:
+                    conn.execute(
+                        "UPDATE manual_entry_snapshots SET account_number=?, name=? WHERE account_number=?",
+                        (acct_num, canonical_name, old_acct_num)
+                    )
+                elif old_name and old_name != canonical_name and acct_num:
+                    conn.execute(
+                        "UPDATE manual_entry_snapshots SET name=? WHERE account_number=?",
+                        (canonical_name, acct_num)
+                    )
 
             # Account-level balance snapshot — keyed by account_number when available
             # so renames don't orphan history. Clear any same-account/same-date row
