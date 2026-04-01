@@ -136,4 +136,7 @@ jobs:
               exit 1
             fi
 
+            # Diagnostic: net worth breakdown
+            python3 scripts/nw_debug.py || true
+
             echo "Deploy complete"
