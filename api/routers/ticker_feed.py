@@ -153,21 +153,21 @@ def _fetch_crypto_changes(symbols: list[str]) -> dict:
 
 
 def _fetch_equity_quotes(symbols: list[str]) -> list[dict]:
-    """Fetch equity/mutual fund quotes via yfinance."""
-    try:
-        import yfinance as yf
-    except ImportError:
-        logger.warning("yfinance not installed — skipping equity quotes")
-        return []
-
+    """Fetch equity/mutual fund quotes via Yahoo Finance public API (no library needed)."""
     results = []
     for sym in symbols:
         try:
-            ticker = yf.Ticker(sym)
-            info = ticker.fast_info
-            price = getattr(info, "last_price", None)
-            prev_close = getattr(info, "previous_close", None)
-            market_cap = getattr(info, "market_cap", None)
+            resp = httpx.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
+                params={"interval": "1d", "range": "2d"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            meta = data.get("chart", {}).get("result", [{}])[0].get("meta", {})
+            price = meta.get("regularMarketPrice")
+            prev_close = meta.get("chartPreviousClose") or meta.get("previousClose")
 
             change_pct = None
             if price and prev_close and prev_close > 0:
@@ -180,8 +180,8 @@ def _fetch_equity_quotes(symbols: list[str]) -> list[dict]:
                     "price": round(price, 2),
                     "change_pct": change_pct,
                     "prev_close": round(prev_close, 2) if prev_close else None,
-                    "market_cap": market_cap,
-                    "source": "yfinance",
+                    "market_cap": None,
+                    "source": "yahoo",
                 })
         except Exception as e:
             logger.warning("Could not fetch equity quote for %s: %s", sym, e)
