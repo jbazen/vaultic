@@ -136,7 +136,8 @@ jobs:
               exit 1
             fi
 
-            # One-time cleanup: remove duplicate Insperity entry
+            # One-time: remove duplicate Insperity + backfill account_numbers from summary_json
             python3 scripts/cleanup_dup_insperity.py || true
+            python3 scripts/assign_account_numbers.py || true
 
             echo "Deploy complete"
