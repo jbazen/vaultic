@@ -136,7 +136,23 @@ jobs:
               exit 1
             fi
 
-            # Diagnostic: net worth breakdown
-            python3 scripts/nw_debug.py || true
+            # One-time cleanup: remove duplicate Insperity entry (keep the one with account_number/summary_json from PDF import)
+            python3 -c "
+import sqlite3
+conn = sqlite3.connect('data/vaultic.db')
+conn.row_factory = sqlite3.Row
+rows = conn.execute(\"SELECT id, name, account_number, summary_json FROM manual_entries WHERE name LIKE '%nsperit%' AND category='invested' ORDER BY id\").fetchall()
+if len(rows) > 1:
+    # Keep the one with account_number (PDF-imported); delete the bare manual one
+    keep = next((r for r in rows if r['account_number']), rows[-1])
+    for r in rows:
+        if r['id'] != keep['id']:
+            conn.execute('DELETE FROM manual_entries WHERE id = ?', (r['id'],))
+            print(f'Deleted duplicate Insperity entry id={r[\"id\"]} name={r[\"name\"]}')
+    conn.commit()
+else:
+    print('No duplicate Insperity entries found')
+conn.close()
+" || true
 
             echo "Deploy complete"

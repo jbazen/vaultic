@@ -331,7 +331,38 @@ def _find_existing(conn, acct_num: str | None, summary: dict, name: str, categor
         (name,)
     ).fetchone()
     if row:
+        if acct_num and not row["account_number"]:
+            conn.execute("UPDATE manual_entries SET account_number=? WHERE id=?",
+                         (acct_num, row["id"]))
         return row, 4
+
+    # Tier 5: fuzzy name match within same category.
+    # Tokenizes both names, requires significant overlap (>= 50% of tokens).
+    # Handles manually-created entries with slightly different names, e.g.
+    # "Insperity 401k Plan" vs "INSPERITY INC. 401(K) RETIREMENT PLAN".
+    # Only matches when exactly one candidate qualifies (unambiguous).
+    inc_tokens = set(_re.sub(r"[^a-z0-9]", " ", name.lower()).split())
+    if inc_tokens:
+        cat_rows = conn.execute(
+            "SELECT id, name, account_number, summary_json FROM manual_entries WHERE category = ?",
+            (category,)
+        ).fetchall()
+        fuzzy_matches = []
+        for row in cat_rows:
+            if pre_existing_ids is not None and row["id"] not in pre_existing_ids:
+                continue
+            row_tokens = set(_re.sub(r"[^a-z0-9]", " ", row["name"].lower()).split())
+            if not row_tokens:
+                continue
+            overlap = inc_tokens & row_tokens
+            # Require at least 50% token overlap in either direction
+            if len(overlap) >= max(1, min(len(inc_tokens), len(row_tokens)) * 0.5):
+                fuzzy_matches.append(row)
+        if len(fuzzy_matches) == 1:
+            if acct_num and not fuzzy_matches[0]["account_number"]:
+                conn.execute("UPDATE manual_entries SET account_number=? WHERE id=?",
+                             (acct_num, fuzzy_matches[0]["id"]))
+            return fuzzy_matches[0], 5
 
     return None, None
 
