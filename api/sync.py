@@ -638,10 +638,18 @@ def _take_net_worth_snapshot(today: str):
         liquid = invested = crypto = liabilities = 0.0
 
         for acct in accounts:
+            # Try today's balance first; fall back to most recent balance so
+            # accounts aren't silently dropped when sync hasn't run yet today.
             row = conn.execute(
                 "SELECT current FROM account_balances WHERE account_id = ? AND snapped_at = ?",
                 (acct["id"], today),
             ).fetchone()
+            if not row or row["current"] is None:
+                row = conn.execute(
+                    "SELECT current FROM account_balances WHERE account_id = ? "
+                    "AND current IS NOT NULL ORDER BY snapped_at DESC LIMIT 1",
+                    (acct["id"],),
+                ).fetchone()
             if not row or row["current"] is None:
                 continue
             bal = row["current"]

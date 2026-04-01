@@ -22,7 +22,7 @@ import io
 
 from api.dependencies import get_current_user
 from api.database import get_db
-from api import security_log
+from api import security_log, sync
 
 logger = logging.getLogger("vaultic.pdf")
 router = APIRouter(prefix="/api/pdf", tags=["pdf"])
@@ -531,6 +531,13 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
                     _f(h, "gain_loss_dollars"), _f(h, "gain_loss_pct"), _f(h, "pct_assets"),
                     _f(h, "estimated_annual_income"), _f(h, "estimated_yield_pct"),
                 ))
+
+    # Re-snapshot net worth so Dashboard immediately reflects the new values.
+    # Without this, investable net worth stays stale until the next Plaid sync.
+    try:
+        sync._take_net_worth_snapshot(today)
+    except Exception:
+        pass
 
     security_log.log_server_event(f"PDF_SAVED  user={_user}  entries={saved}  warnings={len(warnings)}")
     return {"status": "saved", "count": saved, "warnings": warnings}

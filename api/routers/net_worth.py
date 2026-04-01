@@ -1,5 +1,6 @@
+from datetime import date
 from fastapi import APIRouter, Depends, Query
-from api.dependencies import get_current_user
+from api.dependencies import get_current_user, admin_required
 from api.database import get_db
 
 router = APIRouter(prefix="/api/net-worth", tags=["net-worth"])
@@ -91,3 +92,137 @@ async def history(
         data = list(monthly.values())
 
     return data
+
+
+@router.post("/refresh")
+async def refresh_snapshot(_user: str = Depends(get_current_user)):
+    """Force a fresh net worth snapshot using current Plaid balances + manual entries."""
+    from api import sync
+    today = date.today().isoformat()
+    sync._take_net_worth_snapshot(today)
+    # Return the newly computed snapshot
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM net_worth_snapshots ORDER BY snapped_at DESC LIMIT 1"
+        ).fetchone()
+        d = dict(row) if row else {}
+        mortgage = _get_mortgage(conn)
+    d["investable"] = _investable(d, mortgage)
+    return d
+
+
+@router.get("/debug")
+async def debug_breakdown(_user: str = Depends(get_current_user)):
+    """Full breakdown of investable net worth — every Plaid account and manual entry
+    that contributes to the current snapshot, plus a live recalculation."""
+    today = date.today().isoformat()
+    with get_db() as conn:
+        # Latest stored snapshot
+        snap = conn.execute(
+            "SELECT * FROM net_worth_snapshots ORDER BY snapped_at DESC LIMIT 1"
+        ).fetchone()
+        snap_dict = dict(snap) if snap else {}
+
+        # Plaid accounts — live balances for today
+        plaid_accounts = conn.execute("""
+            SELECT a.id, a.name, a.display_name, a.type, a.subtype,
+                   a.institution_name, b.current, b.snapped_at
+            FROM accounts a
+            LEFT JOIN account_balances b ON b.account_id = a.id AND b.snapped_at = ?
+            WHERE a.is_active = 1 AND a.is_manual = 0
+        """, (today,)).fetchall()
+
+        plaid_detail = []
+        plaid_liquid = plaid_invested = plaid_crypto = plaid_liabilities = 0.0
+        for acct in plaid_accounts:
+            a = dict(acct)
+            bal = a.get("current") or 0
+            t, s = a["type"], (a["subtype"] or "")
+            bucket = "skipped"
+            if bal == 0 and a.get("current") is None:
+                bucket = "no_balance_today"
+            elif t == "crypto":
+                plaid_crypto += bal
+                bucket = "crypto"
+            elif t == "depository" and s in ("checking", "savings", "money market", "paypal", "prepaid"):
+                plaid_liquid += bal
+                bucket = "liquid"
+            elif t == "investment" or s in ("401k", "ira", "roth", "pension"):
+                plaid_invested += bal
+                bucket = "invested"
+            elif t in ("credit", "loan"):
+                plaid_liabilities += bal
+                bucket = "liabilities"
+            else:
+                plaid_liquid += bal
+                bucket = "liquid (catch-all)"
+            a["bucket"] = bucket
+            a["contributed"] = bal
+            plaid_detail.append(a)
+
+        # Manual entries
+        manual_rows = conn.execute(
+            "SELECT id, name, category, value, exclude_from_net_worth, account_number "
+            "FROM manual_entries ORDER BY category, name"
+        ).fetchall()
+        manual_detail = [dict(r) for r in manual_rows]
+
+        manual_invested = manual_liquid = manual_crypto = manual_other_assets = 0.0
+        for m in manual_detail:
+            if m.get("exclude_from_net_worth"):
+                m["bucket"] = "excluded"
+                continue
+            cat = m["category"]
+            val = m.get("value") or 0
+            if cat == "invested":
+                manual_invested += val
+                m["bucket"] = "invested"
+            elif cat == "liquid":
+                manual_liquid += val
+                m["bucket"] = "liquid"
+            elif cat == "crypto":
+                manual_crypto += val
+                m["bucket"] = "crypto"
+            elif cat == "other_asset":
+                manual_other_assets += val
+                m["bucket"] = "other_asset"
+            else:
+                m["bucket"] = cat
+
+        mortgage = _get_mortgage(conn)
+
+    # Live recalculation
+    live_liquid = plaid_liquid + manual_liquid
+    live_invested = plaid_invested + manual_invested
+    live_crypto = plaid_crypto + manual_crypto
+    live_other_assets = manual_other_assets
+    live_liabilities = plaid_liabilities
+    live_credit_liabilities = max(0.0, live_liabilities - mortgage)
+    live_investable = live_liquid + live_invested + live_crypto + live_other_assets - live_credit_liabilities
+
+    # Stored snapshot investable
+    stored_investable = _investable(snap_dict, mortgage) if snap_dict else None
+
+    return {
+        "snapshot": snap_dict,
+        "stored_investable": stored_investable,
+        "live_calculation": {
+            "plaid_liquid": plaid_liquid,
+            "plaid_invested": plaid_invested,
+            "plaid_crypto": plaid_crypto,
+            "plaid_liabilities": plaid_liabilities,
+            "manual_liquid": manual_liquid,
+            "manual_invested": manual_invested,
+            "manual_crypto": manual_crypto,
+            "manual_other_assets": manual_other_assets,
+            "mortgage": mortgage,
+            "credit_liabilities": live_credit_liabilities,
+            "total_liquid": live_liquid,
+            "total_invested": live_invested,
+            "total_crypto": live_crypto,
+            "investable": live_investable,
+        },
+        "discrepancy": round(live_investable - stored_investable, 2) if stored_investable is not None else None,
+        "plaid_accounts": plaid_detail,
+        "manual_entries": manual_detail,
+    }
