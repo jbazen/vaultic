@@ -1,5 +1,6 @@
 """Manual entries: home value, car value, credit score, custom assets/liabilities, PDF-imported investments."""
 import json
+import re
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -27,6 +28,7 @@ class ManualEntryRequest(BaseModel):
     value: float
     notes: str | None = None
     entered_at: str | None = None
+    account_number: str | None = None
 
 
 @router.get("")
@@ -63,11 +65,12 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
     if body.category not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail=f"category must be one of {sorted(VALID_CATEGORIES)}")
     entered_at = body.entered_at or date.today().isoformat()
+    acct_num = re.sub(r"[^A-Z0-9]", "", body.account_number.upper()) if body.account_number else None
     with get_db() as conn:
         conn.execute("""
-            INSERT INTO manual_entries (name, category, value, notes, entered_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (body.name, body.category, body.value, body.notes, entered_at))
+            INSERT INTO manual_entries (name, category, value, notes, entered_at, account_number)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (body.name, body.category, body.value, body.notes, entered_at, acct_num or None))
     try:
         sync._take_net_worth_snapshot(date.today().isoformat())
     except Exception:

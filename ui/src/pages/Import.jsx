@@ -17,6 +17,7 @@ const MANUAL_CATEGORIES = [
   { value: "home_value",      label: "Home Value" },
   { value: "car_value",       label: "Car Value" },
   { value: "credit_score",    label: "Credit Score" },
+  { value: "liquid",          label: "HSA / Cash Accounts" },
   { value: "other_asset",     label: "Other Asset" },
   { value: "other_liability", label: "Other Liability" },
 ];
@@ -31,6 +32,12 @@ const PDF_CATEGORIES = [
   { value: "other_asset",     label: "Other Asset" },
   { value: "other_liability", label: "Liability" },
 ];
+
+// Combined lookup for the history table (covers both manual and PDF categories).
+// PDF labels first so manual labels override for shared keys like "liquid".
+const ALL_CATEGORY_LABELS = Object.fromEntries(
+  [...PDF_CATEGORIES, ...MANUAL_CATEGORIES].map(c => [c.value, c.label])
+);
 
 // ── Tab button style ──────────────────────────────────────────────────────────
 function tabStyle(active) {
@@ -51,7 +58,7 @@ function tabStyle(active) {
 function ManualTab() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [form, setForm] = useState({ name: "", category: "home_value", value: "", notes: "" });
+  const [form, setForm] = useState({ name: "", category: "home_value", value: "", notes: "", account_number: "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -71,8 +78,9 @@ function ManualTab() {
         category: form.category,
         value: parseFloat(form.value),
         notes: form.notes || null,
+        account_number: form.account_number || null,
       });
-      setForm({ name: "", category: "home_value", value: "", notes: "" });
+      setForm({ name: "", category: "home_value", value: "", notes: "", account_number: "" });
       await load();
     } catch {
       setError("Failed to save entry.");
@@ -133,6 +141,13 @@ function ManualTab() {
               required />
           </div>
           <div className="form-group">
+            <label className="form-label">Account Number (optional)</label>
+            <input className="form-input"
+              placeholder="e.g. 1234567890"
+              value={form.account_number}
+              onChange={e => setForm(f => ({ ...f, account_number: e.target.value }))} />
+          </div>
+          <div className="form-group">
             <label className="form-label">Category</label>
             <select className="form-select" value={form.category}
               onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
@@ -188,7 +203,7 @@ function ManualTab() {
                   <td style={{ padding: "10px 16px", fontSize: 13, color: "var(--text2)" }}>{e.entered_at}</td>
                   <td style={{ padding: "10px 16px", fontSize: 14 }}>{e.name}</td>
                   <td style={{ padding: "10px 16px", fontSize: 13, color: "var(--text2)" }}>
-                    {MANUAL_CATEGORIES.find(c => c.value === e.category)?.label ?? e.category}
+                    {ALL_CATEGORY_LABELS[e.category] ?? e.category}
                   </td>
                   <td style={{ padding: "10px 16px", fontSize: 14, fontWeight: 600, textAlign: "right" }}>
                     {fmt(e.value, e.category)}
