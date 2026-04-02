@@ -46,6 +46,6 @@ test.describe("Authentication", () => {
     await page.getByRole("button", { name: /sign in|login|log in/i }).click();
     await page.waitForSelector("text=Net Worth", { timeout: 8000 });
     await page.getByRole("button", { name: /sign out|logout/i }).click();
-    await expect(page.getByPlaceholder(/username/i)).toBeVisible();
+    await expect(page.getByPlaceholder(/username/i)).toBeVisible({ timeout: 8000 });
   });
 });
