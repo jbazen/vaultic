@@ -598,6 +598,7 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
 
         result_groups = []
         total_income_planned = 0.0
+        total_income_received = 0.0
         total_expense_planned = 0.0
         total_expense_spent = 0.0
 
@@ -638,6 +639,7 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
             # Accumulate summary totals by group type
             if group["type"] == "income":
                 total_income_planned += group_planned
+                total_income_received += group_spent
             else:
                 total_expense_planned += group_planned
                 total_expense_spent += group_spent
@@ -647,6 +649,7 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
         "groups": result_groups,
         "summary": {
             "total_income_planned": total_income_planned,
+            "total_income_received": total_income_received,
             "total_expense_planned": total_expense_planned,
             "total_expense_spent": total_expense_spent,
             # How much income is left after all planned expenses are accounted for.

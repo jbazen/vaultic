@@ -23,8 +23,8 @@ export default function GroupTotalsRow({ group, showSpent }) {
       </div>
       <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700 }}>
         {isIncome ? (
-          <span style={{ color: group.total_spent > 0 ? "#22c55e" : "var(--text2)" }}>
-            {group.total_spent > 0 ? fmt(group.total_spent) : "—"}
+          <span style={{ color: group.total_spent !== 0 ? "#22c55e" : "var(--text2)" }}>
+            {group.total_spent !== 0 ? fmt(Math.abs(group.total_spent)) : "—"}
           </span>
         ) : showSpent ? (
           <span style={{ color: group.total_spent > 0 ? "#22c55e" : "var(--text2)" }}>

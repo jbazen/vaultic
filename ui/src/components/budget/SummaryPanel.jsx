@@ -108,8 +108,8 @@ export default function SummaryPanel({ groups, summary }) {
             <div style={{ fontSize: 11, textAlign: "right", color: "var(--text2)" }}>
               {fmt(g.total_planned)}
             </div>
-            <div style={{ fontSize: 11, textAlign: "right", color: g.total_spent > 0 ? "#22c55e" : "var(--text2)" }}>
-              {g.total_spent > 0 ? fmt(g.total_spent) : "—"}
+            <div style={{ fontSize: 11, textAlign: "right", color: g.total_spent !== 0 ? "#22c55e" : "var(--text2)" }}>
+              {g.total_spent !== 0 ? fmt(Math.abs(g.total_spent)) : "—"}
             </div>
             <div style={{ fontSize: 11, textAlign: "right", color: "var(--text2)" }}>—</div>
           </div>
