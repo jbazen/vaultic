@@ -120,12 +120,14 @@ def tool_get_budget(inputs, username):
         """).fetchall()
 
         # Aggregate direct assignment spending per item (sign preserved: refunds reduce spent)
+        # Exclude pending_review — not yet approved by user.
         direct_spent = {}
         for row in conn.execute("""
             SELECT ta.item_id, COALESCE(SUM(t.amount), 0) AS spent
             FROM transaction_assignments ta
             JOIN transactions t ON t.transaction_id = ta.transaction_id
             WHERE strftime('%Y-%m', t.date) = ? AND t.pending = 0
+              AND COALESCE(ta.status, 'manual') != 'pending_review'
             GROUP BY ta.item_id
         """, (month,)).fetchall():
             direct_spent[row["item_id"]] = float(row["spent"])
@@ -279,7 +281,7 @@ def tool_assign_transaction(inputs, username):
         )
         conn.execute(
             "INSERT INTO transaction_assignments (transaction_id, item_id, status)"
-            " VALUES (?, ?, 'auto')",
+            " VALUES (?, ?, 'pending_review')",
             (txn_id, item_id)
         )
         merchant = conn.execute(
@@ -334,7 +336,7 @@ def tool_auto_assign_month(inputs, username):
                     conn.execute("""
                         INSERT OR IGNORE INTO transaction_assignments
                             (transaction_id, item_id, status)
-                        VALUES (?, ?, 'auto')
+                        VALUES (?, ?, 'pending_review')
                     """, (txn["transaction_id"], item_id))
                     assigned += 1
                 else:

@@ -79,6 +79,7 @@ def _spent_for_item(conn, item_id: int, month: str) -> float:
     # Direct assignments: use the full transaction amount.
     # Sign is preserved: positive = debit (adds to spending),
     # negative = credit/refund (reduces spending).
+    # Exclude pending_review — not yet approved by user.
     direct = conn.execute("""
         SELECT COALESCE(SUM(t.amount), 0) AS spent
         FROM transaction_assignments ta
@@ -86,6 +87,7 @@ def _spent_for_item(conn, item_id: int, month: str) -> float:
         WHERE ta.item_id = ?
           AND strftime('%Y-%m', t.date) = ?
           AND t.pending = 0
+          AND COALESCE(ta.status, 'manual') != 'pending_review'
     """, (item_id, month)).fetchone()["spent"]
 
     # Split assignments: use the per-split amount, not the full transaction amount
@@ -570,12 +572,14 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
 
         # Aggregate direct assignment spending per item for this month.
         # Sign preserved: positive = debit, negative = credit/refund.
+        # Exclude pending_review — those haven't been approved by the user yet.
         direct_spent = {}
         for row in conn.execute("""
             SELECT ta.item_id, COALESCE(SUM(t.amount), 0) AS spent
             FROM transaction_assignments ta
             JOIN transactions t ON t.transaction_id = ta.transaction_id
             WHERE strftime('%Y-%m', t.date) = ? AND t.pending = 0
+              AND COALESCE(ta.status, 'manual') != 'pending_review'
             GROUP BY ta.item_id
         """, (month,)).fetchall():
             direct_spent[row["item_id"]] = float(row["spent"])
@@ -1212,7 +1216,7 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
                     conn.execute("""
                         INSERT OR IGNORE INTO transaction_assignments
                             (transaction_id, item_id, status)
-                        VALUES (?, ?, 'auto')
+                        VALUES (?, ?, 'pending_review')
                     """, (txn["transaction_id"], item_id))
                     assigned += 1
                     continue
@@ -1224,7 +1228,7 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
                 conn.execute("""
                     INSERT OR IGNORE INTO transaction_assignments
                         (transaction_id, item_id, status)
-                    VALUES (?, ?, 'auto')
+                    VALUES (?, ?, 'pending_review')
                 """, (txn["transaction_id"], item_id))
                 assigned += 1
                 continue
@@ -1387,6 +1391,7 @@ async def get_item_detail(
             WHERE ta.item_id = ?
               AND strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
+              AND COALESCE(ta.status, 'manual') != 'pending_review'
             UNION ALL
             SELECT t.transaction_id, t.date, t.name, t.merchant_name,
                    t.amount AS full_amount,
