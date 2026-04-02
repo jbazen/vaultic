@@ -38,13 +38,21 @@ async def lifespan(app: FastAPI):
     # Skip scheduler entirely in test environments — APScheduler's asyncio scheduler
     # hangs the event loop at teardown, adding 2-3 hours to every test run.
     if not os.environ.get("TESTING"):
-        from api.sync import sync_all
+        from api.sync import sync_all, _take_net_worth_snapshot
         # Sync 4× daily: 02:00, 08:00, 14:00, 20:00 UTC
         # Spread evenly every 6 hours to catch morning, midday, evening, and overnight transactions.
         for hour, job_id in [(2, "sync_02"), (8, "sync_08"), (14, "sync_14"), (20, "sync_20")]:
             scheduler.add_job(sync_all, "cron", hour=hour, minute=0, id=job_id)
         scheduler.start()
         security_log.log_server_event("Scheduler started — syncs at 02:00, 08:00, 14:00, 20:00 UTC")
+
+        # Recalculate net worth on every startup so deploys with calculation
+        # fixes take effect immediately without waiting for the next sync.
+        try:
+            from datetime import date
+            _take_net_worth_snapshot(date.today().isoformat())
+        except Exception:
+            pass
 
     yield
 
