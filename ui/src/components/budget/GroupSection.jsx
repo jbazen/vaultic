@@ -201,12 +201,8 @@ export default function GroupSection({ group, month, colorIndex, onUpdate, onOpe
             <div />
           </div>
 
-          {/* Item rows — auto-hide items with $0 planned AND $0 spent for this month.
-               Items from prior months that have no activity this month simply don't
-               appear; they'll show again in any month where they have data. */}
-          {group.items
-            .filter(i => i.planned > 0 || i.spent !== 0)
-            .map(item => (
+          {/* Item rows — visibility already handled by Budget.jsx (is_archived filter) */}
+          {group.items.map(item => (
               <ItemRow key={item.id} item={item} month={month}
                 groupType={group.type} showSpent={showSpent}
                 onUpdate={onUpdate} onOpenItem={onOpenItem}

@@ -266,8 +266,8 @@ async def get_all_unassigned(_user: str = Depends(get_current_user)):
                 FROM budget_auto_rules
                 GROUP BY merchant
             ) best ON best.merchant = COALESCE(t.merchant_name, t.name)
-            LEFT JOIN budget_items  bi ON bi.id  = best.item_id  AND bi.is_deleted = 0
-            LEFT JOIN budget_groups bg ON bg.id  = bi.group_id   AND bg.is_deleted = 0
+            LEFT JOIN budget_items  bi ON bi.id  = best.item_id  AND bi.is_archived = 0
+            LEFT JOIN budget_groups bg ON bg.id  = bi.group_id   AND bg.is_archived = 0
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND (ta.transaction_id IS NULL OR ta.item_id IS NULL)
@@ -544,21 +544,22 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
                 SELECT bi.id, ?, 0
                 FROM budget_items bi
                 JOIN budget_groups bg ON bg.id = bi.group_id
-                WHERE bi.is_deleted = 0 AND bi.is_archived = 0
-                  AND bg.is_deleted = 0 AND bg.is_archived = 0
+                WHERE bi.is_archived = 0 AND bi.is_archived = 0
+                  AND bg.is_archived = 0 AND bg.is_archived = 0
             """, (month,))
 
-        # Exclude soft-deleted groups — is_deleted=1 means the user "deleted" the
-        # group from the UI; the row stays in DB to preserve budget_history references.
+        # Return ALL groups and items (including archived) — the frontend decides
+        # visibility based on is_archived + whether the month is current/past.
+        # Archived items with activity in past months still need to be visible.
         groups = conn.execute(
             "SELECT id, name, type, display_order, is_archived FROM budget_groups"
-            " WHERE is_deleted = 0 ORDER BY display_order, name"
+            " ORDER BY display_order, name"
         ).fetchall()
 
         # Pre-fetch all items, planned amounts, and spending in bulk (avoids N+1)
         all_items = conn.execute(
             "SELECT id, name, group_id, is_archived FROM budget_items"
-            " WHERE is_deleted = 0 ORDER BY display_order, name"
+            " ORDER BY display_order, name"
         ).fetchall()
 
         all_amounts = {}
@@ -775,20 +776,20 @@ async def update_group(group_id: int, body: UpdateGroupBody, _user: str = Depend
 
 @router.delete("/groups/{group_id}")
 async def delete_group(group_id: int, _user: str = Depends(get_current_user)):
-    """Soft-delete a group and all its items.
+    """Archive a group and all its items.
 
-    Sets is_deleted=1 on the group and cascades the same flag to all child items.
+    Sets is_archived=1 on the group and cascades to all child items.
     Hard deletion is intentionally avoided: budget_amounts, budget_history, and
     budget_auto_rules rows all reference item IDs — destroying them would corrupt
     historical month views and Sage's spending knowledge.
     """
     with get_db() as conn:
-        # Soft-delete all child items first so they stop appearing in any month's GET.
+        # Archive all child items first so they stop appearing in any month's GET.
         conn.execute(
-            "UPDATE budget_items SET is_deleted = 1 WHERE group_id = ?", (group_id,)
+            "UPDATE budget_items SET is_archived = 1 WHERE group_id = ?", (group_id,)
         )
         conn.execute(
-            "UPDATE budget_groups SET is_deleted = 1 WHERE id = ?", (group_id,)
+            "UPDATE budget_groups SET is_archived = 1 WHERE id = ?", (group_id,)
         )
     return {"ok": True}
 
@@ -850,9 +851,9 @@ async def update_item(item_id: int, body: UpdateItemBody, _user: str = Depends(g
 
 @router.delete("/items/{item_id}")
 async def delete_item(item_id: int, _user: str = Depends(get_current_user)):
-    """Soft-delete a line item.
+    """Archive a line item.
 
-    Sets is_deleted=1 so the item no longer appears in any month's GET response.
+    Sets is_archived=1 so the item no longer appears in current/future months.
     The row and all associated budget_amounts / budget_auto_rules data are kept
     intact so historical month views and Sage's spending knowledge remain correct.
     transaction_assignments are not touched — those transactions will resurface in
@@ -860,7 +861,7 @@ async def delete_item(item_id: int, _user: str = Depends(get_current_user)):
     """
     with get_db() as conn:
         conn.execute(
-            "UPDATE budget_items SET is_deleted = 1 WHERE id = ?", (item_id,)
+            "UPDATE budget_items SET is_archived = 1 WHERE id = ?", (item_id,)
         )
     return {"ok": True}
 
@@ -1173,11 +1174,11 @@ async def auto_assign_from_history(month: str, _user: str = Depends(get_current_
         # ── Load budget_auto_rules for Pass 2 ────────────────────────────────
         # Map: normalized_merchant → best item_id (highest match_count, unique)
         auto_rules_rows = conn.execute("""
-            SELECT COALESCE(bi.is_deleted, 0) AS is_deleted,
+            SELECT COALESCE(bi.is_archived, 0) AS is_archived,
                    LOWER(ar.merchant) AS merchant, ar.item_id, ar.match_count
             FROM budget_auto_rules ar
             JOIN budget_items bi ON bi.id = ar.item_id
-            WHERE bi.is_deleted = 0
+            WHERE bi.is_archived = 0
         """).fetchall()
 
         # For each normalized merchant keep only the top-scoring item_id.
@@ -1274,7 +1275,7 @@ async def auto_assign_debug(month: str, _user: str = Depends(get_current_user)):
                    bi.name AS item_name, ar.match_count
             FROM budget_auto_rules ar
             JOIN budget_items bi ON bi.id = ar.item_id
-            WHERE bi.is_deleted = 0
+            WHERE bi.is_archived = 0
         """).fetchall()
 
     # Build history map: (norm_merchant, amount) → set of {item_id, item_name}
@@ -1352,7 +1353,7 @@ async def get_item_detail(
             SELECT bi.id, bi.name, bg.name AS group_name, bg.type AS group_type
             FROM budget_items bi
             JOIN budget_groups bg ON bg.id = bi.group_id
-            WHERE bi.id = ? AND bi.is_deleted = 0
+            WHERE bi.id = ? AND bi.is_archived = 0
         """, (item_id,)).fetchone()
 
         if not item:

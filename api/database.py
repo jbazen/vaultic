@@ -323,10 +323,8 @@ MIGRATIONS = [
     # existing data only if duplicates have been removed first (see cleanup script).
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_groups_name ON budget_groups(name)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_items_group_name ON budget_items(group_id, name)",
-    # Soft-delete flags: instead of hard-deleting groups/items (which would destroy
-    # budget_amounts and auto_rules history), we set is_deleted=1. The GET /{month}
-    # endpoint filters these out so deleted entries never appear in the UI, but
-    # budget_history and auto-rule data remain intact for Sage queries.
+    # (legacy — is_deleted columns have been consolidated into is_archived;
+    #  these migrations are kept so existing DBs don't fail on the DROP below)
     "ALTER TABLE budget_groups ADD COLUMN is_deleted INTEGER DEFAULT 0",
     "ALTER TABLE budget_items ADD COLUMN is_deleted INTEGER DEFAULT 0",
     # Confidence score (0-100) for auto-categorized assignments. Set by the sync
@@ -735,6 +733,12 @@ MIGRATIONS = [
         published_at TEXT,
         fetched_at   DATETIME NOT NULL
     )""",
+    # Consolidate is_deleted into is_archived — one visibility flag instead of two.
+    # Convert any is_deleted=1 rows to is_archived=1, then drop the is_deleted column.
+    "UPDATE budget_items SET is_archived = 1 WHERE is_deleted = 1",
+    "UPDATE budget_groups SET is_archived = 1 WHERE is_deleted = 1",
+    "ALTER TABLE budget_items DROP COLUMN is_deleted",
+    "ALTER TABLE budget_groups DROP COLUMN is_deleted",
 ]
 
 
@@ -795,8 +799,7 @@ def _migrate_auto_archive_budget(conn):
     # misc deposits that intentionally has $0 planned most months.
     conn.execute(f"""
         UPDATE budget_items SET is_archived = 1
-        WHERE is_deleted = 0
-          AND is_archived = 0
+        WHERE is_archived = 0
           AND LOWER(name) != 'other deposits'
           AND id NOT IN (
               SELECT DISTINCT item_id FROM budget_amounts
@@ -805,16 +808,15 @@ def _migrate_auto_archive_budget(conn):
           )
     """, recent_months)
 
-    # Archive groups where ALL their non-deleted items are archived.
+    # Archive groups where ALL their items are archived.
     # A group with any active (non-archived) item stays visible so users
     # can still access its contents on the current month's budget page.
     conn.execute("""
         UPDATE budget_groups SET is_archived = 1
-        WHERE is_deleted = 0
-          AND is_archived = 0
+        WHERE is_archived = 0
           AND id NOT IN (
               SELECT DISTINCT group_id FROM budget_items
-              WHERE is_deleted = 0 AND is_archived = 0
+              WHERE is_archived = 0
           )
     """)
 
@@ -836,6 +838,7 @@ def init_db():
             "duplicate column name",
             "already exists",
             "table already exists",
+            "no such column",
         )
         for migration in MIGRATIONS:
             try:

@@ -116,7 +116,7 @@ def tool_get_budget(inputs, username):
     with get_db() as conn:
         groups = conn.execute("""
             SELECT id, name, type FROM budget_groups
-            WHERE is_deleted = 0 ORDER BY display_order, id
+            WHERE is_archived = 0 ORDER BY display_order, id
         """).fetchall()
         result = []
         for g in groups:
@@ -140,7 +140,7 @@ def tool_get_budget(inputs, username):
                        ) AS spent
                 FROM budget_items bi
                 LEFT JOIN budget_amounts ba ON ba.item_id = bi.id AND ba.month = ?
-                WHERE bi.group_id = ? AND bi.is_deleted = 0
+                WHERE bi.group_id = ? AND bi.is_archived = 0
                 ORDER BY bi.display_order, bi.id
             """, (month, month, month, g["id"])).fetchall()
             group_planned = sum(i["planned"] for i in items)
@@ -244,7 +244,7 @@ def tool_assign_transaction(inputs, username):
         if not txn:
             return f"Transaction {txn_id} not found."
         item = conn.execute(
-            "SELECT id, name FROM budget_items WHERE id = ? AND is_deleted = 0",
+            "SELECT id, name FROM budget_items WHERE id = ? AND is_archived = 0",
             (item_id,)
         ).fetchone()
         if not item:

@@ -44,7 +44,7 @@ def _ai_categorize_unmatched(conn, txn_ids: list[str]):
             "SELECT bi.id, bi.name, bg.name AS group_name"
             " FROM budget_items bi"
             " JOIN budget_groups bg ON bg.id = bi.group_id"
-            " WHERE bi.is_deleted = 0 AND bg.is_deleted = 0"
+            " WHERE bi.is_archived = 0 AND bg.is_archived = 0"
         ).fetchall()
         if not items:
             logger.info("AI categorization skipped — no active budget items")

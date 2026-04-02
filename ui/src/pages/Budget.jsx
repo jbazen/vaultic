@@ -102,23 +102,20 @@ export default function Budget() {
 
   // Visibility filter — two modes depending on whether we're viewing the current
   // (or future) month vs a past month:
-  //   • Past months: only show groups/items with actual activity (planned > 0 or
-  //     spent != 0). This keeps historical views accurate — you only see the budget
-  //     categories that were in use that month, not today's active categories.
-  //   • Current/future: also show non-archived groups/items even if they have $0/$0.
-  //     This ensures active budget categories like "Other Deposits" are always
-  //     visible so the user can plan and assign transactions to them.
-  // The is_archived flag (set by auto-migration) separates "active but empty this
-  // month" from "old imported historical item that shouldn't clutter the view."
+  // Visibility rules:
+  //   • Current/future months: show all non-archived items (even if $0 planned/spent).
+  //     This ensures newly created items and bimonthly items always appear.
+  //   • Past months: show items with activity (planned > 0 or spent != 0) OR
+  //     non-archived items. This keeps historical views clean while still showing
+  //     items that were active but happened to have $0 that month.
   const isCurrentOrFuture = month >= currentMonth();
   const visibleGroups = groups.filter(g => {
-    const hasActivity = g.total_planned > 0 || g.total_spent !== 0;
-    return hasActivity || (isCurrentOrFuture && !g.is_archived);
+    if (isCurrentOrFuture) return !g.is_archived;
+    return g.total_planned > 0 || g.total_spent !== 0 || !g.is_archived;
   }).map(g => {
-    // Item-level filtering within visible groups — same logic
     const visibleItems = g.items.filter(i => {
-      const hasActivity = i.planned > 0 || i.spent !== 0;
-      return hasActivity || (isCurrentOrFuture && !i.is_archived);
+      if (isCurrentOrFuture) return !i.is_archived;
+      return i.planned > 0 || i.spent !== 0 || !i.is_archived;
     });
     return { ...g, items: visibleItems };
   });
