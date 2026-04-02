@@ -118,40 +118,58 @@ def tool_get_budget(inputs, username):
             SELECT id, name, type FROM budget_groups
             WHERE is_archived = 0 ORDER BY display_order, id
         """).fetchall()
+
+        # Aggregate direct assignment spending per item (sign preserved: refunds reduce spent)
+        direct_spent = {}
+        for row in conn.execute("""
+            SELECT ta.item_id, COALESCE(SUM(t.amount), 0) AS spent
+            FROM transaction_assignments ta
+            JOIN transactions t ON t.transaction_id = ta.transaction_id
+            WHERE strftime('%Y-%m', t.date) = ? AND t.pending = 0
+            GROUP BY ta.item_id
+        """, (month,)).fetchall():
+            direct_spent[row["item_id"]] = float(row["spent"])
+
+        # Aggregate split spending per item
+        split_spent = {}
+        for row in conn.execute("""
+            SELECT ts.item_id, COALESCE(SUM(ts.amount), 0) AS spent
+            FROM transaction_splits ts
+            JOIN transactions t ON t.transaction_id = ts.transaction_id
+            WHERE strftime('%Y-%m', t.date) = ? AND t.pending = 0
+            GROUP BY ts.item_id
+        """, (month,)).fetchall():
+            split_spent[row["item_id"]] = float(row["spent"])
+
         result = []
         for g in groups:
             items = conn.execute("""
-                SELECT bi.id, bi.name,
-                       COALESCE(ba.planned, 0) AS planned,
-                       COALESCE(
-                           (SELECT ROUND(SUM(ABS(t.amount)), 2)
-                            FROM transaction_assignments ta
-                            JOIN transactions t ON t.transaction_id = ta.transaction_id
-                            WHERE ta.item_id = bi.id
-                              AND strftime('%Y-%m', t.date) = ?
-                              AND t.pending = 0), 0
-                       ) + COALESCE(
-                           (SELECT ROUND(SUM(ts.amount), 2)
-                            FROM transaction_splits ts
-                            JOIN transactions t ON t.transaction_id = ts.transaction_id
-                            WHERE ts.item_id = bi.id
-                              AND strftime('%Y-%m', t.date) = ?
-                              AND t.pending = 0), 0
-                       ) AS spent
+                SELECT bi.id, bi.name, COALESCE(ba.planned, 0) AS planned
                 FROM budget_items bi
                 LEFT JOIN budget_amounts ba ON ba.item_id = bi.id AND ba.month = ?
                 WHERE bi.group_id = ? AND bi.is_archived = 0
                 ORDER BY bi.display_order, bi.id
-            """, (month, month, month, g["id"])).fetchall()
-            group_planned = sum(i["planned"] for i in items)
-            group_spent   = sum(i["spent"]   for i in items)
+            """, (month, g["id"])).fetchall()
+            group_planned = 0.0
+            group_spent = 0.0
+            items_out = []
+            for i in items:
+                planned = float(i["planned"])
+                spent = direct_spent.get(i["id"], 0) + split_spent.get(i["id"], 0)
+                remaining = round(planned - spent, 2)
+                group_planned += planned
+                group_spent += spent
+                items_out.append({
+                    "id": i["id"], "name": i["name"],
+                    "planned": planned, "spent": round(spent, 2), "remaining": remaining,
+                })
             result.append({
                 "group": g["name"],
                 "type":  g["type"],
-                "planned": group_planned,
-                "spent":   group_spent,
-                "remaining": group_planned - group_spent,
-                "items": [dict(i) for i in items],
+                "planned": round(group_planned, 2),
+                "spent":   round(group_spent, 2),
+                "remaining": round(group_planned - group_spent, 2),
+                "items": items_out,
             })
     return f"Budget for {month}:\n" + str(result)
 
@@ -179,11 +197,13 @@ def tool_get_budget_history(inputs, username):
             SELECT bh.month,
                    bg.name AS group_name,
                    bi.name AS item_name,
-                   ROUND(SUM(ABS(bh.amount)), 2) AS total_spent,
-                   COUNT(*) AS num_transactions
+                   ROUND(SUM(bh.amount), 2) AS total_spent,
+                   COUNT(*) AS num_transactions,
+                   COALESCE(ba.planned, 0) AS planned
             FROM budget_history bh
             JOIN budget_items bi  ON bi.id  = bh.item_id
             JOIN budget_groups bg ON bg.id  = bi.group_id
+            LEFT JOIN budget_amounts ba ON ba.item_id = bi.id AND ba.month = bh.month
             {date_clause}
         """
         if group_filter:
@@ -210,7 +230,7 @@ def tool_get_unassigned_transactions(inputs, username):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT t.transaction_id, t.date, t.name, t.merchant_name,
-                   ROUND(ABS(t.amount), 2) AS amount,
+                   ROUND(t.amount, 2) AS amount,
                    a.name AS account_name
             FROM transactions t
             LEFT JOIN accounts a ON a.id = t.account_id
@@ -283,7 +303,7 @@ def tool_auto_assign_month(inputs, username):
         with get_db() as conn:
             unassigned = conn.execute("""
                 SELECT t.transaction_id, COALESCE(t.merchant_name, t.name, '') AS merchant,
-                       ROUND(ABS(t.amount), 2) AS amount
+                       ROUND(t.amount, 2) AS amount
                 FROM transactions t
                 LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
                 LEFT JOIN transaction_splits ts ON ts.transaction_id = t.transaction_id
