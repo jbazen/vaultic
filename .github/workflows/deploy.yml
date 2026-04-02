@@ -138,7 +138,10 @@ jobs:
               exit 1
             fi
 
+            # Force-refresh net worth snapshot (applies calculation fixes immediately)
+            .venv/bin/python scripts/refresh_nw_snapshot.py || true
+
             # Diagnostics
-            python3 scripts/nw_calc_debug.py || true
+            .venv/bin/python scripts/nw_calc_debug.py || true
 
             echo "Deploy complete"
