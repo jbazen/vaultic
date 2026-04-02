@@ -140,9 +140,10 @@ jobs:
             fi
 
             # Force-refresh net worth snapshot (applies calculation fixes immediately)
-            .venv/bin/python scripts/refresh_nw_snapshot.py || true
+            # NOT || true — snapshot failure must be visible in deploy logs
+            .venv/bin/python scripts/refresh_nw_snapshot.py
 
-            # Diagnostics
+            # Diagnostics (non-critical — ok to swallow errors)
             .venv/bin/python scripts/nw_calc_debug.py || true
 
             echo "Deploy complete"

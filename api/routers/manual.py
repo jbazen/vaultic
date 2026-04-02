@@ -143,7 +143,7 @@ async def rename_entry(entry_id: int, body: RenameEntryBody, _user: str = Depend
     notes = body.notes
     notes_val = str(notes).strip()[:200] if notes is not None else None
     with get_db() as conn:
-        row = conn.execute("SELECT id, notes FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
+        row = conn.execute("SELECT id, name, notes FROM manual_entries WHERE id = ?", (entry_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Entry not found")
         # Only update notes if caller passed it; otherwise preserve existing
@@ -151,6 +151,10 @@ async def rename_entry(entry_id: int, body: RenameEntryBody, _user: str = Depend
             conn.execute("UPDATE manual_entries SET name = ?, notes = ? WHERE id = ?", (name, notes_val or None, entry_id))
         else:
             conn.execute("UPDATE manual_entries SET name = ? WHERE id = ?", (name, entry_id))
+        # Update manual_entry_snapshots so history follows the rename
+        old_name = row["name"] if "name" in row.keys() else None
+        if old_name and old_name != name:
+            conn.execute("UPDATE manual_entry_snapshots SET name = ? WHERE name = ?", (name, old_name))
     return {"name": name, "notes": notes_val}
 
 

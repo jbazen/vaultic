@@ -7,14 +7,13 @@ router = APIRouter(prefix="/api/net-worth", tags=["net-worth"])
 
 
 def _get_mortgage(conn) -> float:
-    """Return the most recent other_liability manual entry value (the mortgage balance).
-    This is stored in the liabilities column of net_worth_snapshots alongside Plaid
-    credit/loan balances, so we need it separately to compute investable correctly."""
+    """Return the total of all non-excluded other_liability manual entries.
+    Uses abs() + SUM to match sync.py's _sum_manual("other_liability") semantics —
+    PDF-imported mortgages may be stored as negative values."""
     row = conn.execute(
-        "SELECT COALESCE(value, 0) FROM manual_entries "
+        "SELECT COALESCE(SUM(ABS(value)), 0) FROM manual_entries "
         "WHERE category = 'other_liability' "
-        "AND (exclude_from_net_worth IS NULL OR exclude_from_net_worth = 0) "
-        "ORDER BY entered_at DESC LIMIT 1"
+        "AND (exclude_from_net_worth IS NULL OR exclude_from_net_worth = 0)"
     ).fetchone()
     return float(row[0]) if row else 0.0
 
@@ -168,6 +167,7 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
         manual_detail = [dict(r) for r in manual_rows]
 
         manual_invested = manual_liquid = manual_crypto = manual_other_assets = 0.0
+        manual_liabilities = manual_real_estate = manual_vehicles = 0.0
         for m in manual_detail:
             if m.get("exclude_from_net_worth"):
                 m["bucket"] = "excluded"
@@ -186,17 +186,29 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
             elif cat == "other_asset":
                 manual_other_assets += val
                 m["bucket"] = "other_asset"
+            elif cat == "other_liability":
+                manual_liabilities += abs(val)
+                m["bucket"] = "liabilities"
+            elif cat == "home_value":
+                manual_real_estate += val
+                m["bucket"] = "real_estate"
+            elif cat == "car_value":
+                manual_vehicles += val
+                m["bucket"] = "vehicles"
             else:
                 m["bucket"] = cat
 
         mortgage = _get_mortgage(conn)
 
-    # Live recalculation
+    # Live recalculation (matches sync.py _take_net_worth_snapshot logic)
     live_liquid = plaid_liquid + manual_liquid
     live_invested = plaid_invested + manual_invested
     live_crypto = plaid_crypto + manual_crypto
     live_other_assets = manual_other_assets
-    live_liabilities = plaid_liabilities
+    live_real_estate = manual_real_estate
+    live_vehicles = manual_vehicles
+    live_liabilities = plaid_liabilities + manual_liabilities
+    live_total = live_liquid + live_invested + live_crypto + live_real_estate + live_vehicles + live_other_assets - live_liabilities
     live_credit_liabilities = max(0.0, live_liabilities - mortgage)
     live_investable = live_liquid + live_invested + live_crypto + live_other_assets - live_credit_liabilities
 
@@ -215,11 +227,18 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
             "manual_invested": manual_invested,
             "manual_crypto": manual_crypto,
             "manual_other_assets": manual_other_assets,
+            "manual_liabilities": manual_liabilities,
+            "manual_real_estate": manual_real_estate,
+            "manual_vehicles": manual_vehicles,
             "mortgage": mortgage,
             "credit_liabilities": live_credit_liabilities,
             "total_liquid": live_liquid,
             "total_invested": live_invested,
             "total_crypto": live_crypto,
+            "total_real_estate": live_real_estate,
+            "total_vehicles": live_vehicles,
+            "total_liabilities": live_liabilities,
+            "total": live_total,
             "investable": live_investable,
         },
         "discrepancy": round(live_investable - stored_investable, 2) if stored_investable is not None else None,

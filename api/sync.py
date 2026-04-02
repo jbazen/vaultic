@@ -667,7 +667,7 @@ def _take_net_worth_snapshot(today: str):
                 liquid += bal  # catch-all depository
 
         # Manual entries — latest value per category (excluding display-only entries).
-        # home_value / car_value / other_liability use _latest (one value per category,
+        # home_value / car_value use _latest (one value per category,
         # most-recent entry wins) because users typically update a single running estimate.
         def _latest(category: str) -> float:
             r = conn.execute(
@@ -676,24 +676,23 @@ def _take_net_worth_snapshot(today: str):
             ).fetchone()
             return r["value"] if r else 0.0
 
-        real_estate  = _latest("home_value")
-        vehicles     = _latest("car_value")
-        # Liabilities from manual entries (mortgage, etc.) may be stored as
-        # negative values from PDF import. Use abs() so they always ADD to
-        # the liabilities total (which is subtracted from net worth later).
-        liabilities += abs(_sum_manual("other_liability"))
-
-        # invested / liquid / crypto / real_estate / vehicles use _sum_manual because a
-        # user can have multiple PDF-imported accounts in the same category (e.g. IRA + 529).
-        # All non-excluded entries are summed. Entries with exclude_from_net_worth=1 are
-        # skipped — typically consolidated "Overall Portfolio" summaries that would
-        # double-count individual accounts already imported as separate entries.
+        # _sum_manual sums ALL non-excluded entries in a category. Used for categories
+        # where a user can have multiple PDF-imported accounts (e.g. IRA + 529).
+        # Entries with exclude_from_net_worth=1 are skipped — typically consolidated
+        # "Overall Portfolio" summaries that would double-count individual accounts.
         def _sum_manual(category: str) -> float:
             r = conn.execute(
                 "SELECT COALESCE(SUM(value), 0) FROM manual_entries WHERE category = ? AND (exclude_from_net_worth IS NULL OR exclude_from_net_worth = 0)",
                 (category,),
             ).fetchone()
             return float(r[0]) if r else 0.0
+
+        real_estate  = _latest("home_value")
+        vehicles     = _latest("car_value")
+        # Liabilities from manual entries (mortgage, etc.) may be stored as
+        # negative values from PDF import. Use abs() so they always ADD to
+        # the liabilities total (which is subtracted from net worth later).
+        liabilities += abs(_sum_manual("other_liability"))
 
         other_assets  = _sum_manual("other_asset")
         invested     += _sum_manual("invested")
