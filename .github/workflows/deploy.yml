@@ -138,9 +138,7 @@ jobs:
               exit 1
             fi
 
-            # One-time fixes
-            python3 scripts/fix_singleton_dupes.py || true
-            python3 scripts/dedup_manual_entries.py || true
-            python3 scripts/list_manual_entries.py || true
+            # Diagnostics
+            python3 scripts/nw_calc_debug.py || true
 
             echo "Deploy complete"
