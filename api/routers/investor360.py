@@ -349,76 +349,13 @@ def _store_market_summary(conn, market_data: dict):
         )
 
 
-def _remove_superseded_manual_entries(conn, acct_mapping: dict):
-    """Delete manual_entries that are now fully superseded by I360 accounts.
-
-    These entries came from PDF imports before I360 integration existed.
-    Now that I360 provides live data for these accounts, the old manual
-    entries just cause double-counting.
-
-    Uses multiple matching strategies: account_number, exact name,
-    case-insensitive name, and keyword overlap.
-    """
-    # Collect all I360 account names (lowercase) for matching
-    i360_names = set()
-    for vaultic_id in acct_mapping.values():
-        row = conn.execute(
-            "SELECT name FROM accounts WHERE id = ?", (vaultic_id,),
-        ).fetchone()
-        if row and row["name"]:
-            i360_names.add(row["name"].lower().strip())
-
-    # Collect all I360 account numbers for matching
-    i360_acct_nums = set()
-    for row in conn.execute(
-        "SELECT account_number FROM i360_account_map WHERE account_number IS NOT NULL"
-    ).fetchall():
-        if row["account_number"]:
-            i360_acct_nums.add(row["account_number"])
-
-    # Get all invested manual entries
-    manual_rows = conn.execute(
-        "SELECT id, name, account_number FROM manual_entries WHERE category = 'invested'"
-    ).fetchall()
-
-    for m in manual_rows:
-        should_delete = False
-        reason = ""
-
-        # Match by account_number
-        if m["account_number"] and m["account_number"] in i360_acct_nums:
-            should_delete = True
-            reason = f"account_number={m['account_number']}"
-
-        # Match by exact name (case-insensitive)
-        if not should_delete and m["name"]:
-            if m["name"].lower().strip() in i360_names:
-                should_delete = True
-                reason = f"name match (case-insensitive)"
-
-        # Match by significant keyword overlap (handles different name formats)
-        if not should_delete and m["name"]:
-            m_words = set(m["name"].lower().split()) - {"a", "the", "&", "w/survivor"}
-            for i360_name in i360_names:
-                i_words = set(i360_name.split()) - {"a", "the", "&", "w/survivor"}
-                # If 3+ significant words match, it's the same account
-                overlap = m_words & i_words
-                if len(overlap) >= 3:
-                    should_delete = True
-                    reason = f"keyword overlap: {overlap}"
-                    break
-
-        if should_delete:
-            conn.execute("DELETE FROM manual_entries WHERE id = ?", (m["id"],))
-            logger.info(
-                "Deleted manual entry id=%d '%s' (superseded by I360, %s)",
-                m["id"], m["name"], reason,
-            )
-        else:
-            logger.warning(
-                "Manual entry id=%d '%s' not matched to any I360 account — kept",
-                m["id"], m["name"],
-            )
+def _remove_superseded_manual_entries(conn):
+    """Delete invested manual_entries now superseded by I360 live accounts."""
+    deleted = conn.execute(
+        "DELETE FROM manual_entries WHERE category = 'invested'"
+    ).rowcount
+    if deleted:
+        logger.info("Deleted %d invested manual entries (superseded by I360)", deleted)
 
 
 def _sanity_check(conn, total_value: float) -> list[str]:
@@ -577,7 +514,7 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
 
         # Remove old manual entries now superseded by I360 live data
         if acct_mapping:
-            _remove_superseded_manual_entries(conn, acct_mapping)
+            _remove_superseded_manual_entries(conn)
 
         # Sanity checks
         sanity_warnings = _sanity_check(conn, total_value)
