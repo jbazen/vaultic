@@ -739,6 +739,149 @@ MIGRATIONS = [
     "UPDATE budget_groups SET is_archived = 1 WHERE is_deleted = 1",
     "ALTER TABLE budget_items DROP COLUMN is_deleted",
     "ALTER TABLE budget_groups DROP COLUMN is_deleted",
+
+    # ── Investor360 Integration (Parker Financial / Commonwealth / NFS) ────────
+    # Sync audit log — one row per sync attempt
+    """CREATE TABLE IF NOT EXISTS i360_sync_log (
+        id                    INTEGER PRIMARY KEY,
+        synced_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status                TEXT NOT NULL,
+        accounts_synced       INTEGER DEFAULT 0,
+        holdings_count        INTEGER DEFAULT 0,
+        total_portfolio_value REAL,
+        duration_ms           INTEGER,
+        error                 TEXT,
+        api_versions          TEXT,
+        schema_warnings       TEXT
+    )""",
+    # Maps I360 accounts to Vaultic accounts (source='investor360')
+    """CREATE TABLE IF NOT EXISTS i360_account_map (
+        id                       INTEGER PRIMARY KEY,
+        account_id               INTEGER NOT NULL REFERENCES accounts(id),
+        i360_account_id          INTEGER NOT NULL UNIQUE,
+        account_number           TEXT NOT NULL,
+        household_id             INTEGER NOT NULL,
+        registration_type        TEXT,
+        registration_group       TEXT,
+        registration_description TEXT,
+        business_line            TEXT,
+        investment_objective     TEXT,
+        open_date                TEXT,
+        created_at               DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
+    # Full holdings — every position per sync date (43 fields)
+    """CREATE TABLE IF NOT EXISTS i360_holdings (
+        id                              INTEGER PRIMARY KEY,
+        account_id                      INTEGER NOT NULL REFERENCES accounts(id),
+        snapped_at                      DATE NOT NULL,
+        symbol                          TEXT,
+        cusip                           TEXT,
+        description                     TEXT NOT NULL,
+        product_type                    TEXT,
+        quantity                        REAL,
+        price                           REAL,
+        value_dollars                   REAL,
+        accrued_interest                REAL DEFAULT 0,
+        assets_percentage               REAL,
+        asset_type                      TEXT,
+        asset_sub_type                  TEXT,
+        asset_category                  TEXT,
+        primary_asset_class             TEXT,
+        position_type                   TEXT,
+        est_tax_cost_dollars            REAL,
+        est_tax_cost_gain_loss_dollars  REAL,
+        est_tax_cost_gain_loss_pct      REAL,
+        est_unit_tax_cost               REAL,
+        principal_dollars               REAL,
+        principal_gain_loss_dollars     REAL,
+        principal_gain_loss_pct         REAL,
+        unit_principal_cost             REAL,
+        previous_day_value              REAL,
+        one_day_price_change_pct        REAL,
+        one_day_value_change_dollars    REAL,
+        one_day_value_change_pct        REAL,
+        estimated_annual_income         REAL,
+        current_yield_pct               REAL,
+        dividend_instructions           TEXT,
+        cap_gain_instructions           TEXT,
+        initial_purchase_date           TEXT,
+        is_core                         INTEGER DEFAULT 0,
+        intraday                        INTEGER DEFAULT 1,
+        i360_holding_id                 INTEGER,
+        i360_product_id                 INTEGER,
+        UNIQUE(account_id, snapped_at, i360_holding_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_i360_holdings_date ON i360_holdings(snapped_at)",
+    "CREATE INDEX IF NOT EXISTS idx_i360_holdings_account ON i360_holdings(account_id)",
+    # Per-account balance snapshots
+    """CREATE TABLE IF NOT EXISTS i360_account_balances (
+        id                    INTEGER PRIMARY KEY,
+        account_id            INTEGER NOT NULL REFERENCES accounts(id),
+        snapped_at            DATE NOT NULL,
+        market_value          REAL,
+        cash_value            REAL,
+        todays_change         REAL,
+        total_portfolio_value REAL,
+        UNIQUE(account_id, snapped_at)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_i360_balances_date ON i360_account_balances(snapped_at)",
+    # Monthly portfolio balance history (inception to present)
+    """CREATE TABLE IF NOT EXISTS i360_balance_history (
+        id              INTEGER PRIMARY KEY,
+        balance_date    DATE NOT NULL UNIQUE,
+        market_value    REAL NOT NULL,
+        net_investment  REAL NOT NULL
+    )""",
+    # TWR performance returns with benchmarks
+    """CREATE TABLE IF NOT EXISTS i360_performance (
+        id               INTEGER PRIMARY KEY,
+        snapped_at       DATE NOT NULL,
+        time_period      TEXT NOT NULL,
+        display_name     TEXT,
+        portfolio_return REAL,
+        benchmark_sp500  REAL,
+        benchmark_bond   REAL,
+        benchmark_tbill  REAL,
+        UNIQUE(snapped_at, time_period)
+    )""",
+    # Asset allocation snapshots
+    """CREATE TABLE IF NOT EXISTS i360_asset_allocation (
+        id           INTEGER PRIMARY KEY,
+        snapped_at   DATE NOT NULL,
+        asset_name   TEXT NOT NULL,
+        market_value REAL NOT NULL,
+        UNIQUE(snapped_at, asset_name)
+    )""",
+    # Period activity summary
+    """CREATE TABLE IF NOT EXISTS i360_activity_summary (
+        id                            INTEGER PRIMARY KEY,
+        snapped_at                    DATE NOT NULL,
+        start_date                    DATE NOT NULL,
+        end_date                      DATE NOT NULL,
+        beginning_balance             REAL,
+        ending_balance                REAL,
+        net_contributions_withdrawals REAL,
+        positions_change_in_value     REAL,
+        interest                      REAL,
+        cap_gains                     REAL,
+        management_fee                REAL,
+        management_fees_paid          REAL,
+        net_change                    REAL,
+        total_gain_loss_after_fee     REAL,
+        credits_12b1                  REAL,
+        UNIQUE(snapped_at, start_date)
+    )""",
+    # Market indices (DJI, NASDAQ, S&P500, Treasuries)
+    """CREATE TABLE IF NOT EXISTS i360_market_summary (
+        id                INTEGER PRIMARY KEY,
+        snapped_at        DATETIME NOT NULL,
+        symbol            TEXT NOT NULL,
+        name              TEXT NOT NULL,
+        last_trade_amount REAL,
+        net_change        REAL,
+        percent_change    REAL,
+        UNIQUE(snapped_at, symbol)
+    )""",
 ]
 
 

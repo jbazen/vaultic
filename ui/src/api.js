@@ -1099,3 +1099,55 @@ export async function refreshFeedNews() {
   const res = await apiFetch("/api/feed/news/refresh", { method: "POST" });
   return res.json();
 }
+
+
+// ── Investor360 (Parker Financial) ──────────────────────────────────────────
+export async function i360Sync(sessionCookie) {
+  const res = await apiFetch("/api/investor360/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_cookie: sessionCookie }),
+    timeout: 60000,  // 60s — sync calls 7 endpoints
+  });
+  return res.json();
+}
+export async function i360Status() {
+  const res = await apiFetch("/api/investor360/status");
+  return res.json();
+}
+export async function i360Holdings() {
+  const res = await apiFetch("/api/investor360/holdings");
+  return res.json();
+}
+export async function i360AccountHoldings(accountId) {
+  const res = await apiFetch(`/api/investor360/holdings/${accountId}`);
+  return res.json();
+}
+export async function i360Performance() {
+  const res = await apiFetch("/api/investor360/performance");
+  return res.json();
+}
+export async function i360AssetAllocation() {
+  const res = await apiFetch("/api/investor360/asset-allocation");
+  return res.json();
+}
+export async function i360BalanceHistory() {
+  const res = await apiFetch("/api/investor360/balance-history");
+  return res.json();
+}
+export async function i360ActivitySummary() {
+  const res = await apiFetch("/api/investor360/activity-summary");
+  return res.json();
+}
+export async function i360MarketSummary() {
+  const res = await apiFetch("/api/investor360/market-summary");
+  return res.json();
+}
+export async function i360SyncLog(limit = 20) {
+  const res = await apiFetch(`/api/investor360/sync-log?limit=${limit}`);
+  return res.json();
+}
+export async function i360Bookmarklet() {
+  const res = await apiFetch("/api/investor360/bookmarklet.js");
+  return res.json();
+}
