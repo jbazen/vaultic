@@ -349,11 +349,14 @@ def _store_market_summary(conn, market_data: dict):
         )
 
 
-def _exclude_manual_entries(conn, acct_mapping: dict):
-    """Mark matching manual_entries as excluded from net worth to prevent
-    double-counting now that I360 accounts feed the balance pipeline."""
+def _remove_superseded_manual_entries(conn, acct_mapping: dict):
+    """Delete manual_entries that are now fully superseded by I360 accounts.
+
+    These entries came from PDF imports before I360 integration existed.
+    Now that I360 provides live data for these accounts, the old manual
+    entries just cause double-counting.
+    """
     for i360_id, vaultic_id in acct_mapping.items():
-        # Find account details from the map
         row = conn.execute(
             "SELECT account_number FROM i360_account_map WHERE i360_account_id = ?",
             (i360_id,),
@@ -365,36 +368,32 @@ def _exclude_manual_entries(conn, acct_mapping: dict):
 
         # Try matching by account_number first
         if acct_num:
-            updated = conn.execute(
-                """UPDATE manual_entries SET exclude_from_net_worth = 1
-                   WHERE account_number = ? AND exclude_from_net_worth = 0""",
+            deleted = conn.execute(
+                "DELETE FROM manual_entries WHERE account_number = ?",
                 (acct_num,),
             ).rowcount
-            if updated:
+            if deleted:
                 logger.info(
-                    "Excluded %d manual entries for account %s (now via I360)",
-                    updated, acct_num,
+                    "Deleted %d manual entries for account %s (superseded by I360)",
+                    deleted, acct_num,
                 )
                 continue
 
-        # Fallback: match by account name (manual entries from PDF imports
-        # often have no account_number but share the same name)
+        # Fallback: match by account name
         acct_row = conn.execute(
             "SELECT name FROM accounts WHERE id = ?", (vaultic_id,),
         ).fetchone()
         if not acct_row:
             continue
         acct_name = acct_row["name"]
-        updated = conn.execute(
-            """UPDATE manual_entries SET exclude_from_net_worth = 1
-               WHERE name = ? AND category = 'invested'
-               AND exclude_from_net_worth = 0""",
+        deleted = conn.execute(
+            "DELETE FROM manual_entries WHERE name = ? AND category = 'invested'",
             (acct_name,),
         ).rowcount
-        if updated:
+        if deleted:
             logger.info(
-                "Excluded %d manual entries matching name '%s' (now via I360)",
-                updated, acct_name,
+                "Deleted %d manual entries matching name '%s' (superseded by I360)",
+                deleted, acct_name,
             )
 
 
@@ -552,9 +551,9 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
         if data.get("market"):
             _store_market_summary(conn, data["market"])
 
-        # Exclude matching manual entries from net worth
+        # Remove old manual entries now superseded by I360 live data
         if acct_mapping:
-            _exclude_manual_entries(conn, acct_mapping)
+            _remove_superseded_manual_entries(conn, acct_mapping)
 
         # Sanity checks
         sanity_warnings = _sanity_check(conn, total_value)

@@ -241,16 +241,21 @@ async def account_holdings(
     _user: str = Depends(get_current_user),
 ):
     """
-    Current Plaid investment holdings for one account, joined with security
-    metadata. Includes computed gain/loss and pct_assets relative to account total.
-    Returns the most recent snapshot date's holdings.
+    Current investment holdings for one account.
+    Checks Plaid holdings first, then falls back to I360 holdings
+    for accounts sourced from Investor360.
     """
     with get_db() as conn:
         acct = conn.execute(
-            "SELECT id FROM accounts WHERE id = ? AND is_active = 1", (account_id,)
+            "SELECT id, source FROM accounts WHERE id = ? AND is_active = 1",
+            (account_id,),
         ).fetchone()
         if not acct:
             raise HTTPException(status_code=404, detail="Account not found")
+
+        # Try I360 holdings for investor360 accounts
+        if acct["source"] == "investor360":
+            return _i360_holdings(conn, account_id)
 
         rows = conn.execute("""
             SELECT
@@ -297,7 +302,46 @@ async def account_holdings(
     holdings = []
     for row in rows:
         h = dict(row)
-        # Compute percentage of account total
+        if total_value and h.get("institution_value"):
+            h["pct_assets"] = (h["institution_value"] / total_value) * 100
+        else:
+            h["pct_assets"] = None
+        holdings.append(h)
+
+    return {"holdings": holdings, "total_value": total_value}
+
+
+def _i360_holdings(conn, account_id: int) -> dict:
+    """Return I360 holdings in the same shape as Plaid holdings."""
+    rows = conn.execute("""
+        SELECT symbol AS ticker_symbol, description AS name,
+               value_dollars AS institution_value, price AS institution_price,
+               quantity, cusip, asset_category AS security_type,
+               est_tax_cost_dollars AS cost_basis, snapped_at,
+               CASE
+                   WHEN est_tax_cost_dollars IS NOT NULL AND est_tax_cost_dollars > 0
+                   THEN value_dollars - est_tax_cost_dollars
+                   ELSE NULL
+               END AS gain_loss_dollars,
+               CASE
+                   WHEN est_tax_cost_dollars IS NOT NULL AND est_tax_cost_dollars > 0
+                   THEN ((value_dollars - est_tax_cost_dollars) / est_tax_cost_dollars) * 100
+                   ELSE NULL
+               END AS gain_loss_pct
+        FROM i360_holdings
+        WHERE account_id = ?
+          AND snapped_at = (SELECT MAX(snapped_at) FROM i360_holdings WHERE account_id = ?)
+        ORDER BY value_dollars DESC NULLS LAST
+    """, (account_id, account_id)).fetchall()
+
+    total_value = sum(r["institution_value"] or 0 for r in rows)
+    holdings = []
+    for row in rows:
+        h = dict(row)
+        h["security_id"] = None
+        h["isin"] = None
+        h["institution_price_as_of"] = None
+        h["iso_currency_code"] = "USD"
         if total_value and h.get("institution_value"):
             h["pct_assets"] = (h["institution_value"] / total_value) * 100
         else:
