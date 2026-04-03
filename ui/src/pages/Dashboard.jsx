@@ -15,6 +15,7 @@ import { isRetirementAccount } from "../utils/accounts.js";
 import { fmt, fmtSigned, fmtDate } from "../utils/format.js";
 import CalendarSection from "../components/calendar/CalendarSection.jsx";
 import NewsFeedPanel from "../components/dashboard/NewsFeedPanel.jsx";
+import I360SyncModal from "../components/dashboard/I360SyncModal.jsx";
 
 // ── Category config ───────────────────────────────────────────────────────────
 
@@ -52,6 +53,7 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
+  const [i360Open, setI360Open] = useState(false);
   const mountedRef = useRef(true);
 
   async function load() {
@@ -167,6 +169,9 @@ export default function Dashboard() {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <PlaidLink onSuccess={load} />
+          <button className="btn btn-secondary" onClick={() => setI360Open(true)}>
+            ⟳ Parker
+          </button>
           <button className="btn btn-secondary" onClick={handleCoinbaseSync} disabled={coinbaseSyncing}>
             {coinbaseSyncing ? "Syncing…" : "⟳ Coinbase"}
           </button>
@@ -392,6 +397,7 @@ export default function Dashboard() {
         )}
       </div>
 
+      <I360SyncModal open={i360Open} onClose={() => setI360Open(false)} onSynced={load} />
     </div>
   );
 }
