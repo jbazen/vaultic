@@ -353,26 +353,48 @@ def _exclude_manual_entries(conn, acct_mapping: dict):
     """Mark matching manual_entries as excluded from net worth to prevent
     double-counting now that I360 accounts feed the balance pipeline."""
     for i360_id, vaultic_id in acct_mapping.items():
-        # Find the account number for this I360 account
+        # Find account details from the map
         row = conn.execute(
             "SELECT account_number FROM i360_account_map WHERE i360_account_id = ?",
             (i360_id,),
         ).fetchone()
         if not row:
             continue
+
         acct_num = row["account_number"]
-        if not acct_num:
+
+        # Try matching by account_number first
+        if acct_num:
+            updated = conn.execute(
+                """UPDATE manual_entries SET exclude_from_net_worth = 1
+                   WHERE account_number = ? AND exclude_from_net_worth = 0""",
+                (acct_num,),
+            ).rowcount
+            if updated:
+                logger.info(
+                    "Excluded %d manual entries for account %s (now via I360)",
+                    updated, acct_num,
+                )
+                continue
+
+        # Fallback: match by account name (manual entries from PDF imports
+        # often have no account_number but share the same name)
+        acct_row = conn.execute(
+            "SELECT name FROM accounts WHERE id = ?", (vaultic_id,),
+        ).fetchone()
+        if not acct_row:
             continue
-        # Mark manual entries with matching account_number
+        acct_name = acct_row["name"]
         updated = conn.execute(
             """UPDATE manual_entries SET exclude_from_net_worth = 1
-               WHERE account_number = ? AND exclude_from_net_worth = 0""",
-            (acct_num,),
+               WHERE name = ? AND category = 'invested'
+               AND exclude_from_net_worth = 0""",
+            (acct_name,),
         ).rowcount
         if updated:
             logger.info(
-                "Excluded %d manual entries for account %s (now via I360)",
-                updated, acct_num,
+                "Excluded %d manual entries matching name '%s' (now via I360)",
+                updated, acct_name,
             )
 
 
