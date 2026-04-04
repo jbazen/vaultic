@@ -862,85 +862,144 @@ def get_bookmarklet(user=Depends(get_current_user)):
 
 @router.get("/audit")
 def account_number_audit(user=Depends(get_current_user)):
-    """Full account number audit across all tables."""
+    """Full system-wide account number audit across ALL tables and sources."""
     with get_db() as conn:
-        # 1. I360 accounts in the accounts table
-        i360_accounts = [dict(r) for r in conn.execute(
-            "SELECT id, name, display_name, mask, type, subtype, source, plaid_account_id "
-            "FROM accounts WHERE source = 'investor360' ORDER BY name"
+
+        # ── ACCOUNTS TABLE (every account in the system) ─────────────
+        all_accounts = [dict(r) for r in conn.execute(
+            "SELECT id, name, display_name, mask, type, subtype, source, "
+            "plaid_account_id, is_manual, is_active "
+            "FROM accounts ORDER BY source, name"
         ).fetchall()]
 
-        # 2. I360 account map
-        i360_map = [dict(r) for r in conn.execute(
-            "SELECT account_id, i360_account_id, account_number, household_id, "
-            "registration_type FROM i360_account_map ORDER BY account_number"
+        # ── ACCOUNT BALANCES (history per account) ───────────────────
+        all_balances = [dict(r) for r in conn.execute(
+            "SELECT ab.account_id, a.name, a.source, a.type, a.mask, "
+            "COUNT(*) as snapshots, MIN(ab.snapped_at) as earliest, "
+            "MAX(ab.snapped_at) as latest "
+            "FROM account_balances ab JOIN accounts a ON a.id = ab.account_id "
+            "GROUP BY ab.account_id ORDER BY a.source, a.name"
         ).fetchall()]
 
-        # 3. Manual entries (invested)
-        manual_invested = [dict(r) for r in conn.execute(
-            "SELECT id, name, category, account_number, value, "
-            "exclude_from_net_worth, notes FROM manual_entries "
-            "WHERE category = 'invested' ORDER BY name"
+        # ── PLAID ITEMS ──────────────────────────────────────────────
+        plaid_items = [dict(r) for r in conn.execute(
+            "SELECT id, institution_name, item_id, last_synced_at "
+            "FROM plaid_items ORDER BY institution_name"
         ).fetchall()]
 
-        # 4. ALL manual entries (non-invested, for completeness)
-        manual_other = [dict(r) for r in conn.execute(
-            "SELECT id, name, category, account_number, value "
-            "FROM manual_entries WHERE category != 'invested' ORDER BY category, name"
+        # ── PLAID HOLDINGS (investment accounts) ─────────────────────
+        plaid_holdings = [dict(r) for r in conn.execute(
+            "SELECT h.account_id, a.name, a.mask, a.source, "
+            "COUNT(*) as holdings, COUNT(DISTINCT h.snapped_at) as dates, "
+            "MIN(h.snapped_at) as earliest, MAX(h.snapped_at) as latest "
+            "FROM plaid_holdings h JOIN accounts a ON a.id = h.account_id "
+            "GROUP BY h.account_id ORDER BY a.name"
         ).fetchall()]
 
-        # 5. Manual entry snapshots (invested) — grouped
-        snap_groups = [dict(r) for r in conn.execute(
-            "SELECT name, account_number, category, COUNT(*) as snapshots, "
-            "MIN(snapped_at) as earliest, MAX(snapped_at) as latest "
-            "FROM manual_entry_snapshots WHERE category = 'invested' "
-            "GROUP BY name, account_number, category ORDER BY name"
-        ).fetchall()]
-        snap_total = conn.execute(
-            "SELECT COUNT(*) FROM manual_entry_snapshots WHERE category = 'invested'"
+        # ── PLAID SECURITIES ─────────────────────────────────────────
+        plaid_securities_count = conn.execute(
+            "SELECT COUNT(*) FROM plaid_securities"
         ).fetchone()[0]
 
-        # 6. Account balances for I360 accounts
-        i360_balances = [dict(r) for r in conn.execute(
-            "SELECT ab.account_id, a.name, a.source, COUNT(*) as snapshots, "
-            "MIN(ab.snapped_at) as earliest, MAX(ab.snapped_at) as latest "
-            "FROM account_balances ab JOIN accounts a ON a.id = ab.account_id "
-            "WHERE a.source = 'investor360' GROUP BY ab.account_id ORDER BY a.name"
+        # ── TRANSACTIONS (per account) ───────────────────────────────
+        transactions = [dict(r) for r in conn.execute(
+            "SELECT t.account_id, a.name, a.mask, a.source, "
+            "COUNT(*) as txns, MIN(t.date) as earliest, MAX(t.date) as latest "
+            "FROM transactions t JOIN accounts a ON a.id = t.account_id "
+            "GROUP BY t.account_id ORDER BY a.source, a.name"
         ).fetchall()]
 
-        # 7. Manual holdings snapshots — grouped
-        holdings_snaps = [dict(r) for r in conn.execute(
+        # ── MANUAL ENTRIES (all categories) ──────────────────────────
+        manual_entries = [dict(r) for r in conn.execute(
+            "SELECT id, name, category, account_number, value, "
+            "exclude_from_net_worth, notes "
+            "FROM manual_entries ORDER BY category, name"
+        ).fetchall()]
+
+        # ── MANUAL ENTRY SNAPSHOTS (all categories) ──────────────────
+        manual_entry_snaps = [dict(r) for r in conn.execute(
+            "SELECT name, account_number, category, COUNT(*) as snapshots, "
+            "MIN(snapped_at) as earliest, MAX(snapped_at) as latest "
+            "FROM manual_entry_snapshots "
+            "GROUP BY name, account_number, category ORDER BY category, name"
+        ).fetchall()]
+        manual_entry_snaps_total = conn.execute(
+            "SELECT COUNT(*) FROM manual_entry_snapshots"
+        ).fetchone()[0]
+
+        # ── MANUAL HOLDINGS (current, per manual_entry) ──────────────
+        manual_holdings = [dict(r) for r in conn.execute(
+            "SELECT mh.manual_entry_id, me.name, me.account_number, "
+            "COUNT(*) as holdings "
+            "FROM manual_holdings mh "
+            "JOIN manual_entries me ON me.id = mh.manual_entry_id "
+            "GROUP BY mh.manual_entry_id ORDER BY me.name"
+        ).fetchall()]
+
+        # ── MANUAL HOLDINGS SNAPSHOTS ────────────────────────────────
+        manual_holdings_snaps = [dict(r) for r in conn.execute(
             "SELECT entry_name, account_number, COUNT(*) as holdings, "
-            "COUNT(DISTINCT snapped_at) as dates "
-            "FROM manual_holdings_snapshots GROUP BY entry_name, account_number "
-            "ORDER BY entry_name"
+            "COUNT(DISTINCT snapped_at) as dates, "
+            "MIN(snapped_at) as earliest, MAX(snapped_at) as latest "
+            "FROM manual_holdings_snapshots "
+            "GROUP BY entry_name, account_number ORDER BY entry_name"
         ).fetchall()]
 
-        # 8. I360 holdings summary
-        i360_holdings_summary = [dict(r) for r in conn.execute(
+        # ── I360 ACCOUNT MAP ─────────────────────────────────────────
+        i360_map = [dict(r) for r in conn.execute(
+            "SELECT account_id, i360_account_id, account_number, "
+            "household_id, registration_type "
+            "FROM i360_account_map ORDER BY account_number"
+        ).fetchall()]
+
+        # ── I360 HOLDINGS ────────────────────────────────────────────
+        i360_holdings = [dict(r) for r in conn.execute(
             "SELECT h.account_id, a.name, COUNT(*) as holdings, "
-            "MAX(h.snapped_at) as latest "
+            "COUNT(DISTINCT h.snapped_at) as dates, "
+            "MIN(h.snapped_at) as earliest, MAX(h.snapped_at) as latest "
             "FROM i360_holdings h JOIN accounts a ON a.id = h.account_id "
             "GROUP BY h.account_id ORDER BY a.name"
         ).fetchall()]
 
-        # 9. I360 balance history (portfolio-level monthly)
+        # ── I360 BALANCE HISTORY (portfolio-level) ───────────────────
         i360_hist = conn.execute(
             "SELECT COUNT(*) as rows, MIN(balance_date) as earliest, "
             "MAX(balance_date) as latest FROM i360_balance_history"
         ).fetchone()
 
+        # ── NET WORTH SNAPSHOTS ──────────────────────────────────────
+        nw_snaps = conn.execute(
+            "SELECT COUNT(*) as rows, MIN(snapped_at) as earliest, "
+            "MAX(snapped_at) as latest FROM net_worth_snapshots"
+        ).fetchone()
+
+        # ── COINBASE TRADES ──────────────────────────────────────────
+        try:
+            coinbase_trades = conn.execute(
+                "SELECT COUNT(*) as rows, MIN(created_at) as earliest, "
+                "MAX(created_at) as latest FROM coinbase_trades"
+            ).fetchone()
+            coinbase_trades = dict(coinbase_trades) if coinbase_trades else {}
+        except Exception:
+            coinbase_trades = {"error": "table not found"}
+
     return {
-        "i360_accounts": i360_accounts,
-        "i360_account_map": i360_map,
-        "manual_entries_invested": manual_invested,
-        "manual_entries_other": manual_other,
+        "accounts": all_accounts,
+        "account_balances": all_balances,
+        "plaid_items": plaid_items,
+        "plaid_holdings": plaid_holdings,
+        "plaid_securities_count": plaid_securities_count,
+        "transactions": transactions,
+        "manual_entries": manual_entries,
         "manual_entry_snapshots": {
-            "groups": snap_groups,
-            "total_rows": snap_total,
+            "groups": manual_entry_snaps,
+            "total_rows": manual_entry_snaps_total,
         },
-        "i360_account_balances": i360_balances,
-        "manual_holdings_snapshots": holdings_snaps,
-        "i360_holdings_summary": i360_holdings_summary,
+        "manual_holdings_current": manual_holdings,
+        "manual_holdings_snapshots": manual_holdings_snaps,
+        "i360_account_map": i360_map,
+        "i360_holdings": i360_holdings,
         "i360_balance_history": dict(i360_hist) if i360_hist else {},
+        "net_worth_snapshots": dict(nw_snaps) if nw_snaps else {},
+        "coinbase_trades": coinbase_trades,
     }
