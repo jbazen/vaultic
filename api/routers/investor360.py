@@ -856,3 +856,91 @@ def get_bookmarklet(user=Depends(get_current_user)):
         "Go to Vaultic and click 'Sync Parker Financial'.",
         "Paste the token and click Sync.",
     ]}
+
+
+# ── Temporary diagnostic endpoint (remove after audit) ──────────────────
+
+@router.get("/audit")
+def account_number_audit(user=Depends(get_current_user)):
+    """Full account number audit across all tables."""
+    with get_db() as conn:
+        # 1. I360 accounts in the accounts table
+        i360_accounts = [dict(r) for r in conn.execute(
+            "SELECT id, name, display_name, mask, type, subtype, source, plaid_account_id "
+            "FROM accounts WHERE source = 'investor360' ORDER BY name"
+        ).fetchall()]
+
+        # 2. I360 account map
+        i360_map = [dict(r) for r in conn.execute(
+            "SELECT account_id, i360_account_id, account_number, household_id, "
+            "registration_type FROM i360_account_map ORDER BY account_number"
+        ).fetchall()]
+
+        # 3. Manual entries (invested)
+        manual_invested = [dict(r) for r in conn.execute(
+            "SELECT id, name, category, account_number, value, "
+            "exclude_from_net_worth, notes FROM manual_entries "
+            "WHERE category = 'invested' ORDER BY name"
+        ).fetchall()]
+
+        # 4. ALL manual entries (non-invested, for completeness)
+        manual_other = [dict(r) for r in conn.execute(
+            "SELECT id, name, category, account_number, value "
+            "FROM manual_entries WHERE category != 'invested' ORDER BY category, name"
+        ).fetchall()]
+
+        # 5. Manual entry snapshots (invested) — grouped
+        snap_groups = [dict(r) for r in conn.execute(
+            "SELECT name, account_number, category, COUNT(*) as snapshots, "
+            "MIN(snapped_at) as earliest, MAX(snapped_at) as latest "
+            "FROM manual_entry_snapshots WHERE category = 'invested' "
+            "GROUP BY name, account_number, category ORDER BY name"
+        ).fetchall()]
+        snap_total = conn.execute(
+            "SELECT COUNT(*) FROM manual_entry_snapshots WHERE category = 'invested'"
+        ).fetchone()[0]
+
+        # 6. Account balances for I360 accounts
+        i360_balances = [dict(r) for r in conn.execute(
+            "SELECT ab.account_id, a.name, a.source, COUNT(*) as snapshots, "
+            "MIN(ab.snapped_at) as earliest, MAX(ab.snapped_at) as latest "
+            "FROM account_balances ab JOIN accounts a ON a.id = ab.account_id "
+            "WHERE a.source = 'investor360' GROUP BY ab.account_id ORDER BY a.name"
+        ).fetchall()]
+
+        # 7. Manual holdings snapshots — grouped
+        holdings_snaps = [dict(r) for r in conn.execute(
+            "SELECT entry_name, account_number, COUNT(*) as holdings, "
+            "COUNT(DISTINCT snapped_at) as dates "
+            "FROM manual_holdings_snapshots GROUP BY entry_name, account_number "
+            "ORDER BY entry_name"
+        ).fetchall()]
+
+        # 8. I360 holdings summary
+        i360_holdings_summary = [dict(r) for r in conn.execute(
+            "SELECT h.account_id, a.name, COUNT(*) as holdings, "
+            "MAX(h.snapped_at) as latest "
+            "FROM i360_holdings h JOIN accounts a ON a.id = h.account_id "
+            "GROUP BY h.account_id ORDER BY a.name"
+        ).fetchall()]
+
+        # 9. I360 balance history (portfolio-level monthly)
+        i360_hist = conn.execute(
+            "SELECT COUNT(*) as rows, MIN(balance_date) as earliest, "
+            "MAX(balance_date) as latest FROM i360_balance_history"
+        ).fetchone()
+
+    return {
+        "i360_accounts": i360_accounts,
+        "i360_account_map": i360_map,
+        "manual_entries_invested": manual_invested,
+        "manual_entries_other": manual_other,
+        "manual_entry_snapshots": {
+            "groups": snap_groups,
+            "total_rows": snap_total,
+        },
+        "i360_account_balances": i360_balances,
+        "manual_holdings_snapshots": holdings_snaps,
+        "i360_holdings_summary": i360_holdings_summary,
+        "i360_balance_history": dict(i360_hist) if i360_hist else {},
+    }
