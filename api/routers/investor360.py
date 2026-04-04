@@ -358,27 +358,21 @@ def _remove_superseded_manual_entries(conn):
         logger.info("Deleted %d invested manual entries (superseded by I360)", deleted)
 
 
-def _normalize_account_number(raw: str | None) -> str | None:
-    """Uppercase, strip all non-alphanumeric. B37-601959 == B37601959."""
-    if not raw:
-        return None
-    import re
-    return re.sub(r"[^A-Z0-9]", "", str(raw).upper()) or None
-
-
 def _migrate_snapshot_history(conn):
     """Backfill account_balances from manual_entry_snapshots for I360 accounts.
 
     Matches by normalized account_number only. This preserves the PDF-imported
     balance history so the Performance tab shows historical data for I360 accounts.
     """
+    from api.routers.pdf import _normalize_acct
+
     # Build normalized account_number -> vaultic_id mapping from i360_account_map
     acct_map = {}
     for row in conn.execute(
         "SELECT account_id, account_number FROM i360_account_map "
         "WHERE account_number IS NOT NULL AND account_number != ''"
     ).fetchall():
-        normalized = _normalize_account_number(row["account_number"])
+        normalized = _normalize_acct(row["account_number"])
         if normalized:
             acct_map[normalized] = row["account_id"]
 
@@ -391,7 +385,7 @@ def _migrate_snapshot_history(conn):
         "SELECT account_number, value, snapped_at FROM manual_entry_snapshots "
         "WHERE category = 'invested' AND account_number IS NOT NULL AND account_number != ''"
     ).fetchall():
-        normalized = _normalize_account_number(row["account_number"])
+        normalized = _normalize_acct(row["account_number"])
         if not normalized:
             continue
         vaultic_id = acct_map.get(normalized)
