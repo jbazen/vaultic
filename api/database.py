@@ -882,6 +882,8 @@ MIGRATIONS = [
         percent_change    REAL,
         UNIQUE(snapped_at, symbol)
     )""",
+    # Canonical account identifier — populated per-source during account number migration
+    "ALTER TABLE accounts ADD COLUMN account_number TEXT",
 ]
 
 
