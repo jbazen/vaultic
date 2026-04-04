@@ -286,13 +286,15 @@ def _sync_item(item_db_id: int, item_id: str, access_token: str, today: str):
         for acct in acct_resp.accounts:
             conn.execute("""
                 INSERT INTO accounts
-                    (plaid_account_id, plaid_item_id, name, official_name, mask, type, subtype, institution_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (plaid_account_id, plaid_item_id, name, official_name, mask,
+                     type, subtype, institution_name, account_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(plaid_account_id) DO UPDATE SET
                     name = excluded.name,
                     official_name = excluded.official_name,
                     mask = excluded.mask,
-                    institution_name = excluded.institution_name
+                    institution_name = excluded.institution_name,
+                    account_number = excluded.account_number
             """, (
                 acct.account_id,
                 item_db_id,
@@ -302,6 +304,7 @@ def _sync_item(item_db_id: int, item_id: str, access_token: str, today: str):
                 acct.type.value,
                 acct.subtype.value if acct.subtype else None,
                 institution_name,
+                acct.account_id,  # account_number = plaid_account_id
             ))
 
             # Balance snapshot for today
@@ -311,18 +314,21 @@ def _sync_item(item_db_id: int, item_id: str, access_token: str, today: str):
             if account_row and acct.balances:
                 conn.execute("""
                     INSERT INTO account_balances
-                        (account_id, current, available, limit_amount, snapped_at)
-                    VALUES (?, ?, ?, ?, ?)
+                        (account_id, current, available, limit_amount, snapped_at,
+                         account_number)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(account_id, snapped_at) DO UPDATE SET
                         current = excluded.current,
                         available = excluded.available,
-                        limit_amount = excluded.limit_amount
+                        limit_amount = excluded.limit_amount,
+                        account_number = excluded.account_number
                 """, (
                     account_row["id"],
                     acct.balances.current,
                     acct.balances.available,
                     acct.balances.limit,
                     today,
+                    acct.account_id,  # account_number = plaid_account_id
                 ))
 
         conn.execute(
@@ -405,8 +411,9 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
                     (transaction_id, account_id, amount, date, name, merchant_name,
                      category, category_detail, pending, payment_channel,
                      authorized_date, original_description, merchant_entity_id,
-                     check_number, logo_url, website, transaction_code)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     check_number, logo_url, website, transaction_code,
+                     account_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(transaction_id) DO UPDATE SET
                     amount = excluded.amount,
                     date = excluded.date,
@@ -422,7 +429,8 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
                     check_number = excluded.check_number,
                     logo_url = excluded.logo_url,
                     website = excluded.website,
-                    transaction_code = excluded.transaction_code
+                    transaction_code = excluded.transaction_code,
+                    account_number = excluded.account_number
             """, (
                 txn.transaction_id,
                 account_row["id"],
@@ -441,6 +449,7 @@ def _sync_transactions(item_db_id: int, access_token: str, today: str):
                 getattr(txn, "logo_url", None),
                 getattr(txn, "website", None),
                 transaction_code,
+                txn.account_id,  # account_number = plaid_account_id
             ))
 
         for txn in removed:
@@ -539,14 +548,16 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
             conn.execute("""
                 INSERT INTO plaid_holdings
                     (account_id, security_id, institution_value, institution_price,
-                     institution_price_as_of, quantity, cost_basis, iso_currency_code, snapped_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     institution_price_as_of, quantity, cost_basis, iso_currency_code,
+                     snapped_at, account_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id, security_id, snapped_at) DO UPDATE SET
                     institution_value       = excluded.institution_value,
                     institution_price       = excluded.institution_price,
                     institution_price_as_of = excluded.institution_price_as_of,
                     quantity                = excluded.quantity,
-                    cost_basis              = excluded.cost_basis
+                    cost_basis              = excluded.cost_basis,
+                    account_number          = excluded.account_number
             """, (
                 acct["id"],
                 h.security_id,
@@ -557,6 +568,7 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                 h.cost_basis,
                 h.iso_currency_code or "USD",
                 today,
+                h.account_id,  # account_number = plaid_account_id
             ))
 
     logger.info(f"Holdings snapshot: item {item_db_id}  {len(resp.holdings)} holdings  {len(resp.securities)} securities")
@@ -602,12 +614,14 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                 conn.execute("""
                     INSERT INTO plaid_investment_transactions
                         (investment_transaction_id, account_id, security_id, date, name,
-                         quantity, amount, fees, type, subtype, cancel_transaction_id, iso_currency_code)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         quantity, amount, fees, type, subtype, cancel_transaction_id,
+                         iso_currency_code, account_number)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(investment_transaction_id) DO UPDATE SET
                         amount                = excluded.amount,
                         fees                  = excluded.fees,
-                        cancel_transaction_id = excluded.cancel_transaction_id
+                        cancel_transaction_id = excluded.cancel_transaction_id,
+                        account_number        = excluded.account_number
                 """, (
                     txn.investment_transaction_id,
                     acct["id"],
@@ -621,6 +635,7 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                     txn.subtype,
                     txn.cancel_transaction_id,
                     txn.iso_currency_code or "USD",
+                    txn.account_id,  # account_number = plaid_account_id
                 ))
 
         logger.info(f"Investment transactions: item {item_db_id}  {len(all_txns)} txns")

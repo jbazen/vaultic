@@ -3,25 +3,34 @@
 Covers:
   - Coinbase: account_number populated on accounts + account_balances
   - Coinbase sync writes account_number on new accounts + balance snapshots
+  - Plaid: account_number populated on accounts + all related tables
   - Migration backfills existing rows
 """
 import pytest
 from tests.conftest import _test_get_db
 
 # IDs used by these tests — cleaned up after so shared in-memory DB isn't polluted
-_TEST_PLAID_IDS = ("uuid-test-btc", "uuid-test-eth", "plaid-uuid-123")
+_TEST_PLAID_IDS = (
+    "uuid-test-btc", "uuid-test-eth", "plaid-uuid-123",
+    "plaid-uuid-checking", "plaid-uuid-401k",
+)
 
 
-@pytest.fixture(autouse=True, scope="class")
+@pytest.fixture(autouse=True, scope="module")
 def _cleanup_after():
-    """Remove test rows from the shared in-memory DB after this test class."""
+    """Remove test rows from the shared in-memory DB after all tests in this module."""
     yield
     with _test_get_db() as conn:
         for pid in _TEST_PLAID_IDS:
             acct = conn.execute("SELECT id FROM accounts WHERE plaid_account_id = ?", (pid,)).fetchone()
             if acct:
                 conn.execute("DELETE FROM account_balances WHERE account_id = ?", (acct[0],))
+                conn.execute("DELETE FROM transactions WHERE account_id = ?", (acct[0],))
+                conn.execute("DELETE FROM plaid_holdings WHERE account_id = ?", (acct[0],))
+                conn.execute("DELETE FROM plaid_investment_transactions WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM accounts WHERE id = ?", (acct[0],))
+        # Also clean up any securities we inserted
+        conn.execute("DELETE FROM plaid_securities WHERE security_id = 'sec-001'")
         conn.commit()
 
 
@@ -137,3 +146,180 @@ class TestCoinbaseAccountNumbers:
                 (acct_id,)
             ).fetchone()
             assert bal[0] == "coinbaseETH"
+
+
+class TestPlaidAccountNumbers:
+    """Plaid accounts get account_number = plaid_account_id UUID."""
+
+    def test_transactions_has_account_number_column(self):
+        with _test_get_db() as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(transactions)").fetchall()]
+            assert "account_number" in cols
+
+    def test_plaid_holdings_has_account_number_column(self):
+        with _test_get_db() as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(plaid_holdings)").fetchall()]
+            assert "account_number" in cols
+
+    def test_plaid_investment_transactions_has_account_number_column(self):
+        with _test_get_db() as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(plaid_investment_transactions)").fetchall()]
+            assert "account_number" in cols
+
+    def test_migration_populates_plaid_account_numbers(self):
+        with _test_get_db() as conn:
+            # Insert a plaid account without account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO accounts
+                    (plaid_account_id, name, type, subtype, source, is_active)
+                VALUES ('plaid-uuid-checking', 'TOTAL CHECKING', 'depository', 'checking', 'plaid', 1)
+            """)
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE plaid_account_id = 'plaid-uuid-checking'"
+            ).fetchone()[0]
+
+            # Insert related rows without account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO account_balances
+                    (account_id, current, available, snapped_at)
+                VALUES (?, 5000.0, 5000.0, '2026-04-01')
+            """, (acct_id,))
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions
+                    (transaction_id, account_id, amount, date, name)
+                VALUES ('txn-001', ?, -50.0, '2026-04-01', 'Test Purchase')
+            """, (acct_id,))
+            conn.commit()
+
+            # Run migration
+            from api.database import _migrate_plaid_account_numbers
+            _migrate_plaid_account_numbers(conn)
+
+            # Verify accounts.account_number = plaid_account_id
+            row = conn.execute(
+                "SELECT account_number FROM accounts WHERE plaid_account_id = 'plaid-uuid-checking'"
+            ).fetchone()
+            assert row[0] == "plaid-uuid-checking"
+
+            # Verify account_balances backfilled
+            bal = conn.execute(
+                "SELECT account_number FROM account_balances WHERE account_id = ?", (acct_id,)
+            ).fetchone()
+            assert bal[0] == "plaid-uuid-checking"
+
+            # Verify transactions backfilled
+            txn = conn.execute(
+                "SELECT account_number FROM transactions WHERE transaction_id = 'txn-001'"
+            ).fetchone()
+            assert txn[0] == "plaid-uuid-checking"
+
+    def test_migration_backfills_holdings(self):
+        with _test_get_db() as conn:
+            # Insert a plaid investment account
+            conn.execute("""
+                INSERT OR IGNORE INTO accounts
+                    (plaid_account_id, name, type, subtype, source, is_active)
+                VALUES ('plaid-uuid-401k', 'SAIC 401K', 'investment', '401k', 'plaid', 1)
+            """)
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE plaid_account_id = 'plaid-uuid-401k'"
+            ).fetchone()[0]
+
+            # Insert a security
+            conn.execute("""
+                INSERT OR IGNORE INTO plaid_securities
+                    (security_id, name, ticker_symbol, type)
+                VALUES ('sec-001', 'Vanguard S&P 500', 'VOO', 'etf')
+            """)
+
+            # Insert holding and investment transaction without account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO plaid_holdings
+                    (account_id, security_id, institution_value, quantity, snapped_at)
+                VALUES (?, 'sec-001', 10000.0, 20.0, '2026-04-01')
+            """, (acct_id,))
+            conn.execute("""
+                INSERT OR IGNORE INTO plaid_investment_transactions
+                    (investment_transaction_id, account_id, security_id, date, name,
+                     quantity, amount, type, subtype)
+                VALUES ('inv-txn-001', ?, 'sec-001', '2026-04-01', 'Buy VOO',
+                        5.0, 2500.0, 'buy', 'buy')
+            """, (acct_id,))
+            conn.commit()
+
+            # Run migration
+            from api.database import _migrate_plaid_account_numbers
+            _migrate_plaid_account_numbers(conn)
+
+            # Verify plaid_holdings backfilled
+            h = conn.execute(
+                "SELECT account_number FROM plaid_holdings WHERE account_id = ? AND security_id = 'sec-001'",
+                (acct_id,)
+            ).fetchone()
+            assert h[0] == "plaid-uuid-401k"
+
+            # Verify plaid_investment_transactions backfilled
+            it = conn.execute(
+                "SELECT account_number FROM plaid_investment_transactions WHERE investment_transaction_id = 'inv-txn-001'"
+            ).fetchone()
+            assert it[0] == "plaid-uuid-401k"
+
+    def test_migration_idempotent(self):
+        """Running Plaid migration twice doesn't break anything."""
+        with _test_get_db() as conn:
+            from api.database import _migrate_plaid_account_numbers
+            _migrate_plaid_account_numbers(conn)
+            _migrate_plaid_account_numbers(conn)
+
+            row = conn.execute(
+                "SELECT account_number FROM accounts WHERE plaid_account_id = 'plaid-uuid-checking'"
+            ).fetchone()
+            assert row[0] == "plaid-uuid-checking"
+
+    def test_migration_skips_non_plaid(self):
+        """Coinbase accounts are not touched by the Plaid migration."""
+        with _test_get_db() as conn:
+            from api.database import _migrate_plaid_account_numbers
+            _migrate_plaid_account_numbers(conn)
+
+            # The coinbase account from earlier tests should not be affected
+            row = conn.execute(
+                "SELECT account_number FROM accounts WHERE source = 'coinbase' AND plaid_account_id = 'uuid-test-btc'"
+            ).fetchone()
+            # Should still be coinbaseBTC from the coinbase migration, not overwritten
+            if row:
+                assert row[0] == "coinbaseBTC"
+
+    def test_plaid_sync_writes_account_number_on_insert(self):
+        """Simulates what sync.py now does — writes account_number on all inserts."""
+        with _test_get_db() as conn:
+            plaid_acct_id = "plaid-uuid-checking"
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE plaid_account_id = ?", (plaid_acct_id,)
+            ).fetchone()[0]
+
+            # Simulate sync writing a new balance with account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO account_balances
+                    (account_id, current, available, snapped_at, account_number)
+                VALUES (?, 6000.0, 6000.0, '2026-04-04', ?)
+            """, (acct_id, plaid_acct_id))
+
+            # Simulate sync writing a new transaction with account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions
+                    (transaction_id, account_id, amount, date, name, account_number)
+                VALUES ('txn-002', ?, -25.0, '2026-04-04', 'Coffee Shop', ?)
+            """, (acct_id, plaid_acct_id))
+            conn.commit()
+
+            bal = conn.execute(
+                "SELECT account_number FROM account_balances WHERE account_id = ? AND snapped_at = '2026-04-04'",
+                (acct_id,)
+            ).fetchone()
+            assert bal[0] == "plaid-uuid-checking"
+
+            txn = conn.execute(
+                "SELECT account_number FROM transactions WHERE transaction_id = 'txn-002'"
+            ).fetchone()
+            assert txn[0] == "plaid-uuid-checking"

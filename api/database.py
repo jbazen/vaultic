@@ -885,6 +885,9 @@ MIGRATIONS = [
     # Canonical account identifier — populated per-source during account number migration
     "ALTER TABLE accounts ADD COLUMN account_number TEXT",
     "ALTER TABLE account_balances ADD COLUMN account_number TEXT",
+    "ALTER TABLE transactions ADD COLUMN account_number TEXT",
+    "ALTER TABLE plaid_holdings ADD COLUMN account_number TEXT",
+    "ALTER TABLE plaid_investment_transactions ADD COLUMN account_number TEXT",
 ]
 
 
@@ -998,6 +1001,31 @@ def _migrate_coinbase_account_numbers(conn):
     """)
 
 
+def _migrate_plaid_account_numbers(conn):
+    """Populate account_number for Plaid accounts and backfill related tables.
+
+    Sets accounts.account_number = plaid_account_id (UUID) for Plaid source,
+    then copies that to all existing rows in account_balances, transactions,
+    plaid_holdings, and plaid_investment_transactions.
+    Idempotent — skips rows that already have account_number set.
+    """
+    # Populate accounts.account_number for plaid source
+    conn.execute("""
+        UPDATE accounts SET account_number = plaid_account_id
+        WHERE source = 'plaid' AND (account_number IS NULL OR account_number = '')
+    """)
+    # Backfill account_number on all related tables from accounts
+    for table in ("account_balances", "transactions", "plaid_holdings",
+                  "plaid_investment_transactions"):
+        conn.execute(f"""
+            UPDATE {table} SET account_number = (
+                SELECT a.account_number FROM accounts a WHERE a.id = {table}.account_id
+            )
+            WHERE account_id IN (SELECT id FROM accounts WHERE source = 'plaid')
+              AND (account_number IS NULL OR account_number = '')
+        """)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1035,6 +1063,11 @@ def init_db():
             _migrate_coinbase_account_numbers(conn)
         except Exception as exc:
             logger.warning("Coinbase account_number migration failed: %s", exc)
+        # Populate account_number for Plaid accounts + backfill all related tables
+        try:
+            _migrate_plaid_account_numbers(conn)
+        except Exception as exc:
+            logger.warning("Plaid account_number migration failed: %s", exc)
 
 
 @contextmanager
