@@ -358,6 +358,62 @@ def _remove_superseded_manual_entries(conn):
         logger.info("Deleted %d invested manual entries (superseded by I360)", deleted)
 
 
+def _normalize_account_number(raw: str | None) -> str | None:
+    """Uppercase, strip all non-alphanumeric. B37-601959 == B37601959."""
+    if not raw:
+        return None
+    import re
+    return re.sub(r"[^A-Z0-9]", "", str(raw).upper()) or None
+
+
+def _migrate_snapshot_history(conn):
+    """Backfill account_balances from manual_entry_snapshots for I360 accounts.
+
+    Matches by normalized account_number only. This preserves the PDF-imported
+    balance history so the Performance tab shows historical data for I360 accounts.
+    """
+    # Build normalized account_number -> vaultic_id mapping from i360_account_map
+    acct_map = {}
+    for row in conn.execute(
+        "SELECT account_id, account_number FROM i360_account_map "
+        "WHERE account_number IS NOT NULL AND account_number != ''"
+    ).fetchall():
+        normalized = _normalize_account_number(row["account_number"])
+        if normalized:
+            acct_map[normalized] = row["account_id"]
+
+    if not acct_map:
+        return
+
+    # Find snapshots that have account_numbers matching I360 accounts
+    migrated = 0
+    for row in conn.execute(
+        "SELECT account_number, value, snapped_at FROM manual_entry_snapshots "
+        "WHERE category = 'invested' AND account_number IS NOT NULL AND account_number != ''"
+    ).fetchall():
+        normalized = _normalize_account_number(row["account_number"])
+        if not normalized:
+            continue
+        vaultic_id = acct_map.get(normalized)
+        if not vaultic_id:
+            continue
+        # Don't overwrite existing balances (today's I360 data takes precedence)
+        existing = conn.execute(
+            "SELECT 1 FROM account_balances WHERE account_id = ? AND snapped_at = ?",
+            (vaultic_id, row["snapped_at"]),
+        ).fetchone()
+        if existing:
+            continue
+        conn.execute(
+            "INSERT INTO account_balances (account_id, current, snapped_at) VALUES (?, ?, ?)",
+            (vaultic_id, row["value"], row["snapped_at"]),
+        )
+        migrated += 1
+
+    if migrated:
+        logger.info("Migrated %d historical snapshots into account_balances for I360 accounts", migrated)
+
+
 def _sanity_check(conn, total_value: float) -> list[str]:
     """Validate synced data against last known values."""
     warnings = []
@@ -515,6 +571,7 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
         # Remove old manual entries now superseded by I360 live data
         if acct_mapping:
             _remove_superseded_manual_entries(conn)
+            _migrate_snapshot_history(conn)
 
         # Sanity checks
         sanity_warnings = _sanity_check(conn, total_value)
