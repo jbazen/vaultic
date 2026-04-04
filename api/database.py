@@ -884,6 +884,7 @@ MIGRATIONS = [
     )""",
     # Canonical account identifier — populated per-source during account number migration
     "ALTER TABLE accounts ADD COLUMN account_number TEXT",
+    "ALTER TABLE account_balances ADD COLUMN account_number TEXT",
 ]
 
 
@@ -975,6 +976,28 @@ def _migrate_auto_archive_budget(conn):
         logger.info("Auto-archived %d budget items and %d budget groups", archived_items, archived_groups)
 
 
+def _migrate_coinbase_account_numbers(conn):
+    """Populate account_number for Coinbase accounts and backfill account_balances.
+
+    Sets accounts.account_number = 'coinbase' + subtype (e.g. 'coinbaseBTC')
+    and copies that to all existing account_balances rows for those accounts.
+    Idempotent — skips rows that already have account_number set.
+    """
+    # Populate accounts.account_number for coinbase source
+    conn.execute("""
+        UPDATE accounts SET account_number = 'coinbase' || subtype
+        WHERE source = 'coinbase' AND (account_number IS NULL OR account_number = '')
+    """)
+    # Backfill account_balances.account_number from the accounts table
+    conn.execute("""
+        UPDATE account_balances SET account_number = (
+            SELECT a.account_number FROM accounts a WHERE a.id = account_balances.account_id
+        )
+        WHERE account_id IN (SELECT id FROM accounts WHERE source = 'coinbase')
+          AND (account_number IS NULL OR account_number = '')
+    """)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1007,6 +1030,11 @@ def init_db():
             _migrate_auto_archive_budget(conn)
         except Exception as exc:
             logger.warning("Budget auto-archive migration failed: %s", exc)
+        # Populate account_number for Coinbase accounts + backfill account_balances
+        try:
+            _migrate_coinbase_account_numbers(conn)
+        except Exception as exc:
+            logger.warning("Coinbase account_number migration failed: %s", exc)
 
 
 @contextmanager

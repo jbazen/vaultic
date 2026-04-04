@@ -130,15 +130,18 @@ def sync_coinbase() -> dict:
             display_name = f"Coinbase {currency}"
 
             # Upsert account — plaid_account_id used as generic external ID
+            acct_number = f"coinbase{currency.upper()}"
             conn.execute("""
                 INSERT INTO accounts
-                    (plaid_account_id, name, display_name, type, subtype, institution_name, source, is_active)
-                VALUES (?, ?, ?, 'crypto', ?, 'Coinbase', 'coinbase', 1)
+                    (plaid_account_id, name, display_name, type, subtype,
+                     institution_name, source, is_active, account_number)
+                VALUES (?, ?, ?, 'crypto', ?, 'Coinbase', 'coinbase', 1, ?)
                 ON CONFLICT(plaid_account_id) DO UPDATE SET
                     name             = excluded.name,
                     institution_name = 'Coinbase',
-                    is_active        = 1
-            """, (acct_uuid, display_name, display_name, currency.upper()))
+                    is_active        = 1,
+                    account_number   = excluded.account_number
+            """, (acct_uuid, display_name, display_name, currency.upper(), acct_number))
 
             account_row = conn.execute(
                 "SELECT id FROM accounts WHERE plaid_account_id = ?", (acct_uuid,)
@@ -149,14 +152,17 @@ def sync_coinbase() -> dict:
             # Snapshot today's USD balance + native amount + unit price
             conn.execute("""
                 INSERT INTO account_balances
-                    (account_id, current, available, native_balance, unit_price, snapped_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (account_id, current, available, native_balance, unit_price,
+                     snapped_at, account_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id, snapped_at) DO UPDATE SET
                     current        = excluded.current,
                     available      = excluded.available,
                     native_balance = excluded.native_balance,
-                    unit_price     = excluded.unit_price
-            """, (account_row["id"], usd_value, usd_value, balance, price, today))
+                    unit_price     = excluded.unit_price,
+                    account_number = excluded.account_number
+            """, (account_row["id"], usd_value, usd_value, balance, price, today,
+                  acct_number))
 
             total_usd += usd_value
             synced += 1
