@@ -983,7 +983,26 @@ def account_number_audit(user=Depends(get_current_user)):
         except Exception:
             coinbase_trades = {"error": "table not found"}
 
+        # ── ORPHANED SNAPSHOTS (exist in snapshots but no manual_entry) ──
+        orphaned_balance_snaps = [dict(r) for r in conn.execute(
+            "SELECT DISTINCT s.name, s.account_number, s.category "
+            "FROM manual_entry_snapshots s "
+            "LEFT JOIN manual_entries m ON m.name = s.name AND m.category = s.category "
+            "WHERE m.id IS NULL "
+            "ORDER BY s.category, s.name"
+        ).fetchall()]
+
+        orphaned_holdings_snaps = [dict(r) for r in conn.execute(
+            "SELECT DISTINCT s.entry_name, s.account_number "
+            "FROM manual_holdings_snapshots s "
+            "LEFT JOIN manual_entries m ON m.name = s.entry_name "
+            "WHERE m.id IS NULL "
+            "ORDER BY s.entry_name"
+        ).fetchall()]
+
     return {
+        "orphaned_balance_snapshots": orphaned_balance_snaps,
+        "orphaned_holdings_snapshots": orphaned_holdings_snaps,
         "accounts": all_accounts,
         "account_balances": all_balances,
         "plaid_items": plaid_items,
