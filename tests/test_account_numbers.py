@@ -930,3 +930,149 @@ class TestRemoveSuperseded:
                 assert row is None
             finally:
                 self._cleanup(conn)
+
+
+class TestMigrateHoldingsHistory:
+    """_migrate_holdings_history backfills manual_holdings_snapshots → i360_holdings
+    using account_number as the canonical key. This covers the data-continuity
+    gap where PDF-imported holdings history was orphaned after I360 sync took
+    over the live account."""
+
+    TEST_ACCT = "B37MHH123"
+
+    def _seed(self, conn):
+        # Create the vaultic account and i360 mapping
+        conn.execute(
+            "INSERT OR IGNORE INTO accounts "
+            "(plaid_account_id, name, type, subtype, source, is_active, account_number) "
+            "VALUES ('i360_mhh_test', 'MHH Test', 'investment', 'brokerage', "
+            "'investor360', 1, ?)",
+            (self.TEST_ACCT,)
+        )
+        acct_id = conn.execute(
+            "SELECT id FROM accounts WHERE plaid_account_id = 'i360_mhh_test'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT OR IGNORE INTO i360_account_map "
+            "(account_id, i360_account_id, account_number, household_id, registration_type) "
+            "VALUES (?, 88888, ?, 1682851, 'ROTH')",
+            (acct_id, self.TEST_ACCT)
+        )
+        conn.commit()
+        return acct_id
+
+    def _cleanup(self, conn):
+        conn.execute("DELETE FROM manual_holdings_snapshots WHERE account_number = ?", (self.TEST_ACCT,))
+        conn.execute("DELETE FROM i360_holdings WHERE account_number = ?", (self.TEST_ACCT,))
+        conn.execute("DELETE FROM i360_account_map WHERE i360_account_id = 88888")
+        conn.execute("DELETE FROM accounts WHERE plaid_account_id = 'i360_mhh_test'")
+        conn.commit()
+
+    def test_backfills_historical_holdings(self):
+        with _test_get_db() as conn:
+            self._seed(conn)
+            conn.execute(
+                """INSERT INTO manual_holdings_snapshots
+                   (entry_name, snapped_at, holding_name, ticker, asset_class,
+                    shares, price, value, cost, gain_loss_dollars, gain_loss_pct,
+                    pct_assets, account_number)
+                   VALUES ('Test Entry', '2025-12-31', 'Fidelity 500 Index', 'FXAIX',
+                    'equities', 100.0, 150.0, 15000.0, 12000.0, 3000.0, 25.0, 50.0, ?)""",
+                (self.TEST_ACCT,)
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _migrate_holdings_history
+                _migrate_holdings_history(conn)
+                conn.commit()
+                row = conn.execute(
+                    "SELECT symbol, description, value_dollars, quantity, price FROM i360_holdings "
+                    "WHERE account_number = ? AND snapped_at = '2025-12-31'",
+                    (self.TEST_ACCT,)
+                ).fetchone()
+                assert row is not None, "holding should be migrated"
+                assert row["symbol"] == "FXAIX"
+                assert row["description"] == "Fidelity 500 Index"
+                assert row["value_dollars"] == 15000.0
+                assert row["quantity"] == 100.0
+            finally:
+                self._cleanup(conn)
+
+    def test_is_idempotent(self):
+        with _test_get_db() as conn:
+            self._seed(conn)
+            conn.execute(
+                """INSERT INTO manual_holdings_snapshots
+                   (entry_name, snapped_at, holding_name, ticker, value, account_number)
+                   VALUES ('Test', '2025-11-30', 'Vanguard Total Stock', 'VTI', 5000.0, ?)""",
+                (self.TEST_ACCT,)
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _migrate_holdings_history
+                _migrate_holdings_history(conn)
+                _migrate_holdings_history(conn)  # second call must not duplicate
+                conn.commit()
+                cnt = conn.execute(
+                    "SELECT COUNT(*) FROM i360_holdings WHERE account_number = ? AND snapped_at = '2025-11-30'",
+                    (self.TEST_ACCT,)
+                ).fetchone()[0]
+                assert cnt == 1, "idempotent backfill should yield exactly 1 row"
+            finally:
+                self._cleanup(conn)
+
+    def test_does_not_overwrite_real_i360_row(self):
+        """A real I360 sync row (positive i360_holding_id) must not be overridden
+        by a PDF-sourced historical row for the same (account, date, description)."""
+        with _test_get_db() as conn:
+            acct_id = self._seed(conn)
+            # Insert a real I360 row first
+            conn.execute(
+                """INSERT INTO i360_holdings
+                   (account_id, account_number, snapped_at, i360_holding_id,
+                    symbol, description, value_dollars)
+                   VALUES (?, ?, '2025-10-31', 99999, 'VTI', 'Vanguard Total Stock Market', 9999.99)""",
+                (acct_id, self.TEST_ACCT)
+            )
+            # Insert a competing PDF snapshot for same date + description
+            conn.execute(
+                """INSERT INTO manual_holdings_snapshots
+                   (entry_name, snapped_at, holding_name, ticker, value, account_number)
+                   VALUES ('Test', '2025-10-31', 'Vanguard Total Stock Market', 'VTI', 1234.56, ?)""",
+                (self.TEST_ACCT,)
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _migrate_holdings_history
+                _migrate_holdings_history(conn)
+                conn.commit()
+                rows = conn.execute(
+                    "SELECT value_dollars, i360_holding_id FROM i360_holdings "
+                    "WHERE account_number = ? AND snapped_at = '2025-10-31'",
+                    (self.TEST_ACCT,)
+                ).fetchall()
+                assert len(rows) == 1, "must not insert PDF row when real I360 row exists"
+                assert rows[0]["value_dollars"] == 9999.99
+                assert rows[0]["i360_holding_id"] == 99999
+            finally:
+                self._cleanup(conn)
+
+    def test_skips_rows_without_matching_i360_account(self):
+        with _test_get_db() as conn:
+            # Do NOT seed i360_account_map for this account_number
+            conn.execute(
+                """INSERT INTO manual_holdings_snapshots
+                   (entry_name, snapped_at, holding_name, value, account_number)
+                   VALUES ('Orphan', '2025-09-30', 'Orphan Holding', 100.0, 'UNMAPPED_XYZ')"""
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _migrate_holdings_history
+                _migrate_holdings_history(conn)
+                cnt = conn.execute(
+                    "SELECT COUNT(*) FROM i360_holdings WHERE account_number = 'UNMAPPED_XYZ'"
+                ).fetchone()[0]
+                assert cnt == 0, "holdings for unmapped accounts should be skipped"
+            finally:
+                conn.execute("DELETE FROM manual_holdings_snapshots WHERE account_number = 'UNMAPPED_XYZ'")
+                conn.commit()

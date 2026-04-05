@@ -458,6 +458,111 @@ def _migrate_snapshot_history(conn):
         logger.info("Migrated %d historical snapshots into account_balances for I360 accounts", migrated)
 
 
+def _migrate_holdings_history(conn):
+    """Backfill i360_holdings from manual_holdings_snapshots for I360 accounts.
+
+    Per-holding historical rows written during PDF imports live in
+    manual_holdings_snapshots. Once an account is covered by Investor360 sync,
+    historical holdings reads should come from i360_holdings (the canonical
+    table). This function copies the PDF-sourced snapshot rows over, mapping
+    manual schema fields to i360 columns, and skips rows already present.
+
+    Matches by normalized account_number only. Uses a deterministic synthetic
+    negative i360_holding_id (hash of source row identity) so the unique
+    index (account_number, snapped_at, i360_holding_id) enforces idempotency.
+    """
+    import hashlib
+    from api.routers.pdf import _normalize_acct
+
+    # Build normalized account_number -> (vaultic_id, account_number) mapping
+    acct_map = {}
+    for row in conn.execute(
+        "SELECT account_id, account_number FROM i360_account_map "
+        "WHERE account_number IS NOT NULL AND account_number != ''"
+    ).fetchall():
+        normalized = _normalize_acct(row["account_number"])
+        if normalized:
+            acct_map[normalized] = (row["account_id"], row["account_number"])
+
+    if not acct_map:
+        return
+
+    def _synthetic_id(account_number: str, snapped_at: str, holding_name: str, ticker) -> int:
+        """Stable negative int id derived from source row identity. Real i360
+        holding IDs are positive, so negatives never collide with live data."""
+        key = f"{account_number}|{snapped_at}|{holding_name}|{ticker or ''}"
+        h = int(hashlib.md5(key.encode("utf-8")).hexdigest()[:12], 16)
+        # Bound to signed 32-bit negative range for SQLite INTEGER safety
+        return -(h % 2_000_000_000) - 1
+
+    migrated = 0
+    for row in conn.execute(
+        """SELECT account_number, snapped_at, holding_name, ticker, asset_class,
+                  shares, price, value, cost, avg_unit_cost,
+                  gain_loss_dollars, gain_loss_pct, pct_assets,
+                  estimated_annual_income, estimated_yield_pct
+           FROM manual_holdings_snapshots
+           WHERE account_number IS NOT NULL AND account_number != ''"""
+    ).fetchall():
+        normalized = _normalize_acct(row["account_number"])
+        if not normalized:
+            continue
+        match = acct_map.get(normalized)
+        if not match:
+            continue
+        vaultic_id, acct_number = match
+
+        synth_id = _synthetic_id(
+            acct_number, row["snapped_at"], row["holding_name"] or "", row["ticker"]
+        )
+
+        # Skip if already migrated (idempotent via unique index key)
+        existing = conn.execute(
+            "SELECT 1 FROM i360_holdings WHERE account_number = ? AND snapped_at = ? AND i360_holding_id = ?",
+            (acct_number, row["snapped_at"], synth_id),
+        ).fetchone()
+        if existing:
+            continue
+
+        # Don't overwrite real i360 data: skip if any real (positive-id) row
+        # already exists for this (account, date, description) tuple.
+        dup = conn.execute(
+            """SELECT 1 FROM i360_holdings
+               WHERE account_number = ? AND snapped_at = ?
+                 AND description = ? AND i360_holding_id > 0""",
+            (acct_number, row["snapped_at"], row["holding_name"]),
+        ).fetchone()
+        if dup:
+            continue
+
+        conn.execute(
+            """INSERT INTO i360_holdings
+               (account_id, account_number, snapped_at, i360_holding_id,
+                symbol, description, primary_asset_class, asset_category,
+                quantity, price, value_dollars,
+                est_tax_cost_dollars, principal_dollars,
+                est_tax_cost_gain_loss_dollars, est_tax_cost_gain_loss_pct,
+                principal_gain_loss_dollars, principal_gain_loss_pct,
+                assets_percentage, est_unit_tax_cost, unit_principal_cost,
+                estimated_annual_income, current_yield_pct)
+               VALUES (?,?,?,?, ?,?,?,?, ?,?,?, ?,?, ?,?, ?,?, ?,?,?, ?,?)""",
+            (
+                vaultic_id, acct_number, row["snapped_at"], synth_id,
+                row["ticker"], row["holding_name"], row["asset_class"], row["asset_class"],
+                row["shares"], row["price"], row["value"],
+                row["cost"], row["cost"],
+                row["gain_loss_dollars"], row["gain_loss_pct"],
+                row["gain_loss_dollars"], row["gain_loss_pct"],
+                row["pct_assets"], row["avg_unit_cost"], row["avg_unit_cost"],
+                row["estimated_annual_income"], row["estimated_yield_pct"],
+            ),
+        )
+        migrated += 1
+
+    if migrated:
+        logger.info("Migrated %d historical holdings into i360_holdings for I360 accounts", migrated)
+
+
 def _sanity_check(conn, total_value: float) -> list[str]:
     """Validate synced data against last known values."""
     warnings = []
@@ -616,6 +721,7 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
         if acct_mapping:
             _remove_superseded_manual_entries(conn)
             _migrate_snapshot_history(conn)
+            _migrate_holdings_history(conn)
 
         # Sanity checks
         sanity_warnings = _sanity_check(conn, total_value)
