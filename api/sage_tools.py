@@ -48,8 +48,8 @@ def tool_get_accounts(inputs, username):
             SELECT a.name, a.display_name, a.mask, a.type, a.subtype,
                    a.institution_name, b.current, b.available, b.snapped_at
             FROM accounts a
-            LEFT JOIN account_balances b ON b.account_id = a.id
-                AND b.snapped_at = (SELECT MAX(snapped_at) FROM account_balances WHERE account_id = a.id)
+            LEFT JOIN account_balances b ON b.account_number = a.account_number
+                AND b.snapped_at = (SELECT MAX(snapped_at) FROM account_balances WHERE account_number = a.account_number)
             WHERE a.is_active = 1
             ORDER BY a.institution_name, a.name
         """).fetchall()
@@ -63,7 +63,7 @@ def tool_get_transactions(inputs, username):
             SELECT t.date, t.amount, t.name, t.merchant_name, t.category, t.pending,
                    a.name AS account_name, a.institution_name
             FROM transactions t
-            JOIN accounts a ON a.id = t.account_id
+            JOIN accounts a ON a.account_number = t.account_number
             WHERE a.is_active = 1
             ORDER BY t.date DESC
             LIMIT ?
@@ -235,7 +235,7 @@ def tool_get_unassigned_transactions(inputs, username):
                    ROUND(t.amount, 2) AS amount,
                    a.name AS account_name
             FROM transactions t
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             LEFT JOIN transaction_splits ts ON ts.transaction_id = t.transaction_id
             WHERE strftime('%Y-%m', t.date) = ?

@@ -41,9 +41,9 @@ async def get_holdings(_user: str = Depends(get_current_user)):
                 b.unit_price,
                 b.snapped_at
             FROM accounts a
-            LEFT JOIN account_balances b ON b.account_id = a.id
+            LEFT JOIN account_balances b ON b.account_number = a.account_number
                 AND b.snapped_at = (
-                    SELECT MAX(snapped_at) FROM account_balances WHERE account_id = a.id
+                    SELECT MAX(snapped_at) FROM account_balances WHERE account_number = a.account_number
                 )
             WHERE a.source = 'coinbase' AND a.is_active = 1
             ORDER BY b.current DESC

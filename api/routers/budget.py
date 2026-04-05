@@ -181,7 +181,7 @@ async def get_all_pending_review(_user: str = Depends(get_current_user)):
             JOIN transactions t  ON t.transaction_id = ta.transaction_id
             JOIN budget_items bi ON bi.id = ta.item_id
             JOIN budget_groups bg ON bg.id = bi.group_id
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             WHERE t.pending = 0
               AND ta.status = 'pending_review'
               AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
@@ -218,7 +218,7 @@ async def get_pending_review(month: str, _user: str = Depends(get_current_user))
             JOIN transactions t ON t.transaction_id = ta.transaction_id
             JOIN budget_items bi ON bi.id = ta.item_id
             JOIN budget_groups bg ON bg.id = bi.group_id
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND ta.status = 'pending_review'
@@ -260,7 +260,7 @@ async def get_all_unassigned(_user: str = Depends(get_current_user)):
                    COALESCE(a.display_name, a.name) AS account_name,
                    a.mask        AS account_mask
             FROM transactions t
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             -- Best auto-rule: pick the rule with the highest match_count for this merchant
             LEFT JOIN (
@@ -318,7 +318,7 @@ async def _get_deleted(month: str):
                    t.amount, t.category,
                    a.name AS account_name, a.mask AS account_mask
             FROM transactions t
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.budget_deleted = 1
             ORDER BY t.date DESC
@@ -397,16 +397,17 @@ async def create_manual_transaction(
     with get_db() as conn:
         # Look up the sentinel "Manual Transactions" account (seeded by migration)
         manual_acct = conn.execute(
-            "SELECT id FROM accounts WHERE plaid_account_id = '__manual__'"
+            "SELECT id, account_number FROM accounts WHERE plaid_account_id = '__manual__'"
         ).fetchone()
         if not manual_acct:
             raise HTTPException(status_code=500, detail="Manual account not found — run migrations")
         manual_account_id = manual_acct["id"]
+        manual_account_number = manual_acct["account_number"]
 
         conn.execute("""
-            INSERT INTO transactions (transaction_id, account_id, amount, date, name, merchant_name, pending)
-            VALUES (?, ?, ?, ?, ?, ?, 0)
-        """, (transaction_id, manual_account_id, amount, body.date, body.merchant_name.strip(), body.merchant_name.strip()))
+            INSERT INTO transactions (transaction_id, account_id, amount, date, name, merchant_name, pending, account_number)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+        """, (transaction_id, manual_account_id, amount, body.date, body.merchant_name.strip(), body.merchant_name.strip(), manual_account_number))
 
         # Assign to budget item if specified.
         # Status='manual' (not 'pending_review') because the user created this
@@ -919,7 +920,7 @@ async def get_unassigned(month: str, _user: str = Depends(get_current_user)):
                    COALESCE(a.display_name, a.name) AS account_name,
                    a.mask        AS account_mask
             FROM transactions t
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             -- Best auto-rule: pick the rule with the highest match_count for the merchant
             LEFT JOIN (
@@ -967,7 +968,7 @@ async def get_assigned(month: str, _user: str = Depends(get_current_user)):
                    COALESCE(a.display_name, a.name) AS account_name,
                    a.mask  AS account_mask
             FROM transactions t
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             JOIN budget_items bi ON bi.id = ta.item_id
             JOIN budget_groups bg ON bg.id = bi.group_id
@@ -1387,7 +1388,7 @@ async def get_item_detail(
                    a.subtype AS account_subtype
             FROM transaction_assignments ta
             JOIN transactions t ON t.transaction_id = ta.transaction_id
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             WHERE ta.item_id = ?
               AND strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
@@ -1401,7 +1402,7 @@ async def get_item_detail(
                    a.subtype AS account_subtype
             FROM transaction_splits ts
             JOIN transactions t ON t.transaction_id = ts.transaction_id
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             WHERE ts.item_id = ?
               AND strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
@@ -1476,7 +1477,7 @@ async def get_transaction_detail(
                    a.name AS account_name, a.mask AS account_mask,
                    a.subtype AS account_subtype
             FROM transactions t
-            LEFT JOIN accounts a ON a.id = t.account_id
+            LEFT JOIN accounts a ON a.account_number = t.account_number
             WHERE t.transaction_id = ?
         """, (transaction_id,)).fetchone()
 

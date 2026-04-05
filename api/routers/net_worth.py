@@ -127,7 +127,7 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
             SELECT a.id, a.name, a.display_name, a.type, a.subtype,
                    a.institution_name, b.current, b.snapped_at
             FROM accounts a
-            LEFT JOIN account_balances b ON b.account_id = a.id AND b.snapped_at = ?
+            LEFT JOIN account_balances b ON b.account_number = a.account_number AND b.snapped_at = ?
             WHERE a.is_active = 1 AND a.is_manual = 0
         """, (today,)).fetchall()
 

@@ -37,10 +37,10 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 b.native_balance, b.unit_price,
                 b.snapped_at
             FROM accounts a
-            LEFT JOIN account_balances b ON b.account_id = a.id
+            LEFT JOIN account_balances b ON b.account_number = a.account_number
                 AND b.snapped_at = (
                     SELECT MAX(snapped_at) FROM account_balances
-                    WHERE account_id = a.id
+                    WHERE account_number = a.account_number
                 )
             WHERE a.is_active = 1
             ORDER BY a.institution_name, a.name
@@ -110,7 +110,7 @@ async def recent_transactions(
                 t.merchant_name, t.category, t.pending,
                 a.name AS account_name, a.display_name, a.mask, a.institution_name
             FROM transactions t
-            JOIN accounts a ON a.id = t.account_id
+            JOIN accounts a ON a.account_number = t.account_number
             WHERE a.is_active = 1
             ORDER BY t.date DESC
             LIMIT ?
@@ -167,7 +167,7 @@ async def portfolio_performance(
                 FROM (
                     SELECT b.snapped_at, b.current AS value
                     FROM account_balances b
-                    JOIN accounts a ON a.id = b.account_id
+                    JOIN accounts a ON a.account_number = b.account_number
                     WHERE a.type = 'investment' AND a.is_active = 1
                       AND b.snapped_at >= date('now', '-' || ? || ' days')
                     UNION ALL
@@ -189,7 +189,7 @@ async def portfolio_performance(
                 SELECT b.snapped_at,
                        SUM(b.current) + ? AS total_value
                 FROM account_balances b
-                JOIN accounts a ON a.id = b.account_id
+                JOIN accounts a ON a.account_number = b.account_number
                 WHERE a.type = 'investment' AND a.is_active = 1
                   AND b.snapped_at >= date('now', '-' || ? || ' days')
                 GROUP BY b.snapped_at
@@ -207,13 +207,18 @@ async def balance_history(
 ):
     """Balance history for one account. Returns ASC (oldest first) for chart rendering."""
     with get_db() as conn:
+        acct = conn.execute(
+            "SELECT account_number FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if not acct or not acct["account_number"]:
+            return []
         rows = conn.execute("""
             SELECT snapped_at, current, available
             FROM account_balances
-            WHERE account_id = ?
+            WHERE account_number = ?
               AND snapped_at >= date('now', '-' || ? || ' days')
             ORDER BY snapped_at ASC
-        """, (account_id, days)).fetchall()
+        """, (acct["account_number"], days)).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -225,13 +230,18 @@ async def transactions(
     _user: str = Depends(get_current_user),
 ):
     with get_db() as conn:
+        acct = conn.execute(
+            "SELECT account_number FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if not acct or not acct["account_number"]:
+            return []
         rows = conn.execute("""
             SELECT transaction_id, amount, date, name, merchant_name, category, pending
             FROM transactions
-            WHERE account_id = ?
+            WHERE account_number = ?
             ORDER BY date DESC
             LIMIT ? OFFSET ?
-        """, (account_id, limit, offset)).fetchall()
+        """, (acct["account_number"], limit, offset)).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -247,15 +257,17 @@ async def account_holdings(
     """
     with get_db() as conn:
         acct = conn.execute(
-            "SELECT id, source FROM accounts WHERE id = ? AND is_active = 1",
+            "SELECT id, source, account_number FROM accounts WHERE id = ? AND is_active = 1",
             (account_id,),
         ).fetchone()
         if not acct:
             raise HTTPException(status_code=404, detail="Account not found")
 
+        acct_num = acct["account_number"]
+
         # Try I360 holdings for investor360 accounts
         if acct["source"] == "investor360":
-            return _i360_holdings(conn, account_id)
+            return _i360_holdings(conn, acct_num)
 
         rows = conn.execute("""
             SELECT
@@ -284,19 +296,19 @@ async def account_holdings(
                 END AS gain_loss_pct
             FROM plaid_holdings h
             LEFT JOIN plaid_securities s ON s.security_id = h.security_id
-            WHERE h.account_id = ?
+            WHERE h.account_number = ?
               AND h.snapped_at = (
-                  SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_id = ?
+                  SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_number = ?
               )
             ORDER BY h.institution_value DESC NULLS LAST
-        """, (account_id, account_id)).fetchall()
+        """, (acct_num, acct_num)).fetchall()
 
         total_row = conn.execute("""
             SELECT COALESCE(SUM(institution_value), 0) AS total
             FROM plaid_holdings
-            WHERE account_id = ?
-              AND snapped_at = (SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_id = ?)
-        """, (account_id, account_id)).fetchone()
+            WHERE account_number = ?
+              AND snapped_at = (SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_number = ?)
+        """, (acct_num, acct_num)).fetchone()
         total_value = total_row["total"] if total_row else 0.0
 
     holdings = []
@@ -311,7 +323,7 @@ async def account_holdings(
     return {"holdings": holdings, "total_value": total_value}
 
 
-def _i360_holdings(conn, account_id: int) -> dict:
+def _i360_holdings(conn, account_number: str) -> dict:
     """Return I360 holdings in the same shape as Plaid holdings."""
     rows = conn.execute("""
         SELECT symbol AS ticker_symbol, description AS name,
@@ -329,10 +341,10 @@ def _i360_holdings(conn, account_id: int) -> dict:
                    ELSE NULL
                END AS gain_loss_pct
         FROM i360_holdings
-        WHERE account_id = ?
-          AND snapped_at = (SELECT MAX(snapped_at) FROM i360_holdings WHERE account_id = ?)
+        WHERE account_number = ?
+          AND snapped_at = (SELECT MAX(snapped_at) FROM i360_holdings WHERE account_number = ?)
         ORDER BY value_dollars DESC NULLS LAST
-    """, (account_id, account_id)).fetchall()
+    """, (account_number, account_number)).fetchall()
 
     total_value = sum(r["institution_value"] or 0 for r in rows)
     holdings = []
@@ -363,13 +375,18 @@ async def holdings_history(
     Useful for plotting the performance of an individual position over time.
     """
     with get_db() as conn:
+        acct = conn.execute(
+            "SELECT account_number FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if not acct or not acct["account_number"]:
+            return []
         rows = conn.execute("""
             SELECT snapped_at, institution_price, institution_value, quantity, cost_basis
             FROM plaid_holdings
-            WHERE account_id = ? AND security_id = ?
+            WHERE account_number = ? AND security_id = ?
               AND snapped_at >= date('now', '-' || ? || ' days')
             ORDER BY snapped_at ASC
-        """, (account_id, security_id, days)).fetchall()
+        """, (acct["account_number"], security_id, days)).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -385,6 +402,11 @@ async def investment_transactions(
     for one account, joined with security name and ticker for display.
     """
     with get_db() as conn:
+        acct = conn.execute(
+            "SELECT account_number FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if not acct or not acct["account_number"]:
+            return []
         rows = conn.execute("""
             SELECT
                 it.investment_transaction_id,
@@ -401,8 +423,8 @@ async def investment_transactions(
                 s.ticker_symbol AS ticker
             FROM plaid_investment_transactions it
             LEFT JOIN plaid_securities s ON s.security_id = it.security_id
-            WHERE it.account_id = ?
+            WHERE it.account_number = ?
             ORDER BY it.date DESC
             LIMIT ? OFFSET ?
-        """, (account_id, limit, offset)).fetchall()
+        """, (acct["account_number"], limit, offset)).fetchall()
     return [dict(row) for row in rows]

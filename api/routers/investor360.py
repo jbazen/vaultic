@@ -381,7 +381,7 @@ def _migrate_snapshot_history(conn):
     """
     from api.routers.pdf import _normalize_acct
 
-    # Build normalized account_number -> vaultic_id mapping from i360_account_map
+    # Build normalized account_number -> (vaultic_id, account_number) mapping
     acct_map = {}
     for row in conn.execute(
         "SELECT account_id, account_number FROM i360_account_map "
@@ -389,7 +389,7 @@ def _migrate_snapshot_history(conn):
     ).fetchall():
         normalized = _normalize_acct(row["account_number"])
         if normalized:
-            acct_map[normalized] = row["account_id"]
+            acct_map[normalized] = (row["account_id"], row["account_number"])
 
     if not acct_map:
         return
@@ -403,19 +403,21 @@ def _migrate_snapshot_history(conn):
         normalized = _normalize_acct(row["account_number"])
         if not normalized:
             continue
-        vaultic_id = acct_map.get(normalized)
-        if not vaultic_id:
+        match = acct_map.get(normalized)
+        if not match:
             continue
+        vaultic_id, acct_number = match
         # Don't overwrite existing balances (today's I360 data takes precedence)
         existing = conn.execute(
-            "SELECT 1 FROM account_balances WHERE account_id = ? AND snapped_at = ?",
-            (vaultic_id, row["snapped_at"]),
+            "SELECT 1 FROM account_balances WHERE account_number = ? AND snapped_at = ?",
+            (acct_number, row["snapped_at"]),
         ).fetchone()
         if existing:
             continue
         conn.execute(
-            "INSERT INTO account_balances (account_id, current, snapped_at) VALUES (?, ?, ?)",
-            (vaultic_id, row["value"], row["snapped_at"]),
+            "INSERT INTO account_balances (account_id, current, snapped_at, account_number) "
+            "VALUES (?, ?, ?, ?)",
+            (vaultic_id, row["value"], row["snapped_at"], acct_number),
         )
         migrated += 1
 
@@ -680,8 +682,8 @@ def get_holdings(user=Depends(get_current_user)):
             """SELECT h.*, m.account_number, m.registration_group,
                       m.registration_type, a.name AS account_name
                FROM i360_holdings h
-               JOIN i360_account_map m ON m.account_id = h.account_id
-               JOIN accounts a ON a.id = h.account_id
+               JOIN i360_account_map m ON m.account_number = h.account_number
+               JOIN accounts a ON a.account_number = h.account_number
                WHERE h.snapped_at = ?
                ORDER BY a.name, h.value_dollars DESC""",
             (snap_date,),
@@ -735,18 +737,25 @@ def get_holdings(user=Depends(get_current_user)):
 def get_account_holdings(account_id: int, user=Depends(get_current_user)):
     """Holdings for one account from latest sync."""
     with get_db() as conn:
+        acct = conn.execute(
+            "SELECT account_number FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if not acct or not acct["account_number"]:
+            return {"holdings": [], "totals": {}}
+
+        acct_num = acct["account_number"]
         row = conn.execute(
-            "SELECT MAX(snapped_at) AS d FROM i360_holdings WHERE account_id = ?",
-            (account_id,),
+            "SELECT MAX(snapped_at) AS d FROM i360_holdings WHERE account_number = ?",
+            (acct_num,),
         ).fetchone()
         if not row or not row["d"]:
             return {"holdings": [], "totals": {}}
 
         holdings = conn.execute(
             """SELECT * FROM i360_holdings
-               WHERE account_id = ? AND snapped_at = ?
+               WHERE account_number = ? AND snapped_at = ?
                ORDER BY value_dollars DESC""",
-            (account_id, row["d"]),
+            (acct_num, row["d"]),
         ).fetchall()
 
         total_val = sum(h["value_dollars"] or 0 for h in holdings)
@@ -889,11 +898,11 @@ def account_number_audit(user=Depends(get_current_user)):
 
         # ── ACCOUNT BALANCES (history per account) ───────────────────
         all_balances = [dict(r) for r in conn.execute(
-            "SELECT ab.account_id, a.name, a.source, a.type, a.mask, "
+            "SELECT ab.account_number, a.name, a.source, a.type, a.mask, "
             "COUNT(*) as snapshots, MIN(ab.snapped_at) as earliest, "
             "MAX(ab.snapped_at) as latest "
-            "FROM account_balances ab JOIN accounts a ON a.id = ab.account_id "
-            "GROUP BY ab.account_id ORDER BY a.source, a.name"
+            "FROM account_balances ab JOIN accounts a ON a.account_number = ab.account_number "
+            "GROUP BY ab.account_number ORDER BY a.source, a.name"
         ).fetchall()]
 
         # ── PLAID ITEMS ──────────────────────────────────────────────
@@ -904,11 +913,11 @@ def account_number_audit(user=Depends(get_current_user)):
 
         # ── PLAID HOLDINGS (investment accounts) ─────────────────────
         plaid_holdings = [dict(r) for r in conn.execute(
-            "SELECT h.account_id, a.name, a.mask, a.source, "
+            "SELECT h.account_number, a.name, a.mask, a.source, "
             "COUNT(*) as holdings, COUNT(DISTINCT h.snapped_at) as dates, "
             "MIN(h.snapped_at) as earliest, MAX(h.snapped_at) as latest "
-            "FROM plaid_holdings h JOIN accounts a ON a.id = h.account_id "
-            "GROUP BY h.account_id ORDER BY a.name"
+            "FROM plaid_holdings h JOIN accounts a ON a.account_number = h.account_number "
+            "GROUP BY h.account_number ORDER BY a.name"
         ).fetchall()]
 
         # ── PLAID SECURITIES ─────────────────────────────────────────
@@ -918,10 +927,10 @@ def account_number_audit(user=Depends(get_current_user)):
 
         # ── TRANSACTIONS (per account) ───────────────────────────────
         transactions = [dict(r) for r in conn.execute(
-            "SELECT t.account_id, a.name, a.mask, a.source, "
+            "SELECT t.account_number, a.name, a.mask, a.source, "
             "COUNT(*) as txns, MIN(t.date) as earliest, MAX(t.date) as latest "
-            "FROM transactions t JOIN accounts a ON a.id = t.account_id "
-            "GROUP BY t.account_id ORDER BY a.source, a.name"
+            "FROM transactions t JOIN accounts a ON a.account_number = t.account_number "
+            "GROUP BY t.account_number ORDER BY a.source, a.name"
         ).fetchall()]
 
         # ── MANUAL ENTRIES (all categories) ──────────────────────────
@@ -969,11 +978,11 @@ def account_number_audit(user=Depends(get_current_user)):
 
         # ── I360 HOLDINGS ────────────────────────────────────────────
         i360_holdings = [dict(r) for r in conn.execute(
-            "SELECT h.account_id, a.name, COUNT(*) as holdings, "
+            "SELECT h.account_number, a.name, COUNT(*) as holdings, "
             "COUNT(DISTINCT h.snapped_at) as dates, "
             "MIN(h.snapped_at) as earliest, MAX(h.snapped_at) as latest "
-            "FROM i360_holdings h JOIN accounts a ON a.id = h.account_id "
-            "GROUP BY h.account_id ORDER BY a.name"
+            "FROM i360_holdings h JOIN accounts a ON a.account_number = h.account_number "
+            "GROUP BY h.account_number ORDER BY a.name"
         ).fetchall()]
 
         # ── I360 BALANCE HISTORY (portfolio-level) ───────────────────

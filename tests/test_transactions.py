@@ -3,12 +3,22 @@ from api.database import get_db
 import datetime
 
 
+TEST_ACCT_NUMBER = "test_checking_001"
+
+
 def _insert_test_account():
     """Insert a test account and return its id."""
     with get_db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO accounts (name, type, institution_name) VALUES (?, ?, ?)",
-            ("Test Checking", "depository", "Test Bank")
+            "INSERT OR IGNORE INTO accounts (name, type, institution_name, account_number) "
+            "VALUES (?, ?, ?, ?)",
+            ("Test Checking", "depository", "Test Bank", TEST_ACCT_NUMBER)
+        )
+        # Ensure account_number is set even if a prior test inserted this row without one
+        conn.execute(
+            "UPDATE accounts SET account_number = ? WHERE name = 'Test Checking' "
+            "AND (account_number IS NULL OR account_number = '')",
+            (TEST_ACCT_NUMBER,)
         )
         row = conn.execute(
             "SELECT id FROM accounts WHERE name = 'Test Checking'"
@@ -20,8 +30,10 @@ def _insert_test_balance(account_id, amount=1000.0):
     today = datetime.date.today().isoformat()
     with get_db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO account_balances (account_id, current, available, snapped_at) VALUES (?, ?, ?, ?)",
-            (account_id, amount, amount, today)
+            "INSERT OR IGNORE INTO account_balances "
+            "(account_id, current, available, snapped_at, account_number) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (account_id, amount, amount, today, TEST_ACCT_NUMBER)
         )
 
 
@@ -29,10 +41,11 @@ def _insert_test_transaction(account_id):
     with get_db() as conn:
         conn.execute(
             """INSERT OR IGNORE INTO transactions
-               (transaction_id, account_id, amount, date, name, merchant_name, category)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (transaction_id, account_id, amount, date, name, merchant_name, category,
+                account_number)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             ("txn_test_001", account_id, 42.50, "2026-03-10", "Coffee Shop",
-             "Blue Bottle Coffee", "Food and Drink")
+             "Blue Bottle Coffee", "Food and Drink", TEST_ACCT_NUMBER)
         )
 
 
