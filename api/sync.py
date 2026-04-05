@@ -317,11 +317,11 @@ def _sync_item(item_db_id: int, item_id: str, access_token: str, today: str):
                         (account_id, current, available, limit_amount, snapped_at,
                          account_number)
                     VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(account_id, snapped_at) DO UPDATE SET
+                    ON CONFLICT(account_number, snapped_at) DO UPDATE SET
                         current = excluded.current,
                         available = excluded.available,
                         limit_amount = excluded.limit_amount,
-                        account_number = excluded.account_number
+                        account_id = excluded.account_id
                 """, (
                     account_row["id"],
                     acct.balances.current,
@@ -551,13 +551,13 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                      institution_price_as_of, quantity, cost_basis, iso_currency_code,
                      snapped_at, account_number)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(account_id, security_id, snapped_at) DO UPDATE SET
+                ON CONFLICT(account_number, security_id, snapped_at) DO UPDATE SET
                     institution_value       = excluded.institution_value,
                     institution_price       = excluded.institution_price,
                     institution_price_as_of = excluded.institution_price_as_of,
                     quantity                = excluded.quantity,
                     cost_basis              = excluded.cost_basis,
-                    account_number          = excluded.account_number
+                    account_id              = excluded.account_id
             """, (
                 acct["id"],
                 h.security_id,

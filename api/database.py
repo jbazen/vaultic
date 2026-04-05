@@ -890,6 +890,18 @@ MIGRATIONS = [
     "ALTER TABLE plaid_investment_transactions ADD COLUMN account_number TEXT",
     "ALTER TABLE i360_holdings ADD COLUMN account_number TEXT",
     "ALTER TABLE i360_account_balances ADD COLUMN account_number TEXT",
+    # Step 11: add unique indexes keyed on account_number so INSERT ON CONFLICT
+    # can target account_number as the canonical correlation key. The older
+    # (account_id, snapped_at) UNIQUE constraints stay in place — since
+    # account_id and account_number are 1:1, both constraints fire in lockstep.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_balances_acctnum_date "
+    "ON account_balances(account_number, snapped_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_plaid_holdings_acctnum_sec_date "
+    "ON plaid_holdings(account_number, security_id, snapped_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_i360_holdings_acctnum_date_hid "
+    "ON i360_holdings(account_number, snapped_at, i360_holding_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_i360_balances_acctnum_date "
+    "ON i360_account_balances(account_number, snapped_at)",
 ]
 
 

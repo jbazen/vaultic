@@ -155,12 +155,12 @@ def sync_coinbase() -> dict:
                     (account_id, current, available, native_balance, unit_price,
                      snapped_at, account_number)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(account_id, snapped_at) DO UPDATE SET
+                ON CONFLICT(account_number, snapped_at) DO UPDATE SET
                     current        = excluded.current,
                     available      = excluded.available,
                     native_balance = excluded.native_balance,
                     unit_price     = excluded.unit_price,
-                    account_number = excluded.account_number
+                    account_id     = excluded.account_id
             """, (account_row["id"], usd_value, usd_value, balance, price, today,
                   acct_number))
 

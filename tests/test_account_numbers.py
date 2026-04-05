@@ -720,3 +720,57 @@ class TestManualEntryAccountNumbers:
                 "SELECT account_number FROM manual_entries WHERE category = 'car_value'"
             ).fetchone()
             assert row[0] == "vehicle_2025_kia_carnival"
+
+
+class TestUniqueIndexesOnAccountNumber:
+    """Step 11: unique indexes on (account_number, ...) enforce single-row-per-day."""
+
+    def _indexes(self, conn, table):
+        return {r[1] for r in conn.execute(f"PRAGMA index_list({table})").fetchall()}
+
+    def test_account_balances_has_acctnum_unique_index(self):
+        with _test_get_db() as conn:
+            assert "idx_account_balances_acctnum_date" in self._indexes(conn, "account_balances")
+
+    def test_plaid_holdings_has_acctnum_unique_index(self):
+        with _test_get_db() as conn:
+            assert "idx_plaid_holdings_acctnum_sec_date" in self._indexes(conn, "plaid_holdings")
+
+    def test_i360_holdings_has_acctnum_unique_index(self):
+        with _test_get_db() as conn:
+            assert "idx_i360_holdings_acctnum_date_hid" in self._indexes(conn, "i360_holdings")
+
+    def test_i360_account_balances_has_acctnum_unique_index(self):
+        with _test_get_db() as conn:
+            assert "idx_i360_balances_acctnum_date" in self._indexes(conn, "i360_account_balances")
+
+    def test_account_balances_acctnum_index_is_unique(self):
+        """Two rows with same (account_number, snapped_at) should conflict."""
+        import sqlite3
+        with _test_get_db() as conn:
+            # Create a test account with a known account_number
+            conn.execute(
+                "INSERT INTO accounts (plaid_account_id, name, type, account_number) "
+                "VALUES (?, ?, ?, ?)",
+                ("uniq-test-1", "Uniq Test", "depository", "uniq_acct_001")
+            )
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE plaid_account_id = 'uniq-test-1'"
+            ).fetchone()[0]
+            try:
+                conn.execute(
+                    "INSERT INTO account_balances (account_id, current, snapped_at, account_number) "
+                    "VALUES (?, ?, ?, ?)",
+                    (acct_id, 100.0, "2026-01-01", "uniq_acct_001")
+                )
+                # Same account_number + snapped_at but different account_id would violate
+                with pytest.raises(sqlite3.IntegrityError):
+                    conn.execute(
+                        "INSERT INTO account_balances (account_id, current, snapped_at, account_number) "
+                        "VALUES (?, ?, ?, ?)",
+                        (acct_id + 999, 200.0, "2026-01-01", "uniq_acct_001")
+                    )
+            finally:
+                conn.execute("DELETE FROM account_balances WHERE account_number = 'uniq_acct_001'")
+                conn.execute("DELETE FROM accounts WHERE plaid_account_id = 'uniq-test-1'")
+                conn.commit()
