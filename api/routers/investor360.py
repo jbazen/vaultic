@@ -365,12 +365,45 @@ def _store_market_summary(conn, market_data: dict):
 
 
 def _remove_superseded_manual_entries(conn):
-    """Delete invested manual_entries now superseded by I360 live accounts."""
-    deleted = conn.execute(
-        "DELETE FROM manual_entries WHERE category = 'invested'"
-    ).rowcount
-    if deleted:
-        logger.info("Deleted %d invested manual entries (superseded by I360)", deleted)
+    """Delete invested manual_entries that I360 now covers — matched by account_number.
+
+    Only deletes a manual_entry if its normalized account_number is in i360_account_map.
+    Entries with no account_number, or account_numbers I360 doesn't cover (Insperity,
+    Voya, etc.), are preserved. Never does a blanket category-wide DELETE.
+    """
+    from api.routers.pdf import _normalize_acct
+
+    # Build the set of I360 account_numbers (normalized)
+    i360_set = set()
+    for row in conn.execute(
+        "SELECT account_number FROM i360_account_map "
+        "WHERE account_number IS NOT NULL AND account_number != ''"
+    ).fetchall():
+        normalized = _normalize_acct(row["account_number"])
+        if normalized:
+            i360_set.add(normalized)
+
+    if not i360_set:
+        # No I360 data — don't delete anything
+        return
+
+    # Find manual_entries that match an I360 account by account_number
+    to_delete = []
+    for row in conn.execute(
+        "SELECT id, name, account_number FROM manual_entries "
+        "WHERE category = 'invested' "
+        "AND account_number IS NOT NULL AND account_number != ''"
+    ).fetchall():
+        normalized = _normalize_acct(row["account_number"])
+        if normalized and normalized in i360_set:
+            to_delete.append((row["id"], row["name"], row["account_number"]))
+
+    for entry_id, name, acct_num in to_delete:
+        conn.execute("DELETE FROM manual_entries WHERE id = ?", (entry_id,))
+        logger.info(
+            "Deleted manual_entry id=%d name='%s' account_number='%s' (superseded by I360)",
+            entry_id, name, acct_num
+        )
 
 
 def _migrate_snapshot_history(conn):

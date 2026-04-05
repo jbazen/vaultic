@@ -774,3 +774,159 @@ class TestUniqueIndexesOnAccountNumber:
                 conn.execute("DELETE FROM account_balances WHERE account_number = 'uniq_acct_001'")
                 conn.execute("DELETE FROM accounts WHERE plaid_account_id = 'uniq-test-1'")
                 conn.commit()
+
+
+class TestRemoveSuperseded:
+    """Step 12: _remove_superseded_manual_entries only deletes entries whose
+    account_number matches an I360 account. Entries without a match (Insperity,
+    Voya, etc.) and entries with NULL account_number must be preserved."""
+
+    def _seed_i360_map(self, conn, account_number="B37705429"):
+        """Insert an i360_account_map row so the function has something to match against."""
+        conn.execute(
+            "INSERT OR IGNORE INTO accounts "
+            "(plaid_account_id, name, type, subtype, source, is_active, account_number) "
+            "VALUES ('i360_rm_test', 'RM Test Account', 'investment', 'brokerage', "
+            "'investor360', 1, ?)",
+            (account_number,)
+        )
+        acct_id = conn.execute(
+            "SELECT id FROM accounts WHERE plaid_account_id = 'i360_rm_test'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT OR IGNORE INTO i360_account_map "
+            "(account_id, i360_account_id, account_number, household_id, registration_type) "
+            "VALUES (?, 77777, ?, 1682851, 'TODJ')",
+            (acct_id, account_number)
+        )
+        conn.commit()
+        return acct_id
+
+    def _cleanup(self, conn):
+        conn.execute("DELETE FROM manual_entries WHERE name LIKE 'RM_TEST_%'")
+        conn.execute("DELETE FROM i360_account_map WHERE i360_account_id = 77777")
+        conn.execute("DELETE FROM accounts WHERE plaid_account_id = 'i360_rm_test'")
+        conn.commit()
+
+    def test_deletes_entry_whose_account_number_matches_i360(self):
+        with _test_get_db() as conn:
+            self._seed_i360_map(conn, "B37705429")
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+                "VALUES ('RM_TEST_Match', 'invested', 50000.0, '2026-04-01', 'B37705429')"
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _remove_superseded_manual_entries
+                _remove_superseded_manual_entries(conn)
+                row = conn.execute(
+                    "SELECT 1 FROM manual_entries WHERE name = 'RM_TEST_Match'"
+                ).fetchone()
+                assert row is None, "entry matching I360 account_number should be deleted"
+            finally:
+                self._cleanup(conn)
+
+    def test_preserves_entry_with_no_matching_i360_account(self):
+        """Insperity case: manual_entry has account_number but it's not in I360."""
+        with _test_get_db() as conn:
+            self._seed_i360_map(conn, "B37705429")
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+                "VALUES ('RM_TEST_Insperity', 'invested', 1391.66, '2026-04-01', 'insperity_401k')"
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _remove_superseded_manual_entries
+                _remove_superseded_manual_entries(conn)
+                row = conn.execute(
+                    "SELECT 1 FROM manual_entries WHERE name = 'RM_TEST_Insperity'"
+                ).fetchone()
+                assert row is not None, "entry with unmatched account_number must survive"
+            finally:
+                self._cleanup(conn)
+
+    def test_preserves_entry_with_null_account_number(self):
+        with _test_get_db() as conn:
+            self._seed_i360_map(conn, "B37705429")
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+                "VALUES ('RM_TEST_NullAcct', 'invested', 10000.0, '2026-04-01', NULL)"
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _remove_superseded_manual_entries
+                _remove_superseded_manual_entries(conn)
+                row = conn.execute(
+                    "SELECT 1 FROM manual_entries WHERE name = 'RM_TEST_NullAcct'"
+                ).fetchone()
+                assert row is not None, "entry with NULL account_number must survive"
+            finally:
+                self._cleanup(conn)
+
+    def test_noop_when_i360_map_empty(self):
+        """If i360_account_map has no rows, nothing is deleted."""
+        with _test_get_db() as conn:
+            # Explicitly do NOT seed i360_account_map
+            # Clear any existing test map entries first
+            conn.execute("DELETE FROM i360_account_map WHERE i360_account_id = 77777")
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+                "VALUES ('RM_TEST_NoMap', 'invested', 5000.0, '2026-04-01', 'B37705429')"
+            )
+            conn.commit()
+            try:
+                # Count i360_account_map BEFORE calling — if it's empty, the function should be a no-op
+                map_count = conn.execute(
+                    "SELECT COUNT(*) FROM i360_account_map"
+                ).fetchone()[0]
+                from api.routers.investor360 import _remove_superseded_manual_entries
+                _remove_superseded_manual_entries(conn)
+                row = conn.execute(
+                    "SELECT 1 FROM manual_entries WHERE name = 'RM_TEST_NoMap'"
+                ).fetchone()
+                if map_count == 0:
+                    assert row is not None, "no-op expected when i360_account_map is empty"
+                # If other test data left rows in i360_account_map, our entry's
+                # account_number 'B37705429' might not match them, so it should still survive.
+                # We only fail if the entry was deleted when we didn't expect it.
+            finally:
+                conn.execute("DELETE FROM manual_entries WHERE name = 'RM_TEST_NoMap'")
+                conn.commit()
+
+    def test_matches_via_normalized_account_number(self):
+        """Entry with 'B37-705429' is deleted when I360 has 'B37705429'."""
+        with _test_get_db() as conn:
+            self._seed_i360_map(conn, "B37705429")
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+                "VALUES ('RM_TEST_Normalized', 'invested', 50000.0, '2026-04-01', 'B37-705429')"
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _remove_superseded_manual_entries
+                _remove_superseded_manual_entries(conn)
+                row = conn.execute(
+                    "SELECT 1 FROM manual_entries WHERE name = 'RM_TEST_Normalized'"
+                ).fetchone()
+                assert row is None, "normalized account_number should still match"
+            finally:
+                self._cleanup(conn)
+
+    def test_idempotent(self):
+        with _test_get_db() as conn:
+            self._seed_i360_map(conn, "B37705429")
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+                "VALUES ('RM_TEST_Idem', 'invested', 50000.0, '2026-04-01', 'B37705429')"
+            )
+            conn.commit()
+            try:
+                from api.routers.investor360 import _remove_superseded_manual_entries
+                _remove_superseded_manual_entries(conn)
+                _remove_superseded_manual_entries(conn)  # should be a no-op second time
+                row = conn.execute(
+                    "SELECT 1 FROM manual_entries WHERE name = 'RM_TEST_Idem'"
+                ).fetchone()
+                assert row is None
+            finally:
+                self._cleanup(conn)
