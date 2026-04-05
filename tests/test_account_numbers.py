@@ -38,6 +38,10 @@ def _cleanup_after():
         conn.execute("DELETE FROM plaid_securities WHERE security_id = 'sec-001'")
         conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'Test Parker Account'")
         conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'Test Parker Account'")
+        # Clean up Insperity test data
+        conn.execute("DELETE FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'")
+        conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'INSPERITY 401K PLAN'")
+        conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'INSPERITY 401K PLAN'")
         conn.commit()
 
 
@@ -513,3 +517,107 @@ class TestI360AccountNumbers:
                 (acct_id,)
             ).fetchone()
             assert i360_bal[0] == "B37705429"
+
+
+class TestInsperityRestore:
+    """Insperity 401K restored with account_number = 'insperity_401k'."""
+
+    def test_migration_restores_insperity_entry(self):
+        with _test_get_db() as conn:
+            # Clean slate — delete if init_db already created it
+            conn.execute(
+                "DELETE FROM manual_entries "
+                "WHERE name = 'INSPERITY 401K PLAN' AND category = 'invested'"
+            )
+            conn.commit()
+
+            from api.database import _migrate_restore_insperity
+            _migrate_restore_insperity(conn)
+
+            # Verify entry created
+            row = conn.execute(
+                "SELECT name, category, account_number, value "
+                "FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'"
+            ).fetchone()
+            assert row is not None
+            assert row["category"] == "invested"
+            assert row["account_number"] == "insperity_401k"
+            assert row["value"] == 1391.66
+
+    def test_migration_fixes_snapshot_account_number(self):
+        with _test_get_db() as conn:
+            # Insert an orphaned snapshot with NULL account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO manual_entry_snapshots
+                    (name, category, value, snapped_at)
+                VALUES ('INSPERITY 401K PLAN', 'invested', 1391.66, '2026-04-01')
+            """)
+            conn.commit()
+
+            from api.database import _migrate_restore_insperity
+            _migrate_restore_insperity(conn)
+
+            snap = conn.execute(
+                "SELECT account_number FROM manual_entry_snapshots "
+                "WHERE name = 'INSPERITY 401K PLAN'"
+            ).fetchone()
+            assert snap[0] == "insperity_401k"
+
+    def test_migration_fixes_holdings_snapshot_account_number(self):
+        with _test_get_db() as conn:
+            # Insert an orphaned holdings snapshot with NULL account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO manual_holdings_snapshots
+                    (entry_name, snapped_at, holding_name, value)
+                VALUES ('INSPERITY 401K PLAN', '2026-04-01',
+                        'Vanguard Target 2045', 1391.66)
+            """)
+            conn.commit()
+
+            from api.database import _migrate_restore_insperity
+            _migrate_restore_insperity(conn)
+
+            snap = conn.execute(
+                "SELECT account_number FROM manual_holdings_snapshots "
+                "WHERE entry_name = 'INSPERITY 401K PLAN'"
+            ).fetchone()
+            assert snap[0] == "insperity_401k"
+
+    def test_migration_uses_snapshot_value_if_available(self):
+        """If snapshot exists, use its value rather than hardcoded fallback."""
+        with _test_get_db() as conn:
+            # Delete any existing entry and snapshots from prior tests
+            conn.execute(
+                "DELETE FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'"
+            )
+            conn.execute(
+                "DELETE FROM manual_entry_snapshots WHERE name = 'INSPERITY 401K PLAN'"
+            )
+            # Insert snapshot with a specific value
+            conn.execute("""
+                INSERT INTO manual_entry_snapshots
+                    (name, category, value, snapped_at)
+                VALUES ('INSPERITY 401K PLAN', 'invested', 1500.00, '2026-04-02')
+            """)
+            conn.commit()
+
+            from api.database import _migrate_restore_insperity
+            _migrate_restore_insperity(conn)
+
+            row = conn.execute(
+                "SELECT value FROM manual_entries "
+                "WHERE name = 'INSPERITY 401K PLAN'"
+            ).fetchone()
+            assert row["value"] == 1500.00
+
+    def test_migration_idempotent(self):
+        with _test_get_db() as conn:
+            from api.database import _migrate_restore_insperity
+            _migrate_restore_insperity(conn)
+            _migrate_restore_insperity(conn)
+
+            count = conn.execute(
+                "SELECT COUNT(*) FROM manual_entries "
+                "WHERE name = 'INSPERITY 401K PLAN'"
+            ).fetchone()[0]
+            assert count == 1

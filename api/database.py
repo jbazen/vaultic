@@ -1082,6 +1082,48 @@ def _migrate_i360_account_numbers(conn):
         )
 
 
+def _migrate_restore_insperity(conn):
+    """Restore Insperity 401K manual entry that was deleted by blanket DELETE.
+
+    Re-creates the manual_entries row with account_number = 'insperity_401k'.
+    Fixes NULL account_number on orphaned snapshots and holdings snapshots.
+    Idempotent — skips if entry already exists.
+    """
+    # Check if entry already exists
+    existing = conn.execute(
+        "SELECT id FROM manual_entries "
+        "WHERE name = 'INSPERITY 401K PLAN' AND category = 'invested'"
+    ).fetchone()
+    if not existing:
+        # Try to get value from orphaned snapshot
+        snap = conn.execute(
+            "SELECT value FROM manual_entry_snapshots "
+            "WHERE name = 'INSPERITY 401K PLAN' AND category = 'invested' "
+            "ORDER BY snapped_at DESC LIMIT 1"
+        ).fetchone()
+        value = snap["value"] if snap else 1391.66
+        conn.execute(
+            "INSERT INTO manual_entries "
+            "(name, category, value, account_number, entered_at, exclude_from_net_worth) "
+            "VALUES ('INSPERITY 401K PLAN', 'invested', ?, 'insperity_401k', "
+            "date('now'), 0)",
+            (value,),
+        )
+        logger.info("Restored Insperity 401K manual entry (value=%.2f)", value)
+
+    # Fix NULL account_number on orphaned snapshots
+    conn.execute(
+        "UPDATE manual_entry_snapshots SET account_number = 'insperity_401k' "
+        "WHERE name = 'INSPERITY 401K PLAN' "
+        "AND (account_number IS NULL OR account_number = '')"
+    )
+    conn.execute(
+        "UPDATE manual_holdings_snapshots SET account_number = 'insperity_401k' "
+        "WHERE entry_name = 'INSPERITY 401K PLAN' "
+        "AND (account_number IS NULL OR account_number = '')"
+    )
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1129,6 +1171,11 @@ def init_db():
             _migrate_i360_account_numbers(conn)
         except Exception as exc:
             logger.warning("I360 account_number migration failed: %s", exc)
+        # Restore Insperity 401K + fix orphaned snapshot account_numbers
+        try:
+            _migrate_restore_insperity(conn)
+        except Exception as exc:
+            logger.warning("Insperity restore migration failed: %s", exc)
 
 
 @contextmanager
