@@ -448,7 +448,18 @@ async def save_parsed(body: SaveParsedRequest, _user: str = Depends(get_current_
             if not name:
                 continue
 
-            acct_num = _normalize_acct(summary.get("account_number"))
+            # Reject masked account numbers (e.g. "XXXX5429") — they break
+            # correlation because the canonical key is the full number.
+            from api.routers.pdf_nfs import _is_masked_account_number
+            raw_acct_num = summary.get("account_number")
+            if _is_masked_account_number(raw_acct_num):
+                logger.warning(
+                    "PDF save: rejecting masked account_number '%s' for '%s' — "
+                    "storing None so correlation isn't pinned to a masked key",
+                    raw_acct_num, name
+                )
+                raw_acct_num = None
+            acct_num = _normalize_acct(raw_acct_num)
 
             # Resolve snapshot date from statement period_end. Falls back to today.
             snapshot_date = today

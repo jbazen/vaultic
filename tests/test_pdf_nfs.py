@@ -24,6 +24,7 @@ from api.routers.pdf_nfs import (
     _parse_header,
     _parse_overview,
     _parse_holdings,
+    _is_masked_account_number,
 )
 
 # ---------------------------------------------------------------------------
@@ -463,3 +464,59 @@ class TestFullParseIntegration:
         assert act["net_change"] == pytest.approx(-195.13)
         assert act["ytd_beginning_balance"] == pytest.approx(34361.09)
         assert act["period_income"] == pytest.approx(137.35)
+
+
+# ---------------------------------------------------------------------------
+# Group 6 — Masked account number rejection (Step 13)
+# ---------------------------------------------------------------------------
+
+class TestMaskedAccountNumberRejection:
+    """The NFS parser must never output a masked account_number (e.g. 'XXXX5429').
+    Masked numbers break correlation because the canonical key is the full number.
+    """
+
+    def test_is_masked_detects_pure_x_prefix(self):
+        assert _is_masked_account_number("XXXX5429") is True
+
+    def test_is_masked_detects_embedded_x_run(self):
+        assert _is_masked_account_number("B37-XXXX5429") is True
+
+    def test_is_masked_detects_lowercase(self):
+        assert _is_masked_account_number("xxxx5429") is True
+
+    def test_is_masked_allows_full_number(self):
+        assert _is_masked_account_number("B37-705429") is False
+        assert _is_masked_account_number("B37705429") is False
+
+    def test_is_masked_allows_single_or_few_x(self):
+        # Three X's is below the threshold — unlikely to be a mask and could
+        # appear in a real identifier. Threshold is 4+ X's.
+        assert _is_masked_account_number("ABX123") is False
+        assert _is_masked_account_number("XXX1234") is False
+
+    def test_is_masked_handles_none_and_empty(self):
+        assert _is_masked_account_number(None) is False
+        assert _is_masked_account_number("") is False
+
+    def test_parse_header_skips_masked_account_number(self):
+        """When the Account Number line is masked, parser must not accept it."""
+        text_with_mask = (
+            "STATEMENT FOR THE PERIOD DECEMBER 1, 2025 TO DECEMBER 31, 2025\n"
+            "Account Number: XXXX5429\n"
+            "HEATHER A BAZEN - Premiere Select Roth IRA\n"
+        )
+        h = _parse_header(text_with_mask)
+        assert h["account_number"] is None, "masked number must not be stored"
+
+    def test_parse_header_prefers_full_over_masked(self):
+        """If the masked number appears first in the text but a full number
+        appears later, the parser should end up with the full number.
+        Current behavior stops at the first match, so masked-first means
+        parser skips it and then picks up the later full number."""
+        text = (
+            "Summary page: Account Number: XXXX5429\n"
+            "Details: Account Number: B37-705429\n"
+            "HEATHER A BAZEN - Premiere Select Roth IRA\n"
+        )
+        h = _parse_header(text)
+        assert h["account_number"] == "B37-705429"

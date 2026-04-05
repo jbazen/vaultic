@@ -32,6 +32,23 @@ def is_nfs_statement(full_text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Masked account number detection
+# ---------------------------------------------------------------------------
+
+# A masked account number contains a run of 4+ X's (e.g. "XXXX5429", "B37-XXXX5429").
+# These must never be stored — they break correlation because the full number
+# (e.g. "B37705429") is the canonical correlation key across all tables.
+_MASKED_PATTERN = re.compile(r"X{4,}", re.IGNORECASE)
+
+
+def _is_masked_account_number(value) -> bool:
+    """Return True if *value* contains a run of 4+ X's (masking)."""
+    if not value:
+        return False
+    return bool(_MASKED_PATTERN.search(str(value)))
+
+
+# ---------------------------------------------------------------------------
 # Dollar-amount helpers
 # ---------------------------------------------------------------------------
 
@@ -130,9 +147,11 @@ def _parse_header(full_text: str) -> dict:
                 result["account_name"] = line_s
 
         # Account Number: B37-705429
+        # Skip masked variants (e.g. "XXXX5429") — keep scanning for the full number.
+        # Store full numbers only; correlation by account_number breaks if masked.
         if result["account_number"] is None:
             m = re.search(r"Account Number:\s*([A-Z0-9\-]+)", line_s)
-            if m:
+            if m and not _is_masked_account_number(m.group(1)):
                 result["account_number"] = m.group(1).strip()
 
         # Period: STATEMENT FOR THE PERIOD DECEMBER 1, 2025 TO DECEMBER 31, 2025
