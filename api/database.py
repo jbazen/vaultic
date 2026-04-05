@@ -1124,6 +1124,33 @@ def _migrate_restore_insperity(conn):
     )
 
 
+def _migrate_manual_entry_account_numbers(conn):
+    """Set account_number on car, home, and credit score manual entries.
+
+    These are singleton entries with no real account number — we assign
+    synthetic identifiers for consistency and snapshot correlation.
+    Also fixes NULL account_number on existing home snapshot.
+    Idempotent — skips rows that already have account_number set.
+    """
+    updates = [
+        ("car_value", "vehicle_2025_kia_carnival"),
+        ("home_value", "home_16623"),
+        ("credit_score", "credit_experian"),
+    ]
+    for category, acct_num in updates:
+        conn.execute(
+            "UPDATE manual_entries SET account_number = ? "
+            "WHERE category = ? AND (account_number IS NULL OR account_number = '')",
+            (acct_num, category),
+        )
+    # Fix existing home snapshot with NULL account_number
+    conn.execute(
+        "UPDATE manual_entry_snapshots SET account_number = 'home_16623' "
+        "WHERE category = 'home_value' "
+        "AND (account_number IS NULL OR account_number = '')"
+    )
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1176,6 +1203,11 @@ def init_db():
             _migrate_restore_insperity(conn)
         except Exception as exc:
             logger.warning("Insperity restore migration failed: %s", exc)
+        # Set account_number on car/home/credit manual entries
+        try:
+            _migrate_manual_entry_account_numbers(conn)
+        except Exception as exc:
+            logger.warning("Manual entry account_number migration failed: %s", exc)
 
 
 @contextmanager

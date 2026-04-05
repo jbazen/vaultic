@@ -42,6 +42,10 @@ def _cleanup_after():
         conn.execute("DELETE FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'")
         conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'INSPERITY 401K PLAN'")
         conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'INSPERITY 401K PLAN'")
+        # Clean up car/home/credit test data
+        for cat in ("car_value", "home_value", "credit_score"):
+            conn.execute("DELETE FROM manual_entries WHERE category = ?", (cat,))
+            conn.execute("DELETE FROM manual_entry_snapshots WHERE category = ?", (cat,))
         conn.commit()
 
 
@@ -621,3 +625,98 @@ class TestInsperityRestore:
                 "WHERE name = 'INSPERITY 401K PLAN'"
             ).fetchone()[0]
             assert count == 1
+
+
+class TestManualEntryAccountNumbers:
+    """Car, home, credit score get synthetic account_numbers."""
+
+    def _setup_manual_entries(self, conn):
+        """Create the three singleton manual entries without account_number."""
+        for name, category, value in [
+            ("Kia Carnival Hybrid EX", "car_value", 40000.0),
+            ("16623 S 17th Dr, Phoenix, AZ 85045", "home_value", 654200.0),
+            ("Experian Credit Score", "credit_score", 758.0),
+        ]:
+            conn.execute("""
+                INSERT OR IGNORE INTO manual_entries
+                    (name, category, value, entered_at)
+                VALUES (?, ?, ?, '2026-04-01')
+            """, (name, category, value))
+        conn.commit()
+
+    def test_migration_sets_car_account_number(self):
+        with _test_get_db() as conn:
+            self._setup_manual_entries(conn)
+            # Clear any existing account_number (init_db may have set it)
+            conn.execute(
+                "UPDATE manual_entries SET account_number = NULL WHERE category = 'car_value'"
+            )
+            conn.commit()
+
+            from api.database import _migrate_manual_entry_account_numbers
+            _migrate_manual_entry_account_numbers(conn)
+
+            row = conn.execute(
+                "SELECT account_number FROM manual_entries WHERE category = 'car_value'"
+            ).fetchone()
+            assert row[0] == "vehicle_2025_kia_carnival"
+
+    def test_migration_sets_home_account_number(self):
+        with _test_get_db() as conn:
+            conn.execute(
+                "UPDATE manual_entries SET account_number = NULL WHERE category = 'home_value'"
+            )
+            conn.commit()
+
+            from api.database import _migrate_manual_entry_account_numbers
+            _migrate_manual_entry_account_numbers(conn)
+
+            row = conn.execute(
+                "SELECT account_number FROM manual_entries WHERE category = 'home_value'"
+            ).fetchone()
+            assert row[0] == "home_16623"
+
+    def test_migration_sets_credit_account_number(self):
+        with _test_get_db() as conn:
+            conn.execute(
+                "UPDATE manual_entries SET account_number = NULL WHERE category = 'credit_score'"
+            )
+            conn.commit()
+
+            from api.database import _migrate_manual_entry_account_numbers
+            _migrate_manual_entry_account_numbers(conn)
+
+            row = conn.execute(
+                "SELECT account_number FROM manual_entries WHERE category = 'credit_score'"
+            ).fetchone()
+            assert row[0] == "credit_experian"
+
+    def test_migration_fixes_home_snapshot(self):
+        with _test_get_db() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO manual_entry_snapshots
+                    (name, category, value, snapped_at)
+                VALUES ('16623 S 17th Dr, Phoenix, AZ 85045', 'home_value',
+                        654200.0, '2026-04-01')
+            """)
+            conn.commit()
+
+            from api.database import _migrate_manual_entry_account_numbers
+            _migrate_manual_entry_account_numbers(conn)
+
+            snap = conn.execute(
+                "SELECT account_number FROM manual_entry_snapshots "
+                "WHERE category = 'home_value'"
+            ).fetchone()
+            assert snap[0] == "home_16623"
+
+    def test_migration_idempotent(self):
+        with _test_get_db() as conn:
+            from api.database import _migrate_manual_entry_account_numbers
+            _migrate_manual_entry_account_numbers(conn)
+            _migrate_manual_entry_account_numbers(conn)
+
+            row = conn.execute(
+                "SELECT account_number FROM manual_entries WHERE category = 'car_value'"
+            ).fetchone()
+            assert row[0] == "vehicle_2025_kia_carnival"
