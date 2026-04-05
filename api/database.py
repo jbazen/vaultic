@@ -888,6 +888,8 @@ MIGRATIONS = [
     "ALTER TABLE transactions ADD COLUMN account_number TEXT",
     "ALTER TABLE plaid_holdings ADD COLUMN account_number TEXT",
     "ALTER TABLE plaid_investment_transactions ADD COLUMN account_number TEXT",
+    "ALTER TABLE i360_holdings ADD COLUMN account_number TEXT",
+    "ALTER TABLE i360_account_balances ADD COLUMN account_number TEXT",
 ]
 
 
@@ -1026,6 +1028,60 @@ def _migrate_plaid_account_numbers(conn):
         """)
 
 
+def _migrate_i360_account_numbers(conn):
+    """Populate account_number for I360/Parker accounts and fix masked snapshots.
+
+    1. Sets accounts.account_number from i360_account_map.account_number
+    2. Backfills account_number on account_balances, i360_holdings, i360_account_balances
+    3. Fixes masked (XXXX) account numbers in manual_entry_snapshots and
+       manual_holdings_snapshots by matching last-4 digits to full numbers
+    Idempotent — skips rows that already have the correct account_number.
+    """
+    # Step 1: Populate accounts.account_number from i360_account_map
+    conn.execute("""
+        UPDATE accounts SET account_number = (
+            SELECT m.account_number FROM i360_account_map m
+            WHERE m.account_id = accounts.id
+        )
+        WHERE source = 'investor360'
+          AND (account_number IS NULL OR account_number = '')
+          AND id IN (SELECT account_id FROM i360_account_map)
+    """)
+
+    # Step 2: Backfill account_number on related tables
+    for table in ("account_balances", "i360_holdings", "i360_account_balances"):
+        conn.execute(f"""
+            UPDATE {table} SET account_number = (
+                SELECT a.account_number FROM accounts a WHERE a.id = {table}.account_id
+            )
+            WHERE account_id IN (SELECT id FROM accounts WHERE source = 'investor360')
+              AND (account_number IS NULL OR account_number = '')
+        """)
+
+    # Step 3: Fix masked account numbers in manual_entry_snapshots
+    # Build mapping from last-4 digits to full account number
+    acct_map = conn.execute(
+        "SELECT account_number FROM i360_account_map "
+        "WHERE account_number IS NOT NULL AND account_number != ''"
+    ).fetchall()
+    for row in acct_map:
+        full_num = row["account_number"]
+        last4 = full_num[-4:]
+        masked = f"XXXX{last4}"
+        # Fix manual_entry_snapshots
+        conn.execute(
+            "UPDATE manual_entry_snapshots SET account_number = ? "
+            "WHERE account_number = ?",
+            (full_num, masked),
+        )
+        # Fix manual_holdings_snapshots
+        conn.execute(
+            "UPDATE manual_holdings_snapshots SET account_number = ? "
+            "WHERE account_number = ?",
+            (full_num, masked),
+        )
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1068,6 +1124,11 @@ def init_db():
             _migrate_plaid_account_numbers(conn)
         except Exception as exc:
             logger.warning("Plaid account_number migration failed: %s", exc)
+        # Populate account_number for I360 accounts + fix masked snapshots
+        try:
+            _migrate_i360_account_numbers(conn)
+        except Exception as exc:
+            logger.warning("I360 account_number migration failed: %s", exc)
 
 
 @contextmanager

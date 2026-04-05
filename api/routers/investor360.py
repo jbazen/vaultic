@@ -102,10 +102,10 @@ def _upsert_accounts(conn, account_list: dict, holdings_data: dict) -> dict:
             conn.execute(
                 """INSERT OR IGNORE INTO accounts
                    (plaid_account_id, name, display_name, mask, type, subtype,
-                    institution_name, is_manual, source)
-                   VALUES (?, ?, ?, ?, 'investment', ?, ?, 0, 'investor360')""",
+                    institution_name, is_manual, source, account_number)
+                   VALUES (?, ?, ?, ?, 'investment', ?, ?, 0, 'investor360', ?)""",
                 (plaid_acct_id, name, name, mask, subtype,
-                 "Parker Financial (Commonwealth/NFS)"),
+                 "Parker Financial (Commonwealth/NFS)", acct_number),
             )
             row = conn.execute(
                 "SELECT id FROM accounts WHERE plaid_account_id = ?",
@@ -143,12 +143,20 @@ def _upsert_accounts(conn, account_list: dict, holdings_data: dict) -> dict:
 
 def _store_holdings(conn, holdings_data: dict, acct_mapping: dict, today: date):
     """Store full holdings snapshot."""
+    # Build vaultic_id -> account_number lookup
+    acct_nums = {}
+    for row in conn.execute(
+        "SELECT id, account_number FROM accounts WHERE source = 'investor360'"
+    ).fetchall():
+        acct_nums[row["id"]] = row["account_number"]
+
     count = 0
     for acct in holdings_data.get("data", []):
         i360_id = acct["accountId"]
         vaultic_id = acct_mapping.get(i360_id)
         if not vaultic_id:
             continue
+        acct_number = acct_nums.get(vaultic_id)
         for sec in acct.get("securities", []):
             for h in sec.get("holdings", []):
                 conn.execute(
@@ -167,8 +175,8 @@ def _store_holdings(conn, holdings_data: dict, acct_mapping: dict, today: date):
                         estimated_annual_income, current_yield_pct,
                         dividend_instructions, cap_gain_instructions,
                         initial_purchase_date, is_core, intraday,
-                        i360_holding_id, i360_product_id)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        i360_holding_id, i360_product_id, account_number)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         vaultic_id, today.isoformat(),
                         h.get("symbol"), h.get("cusip"), h.get("description", ""),
@@ -198,6 +206,7 @@ def _store_holdings(conn, holdings_data: dict, acct_mapping: dict, today: date):
                         1 if h.get("isCore") else 0,
                         1 if h.get("intraday") else 0,
                         h.get("holdingId"), h.get("productId"),
+                        acct_number,
                     ),
                 )
                 count += 1
@@ -228,22 +237,28 @@ def _store_account_balances(
         todays_chg = bal.get("todaysChange", 0)
         total_val = bal.get("totalMarketValue", 0)
 
+        # Look up account_number for this vaultic_id
+        acct_num_row = conn.execute(
+            "SELECT account_number FROM accounts WHERE id = ?", (vaultic_id,)
+        ).fetchone()
+        acct_number = acct_num_row["account_number"] if acct_num_row else None
+
         # Store in i360-specific table
         conn.execute(
             """INSERT OR REPLACE INTO i360_account_balances
                (account_id, snapped_at, market_value, cash_value,
-                todays_change, total_portfolio_value)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+                todays_change, total_portfolio_value, account_number)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (vaultic_id, today.isoformat(), market_val, cash_val,
-             todays_chg, total_val),
+             todays_chg, total_val, acct_number),
         )
 
         # Also feed the main account_balances table for net worth pipeline
         conn.execute(
             """INSERT OR REPLACE INTO account_balances
-               (account_id, current, available, snapped_at)
-               VALUES (?, ?, ?, ?)""",
-            (vaultic_id, market_val, cash_val, today.isoformat()),
+               (account_id, current, available, snapped_at, account_number)
+               VALUES (?, ?, ?, ?, ?)""",
+            (vaultic_id, market_val, cash_val, today.isoformat(), acct_number),
         )
 
 

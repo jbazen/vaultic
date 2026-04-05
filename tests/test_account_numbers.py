@@ -4,6 +4,7 @@ Covers:
   - Coinbase: account_number populated on accounts + account_balances
   - Coinbase sync writes account_number on new accounts + balance snapshots
   - Plaid: account_number populated on accounts + all related tables
+  - I360/Parker: account_number from i360_account_map, masked snapshot fixes
   - Migration backfills existing rows
 """
 import pytest
@@ -13,6 +14,7 @@ from tests.conftest import _test_get_db
 _TEST_PLAID_IDS = (
     "uuid-test-btc", "uuid-test-eth", "plaid-uuid-123",
     "plaid-uuid-checking", "plaid-uuid-401k",
+    "i360_9999",
 )
 
 
@@ -28,9 +30,14 @@ def _cleanup_after():
                 conn.execute("DELETE FROM transactions WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM plaid_holdings WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM plaid_investment_transactions WHERE account_id = ?", (acct[0],))
+                conn.execute("DELETE FROM i360_holdings WHERE account_id = ?", (acct[0],))
+                conn.execute("DELETE FROM i360_account_balances WHERE account_id = ?", (acct[0],))
+                conn.execute("DELETE FROM i360_account_map WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM accounts WHERE id = ?", (acct[0],))
-        # Also clean up any securities we inserted
+        # Also clean up any securities and test snapshots we inserted
         conn.execute("DELETE FROM plaid_securities WHERE security_id = 'sec-001'")
+        conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'Test Parker Account'")
+        conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'Test Parker Account'")
         conn.commit()
 
 
@@ -323,3 +330,186 @@ class TestPlaidAccountNumbers:
                 "SELECT account_number FROM transactions WHERE transaction_id = 'txn-002'"
             ).fetchone()
             assert txn[0] == "plaid-uuid-checking"
+
+
+class TestI360AccountNumbers:
+    """I360/Parker accounts get account_number from i360_account_map."""
+
+    def test_i360_holdings_has_account_number_column(self):
+        with _test_get_db() as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(i360_holdings)").fetchall()]
+            assert "account_number" in cols
+
+    def test_i360_account_balances_has_account_number_column(self):
+        with _test_get_db() as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(i360_account_balances)").fetchall()]
+            assert "account_number" in cols
+
+    def _setup_i360_account(self, conn):
+        """Helper: create an I360 account with account_map entry."""
+        conn.execute("""
+            INSERT OR IGNORE INTO accounts
+                (plaid_account_id, name, type, subtype, source, is_active)
+            VALUES ('i360_9999', 'Test Parker Account', 'investment', 'brokerage',
+                    'investor360', 1)
+        """)
+        acct_id = conn.execute(
+            "SELECT id FROM accounts WHERE plaid_account_id = 'i360_9999'"
+        ).fetchone()[0]
+        conn.execute("""
+            INSERT OR IGNORE INTO i360_account_map
+                (account_id, i360_account_id, account_number, household_id,
+                 registration_type)
+            VALUES (?, 9999, 'B37705429', 1682851, 'TODJ')
+        """, (acct_id,))
+        conn.commit()
+        return acct_id
+
+    def test_migration_populates_i360_account_numbers(self):
+        with _test_get_db() as conn:
+            acct_id = self._setup_i360_account(conn)
+
+            # Insert related rows without account_number
+            conn.execute("""
+                INSERT OR IGNORE INTO account_balances
+                    (account_id, current, available, snapped_at)
+                VALUES (?, 100000.0, 5000.0, '2026-04-03')
+            """, (acct_id,))
+            conn.execute("""
+                INSERT OR IGNORE INTO i360_account_balances
+                    (account_id, snapped_at, market_value, cash_value,
+                     todays_change, total_portfolio_value)
+                VALUES (?, '2026-04-03', 100000.0, 5000.0, 500.0, 100000.0)
+            """, (acct_id,))
+            conn.commit()
+
+            from api.database import _migrate_i360_account_numbers
+            _migrate_i360_account_numbers(conn)
+
+            # Verify accounts.account_number
+            row = conn.execute(
+                "SELECT account_number FROM accounts WHERE plaid_account_id = 'i360_9999'"
+            ).fetchone()
+            assert row[0] == "B37705429"
+
+            # Verify account_balances backfilled
+            bal = conn.execute(
+                "SELECT account_number FROM account_balances WHERE account_id = ?",
+                (acct_id,)
+            ).fetchone()
+            assert bal[0] == "B37705429"
+
+            # Verify i360_account_balances backfilled
+            i360_bal = conn.execute(
+                "SELECT account_number FROM i360_account_balances WHERE account_id = ?",
+                (acct_id,)
+            ).fetchone()
+            assert i360_bal[0] == "B37705429"
+
+    def test_migration_fixes_masked_manual_entry_snapshots(self):
+        with _test_get_db() as conn:
+            self._setup_i360_account(conn)
+
+            # Insert a snapshot with masked account number
+            conn.execute("""
+                INSERT OR IGNORE INTO manual_entry_snapshots
+                    (name, category, value, snapped_at, account_number)
+                VALUES ('Test Parker Account', 'invested', 100000.0,
+                        '2026-03-31', 'XXXX5429')
+            """)
+            conn.commit()
+
+            from api.database import _migrate_i360_account_numbers
+            _migrate_i360_account_numbers(conn)
+
+            # Verify masked → full
+            snap = conn.execute(
+                "SELECT account_number FROM manual_entry_snapshots "
+                "WHERE name = 'Test Parker Account'"
+            ).fetchone()
+            assert snap[0] == "B37705429"
+
+    def test_migration_fixes_masked_manual_holdings_snapshots(self):
+        with _test_get_db() as conn:
+            self._setup_i360_account(conn)
+
+            # Insert a holdings snapshot with masked account number
+            conn.execute("""
+                INSERT OR IGNORE INTO manual_holdings_snapshots
+                    (entry_name, account_number, snapped_at, holding_name, value)
+                VALUES ('Test Parker Account', 'XXXX5429', '2026-03-31',
+                        'Vanguard S&P 500', 50000.0)
+            """)
+            conn.commit()
+
+            from api.database import _migrate_i360_account_numbers
+            _migrate_i360_account_numbers(conn)
+
+            # Verify masked → full
+            snap = conn.execute(
+                "SELECT account_number FROM manual_holdings_snapshots "
+                "WHERE entry_name = 'Test Parker Account'"
+            ).fetchone()
+            assert snap[0] == "B37705429"
+
+    def test_migration_idempotent(self):
+        with _test_get_db() as conn:
+            from api.database import _migrate_i360_account_numbers
+            _migrate_i360_account_numbers(conn)
+            _migrate_i360_account_numbers(conn)
+
+            row = conn.execute(
+                "SELECT account_number FROM accounts WHERE plaid_account_id = 'i360_9999'"
+            ).fetchone()
+            assert row[0] == "B37705429"
+
+    def test_migration_skips_non_i360(self):
+        """Plaid/Coinbase accounts are not touched by I360 migration."""
+        with _test_get_db() as conn:
+            from api.database import _migrate_i360_account_numbers
+            _migrate_i360_account_numbers(conn)
+
+            # Check that plaid account still has its own account_number
+            row = conn.execute(
+                "SELECT account_number FROM accounts WHERE plaid_account_id = 'plaid-uuid-checking'"
+            ).fetchone()
+            if row:
+                assert row[0] == "plaid-uuid-checking"
+
+    def test_i360_sync_writes_account_number_on_insert(self):
+        """Simulates what investor360.py now does — writes account_number."""
+        with _test_get_db() as conn:
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE plaid_account_id = 'i360_9999'"
+            ).fetchone()[0]
+
+            # Simulate writing a balance with account_number
+            conn.execute("""
+                INSERT OR REPLACE INTO account_balances
+                    (account_id, current, available, snapped_at, account_number)
+                VALUES (?, 110000.0, 6000.0, '2026-04-04', 'B37705429')
+            """, (acct_id,))
+
+            # Simulate writing i360_account_balances with account_number
+            conn.execute("""
+                INSERT OR REPLACE INTO i360_account_balances
+                    (account_id, snapped_at, market_value, cash_value,
+                     todays_change, total_portfolio_value, account_number)
+                VALUES (?, '2026-04-04', 110000.0, 6000.0, 1000.0, 110000.0,
+                        'B37705429')
+            """, (acct_id,))
+            conn.commit()
+
+            bal = conn.execute(
+                "SELECT account_number FROM account_balances "
+                "WHERE account_id = ? AND snapped_at = '2026-04-04'",
+                (acct_id,)
+            ).fetchone()
+            assert bal[0] == "B37705429"
+
+            i360_bal = conn.execute(
+                "SELECT account_number FROM i360_account_balances "
+                "WHERE account_id = ? AND snapped_at = '2026-04-04'",
+                (acct_id,)
+            ).fetchone()
+            assert i360_bal[0] == "B37705429"
