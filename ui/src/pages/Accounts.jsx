@@ -8,6 +8,7 @@ import {
 import PlaidLink from "../components/PlaidLink.jsx";
 import EditableNotes from "../components/EditableNotes.jsx";
 import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
+import I360AccountCard from "../components/accounts/I360AccountCard.jsx";
 import { isRetirementAccount } from "../utils/accounts.js";
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { fmt, fmtCrypto, fmtPrice, fmtPercent as fmtPct, fmtNum, fmtDate, fmtCompact, fmtAxisDate } from "../utils/format.js";
@@ -121,6 +122,7 @@ function CryptoAccountRow({ account, onRenamed }) {
 // Shows available balance for depository accounts and credit limit for credit accounts.
 function AccountRow({ account, onRenamed }) {
   if (account.type === "crypto") return <CryptoAccountRow account={account} onRenamed={onRenamed} />;
+  if (account.source === "investor360") return <I360AccountCard account={account} onRenamed={onRenamed} BalanceChart={BalanceChart} />;
   if (isPlaidInvestment(account)) return <PlaidInvestmentCard account={account} onRenamed={onRenamed} />;
 
   const [editing, setEditing] = useState(false);

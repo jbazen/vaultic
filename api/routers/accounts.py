@@ -35,13 +35,16 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 a.source, a.notes,
                 b.current, b.available, b.limit_amount,
                 b.native_balance, b.unit_price,
-                b.snapped_at
+                b.snapped_at,
+                m.registration_type, m.registration_group,
+                m.investment_objective, m.open_date
             FROM accounts a
             LEFT JOIN account_balances b ON b.account_number = a.account_number
                 AND b.snapped_at = (
                     SELECT MAX(snapped_at) FROM account_balances
                     WHERE account_number = a.account_number
                 )
+            LEFT JOIN i360_account_map m ON m.account_id = a.id
             WHERE a.is_active = 1
             ORDER BY a.institution_name, a.name
         """).fetchall()
