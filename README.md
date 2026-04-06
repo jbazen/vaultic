@@ -38,7 +38,8 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 - **Unified dashboard** — net worth, all accounts, credit score, home value, car value, recent transactions on one screen
 - **Plaid integration** — connect Chase, Vanguard, Voya, Insperity, Robinhood, Rocket Mortgage, and any other Plaid-supported institution
 - **Sage AI advisor** — conversational AI financial advisor with access to your live data, persistent memory, and internet search
-- **PDF import** — parse Investor360/NFS account statements for Parker Financial accounts that Plaid cannot reach; NFS statements use a free deterministic regex parser (no AI cost); other PDFs fall back to Claude Sonnet extraction
+- **Investor360 API sync** — Parker Financial accounts (NFS/Commonwealth custodian) synced via Investor360 API with holdings, balances, performance, and activity data; historical PDF imports backfilled into the same account_balances/i360_holdings tables
+- **PDF import** — parse NFS account statements for historical data; NFS statements use a free deterministic regex parser (no AI cost); other PDFs fall back to Claude Sonnet extraction
 - **Manual entries** — home value, car value, credit score, and any other asset or liability
 - **Net worth history** — daily snapshots, historical charts
 - **Zero-based budget module** — monthly budget with Plaid transaction auto-assignment, drag-to-reorder groups and items, carryforward of planned amounts month-to-month; balanced indicator shows when income = expenses; manual transaction creation; archive system for historical imported items
@@ -62,7 +63,7 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 | **AI advisor** | Anthropic Claude Haiku (`claude-haiku-4-5-20251001`) |
 | **AI voice** | OpenAI TTS (`tts-1`, `fable` voice) — optional |
 | **Web search** | Tavily API (AI-optimized search for Sage) |
-| **PDF parsing** | pdfplumber + Claude Sonnet extraction |
+| **PDF parsing** | pdfplumber + deterministic NFS regex parser ($0 cost) + Claude Sonnet fallback |
 | **Auth** | JWT (PyJWT) + bcrypt password hashing |
 | **2FA** | TOTP via pyotp + QR code via qrcode |
 | **Encryption** | Fernet symmetric encryption (cryptography library) for Plaid tokens at rest |
@@ -85,11 +86,13 @@ vaultic/
 │   ├── dependencies.py      # get_current_user, get_client_ip FastAPI deps
 │   ├── encryption.py        # Fernet encrypt/decrypt for Plaid access tokens
 │   ├── sage.py              # Sage AI engine: tool definitions, Claude loop
-│   ├── sage_tools.py        # 21 Sage tool functions + TOOL_DISPATCH dict
+│   ├── sage_tools.py        # 25 Sage tool functions + TOOL_DISPATCH dict
 │   ├── security_log.py      # Audit logger: logins, API calls, syncs, Sage queries
 │   ├── coinbase_sync.py     # Coinbase Advanced Trade API: CDP JWT auth, fetch/store crypto balances
 │   ├── sync.py              # Plaid transaction sync (cursor-based), net worth snapshots
 │   ├── rate_limit.py        # In-memory sliding window: 60 Sage msgs/hr, 5 syncs/5min
+│   ├── investor360_client.py # Investor360 API client for Parker Financial accounts
+│   ├── tax_calc.py          # Tax calculation engine (federal + AZ state)
 │   └── routers/
 │       ├── auth.py          # /api/auth/* — login, 2FA, users, password, security log
 │       ├── plaid.py         # /api/plaid/* — link token, exchange, sync, items
@@ -98,7 +101,6 @@ vaultic/
 │       ├── manual.py        # /api/manual/* — CRUD for manual asset entries + holdings
 │       ├── sage.py          # /api/sage/* — chat endpoint, TTS endpoint
 │       ├── crypto.py        # /api/crypto/* — Coinbase account data
-│       ├── crypto_gains.py  # /api/crypto/* — FIFO capital gains tracker, trade sync, lots
 │       ├── budget.py        # /api/budget/* — groups, items, amounts, auto-assign, splits
 │       ├── tax.py           # /api/tax/* — returns, projections, W-4 wizard, 1040-ES
 │       ├── paystubs.py      # /api/paystubs/* — paystub upload and parsing
@@ -107,6 +109,10 @@ vaultic/
 │       ├── push.py          # /api/push/* — push notification subscriptions
 │       ├── sheet.py         # /api/sheet/* — Google Sheet fund financials proxy
 │       ├── vault.py         # /api/vault/* — document vault
+│       ├── investor360.py   # /api/investor360/* — Investor360 sync, snapshot migration
+│       ├── calendar.py      # /api/calendar/* — financial events CRUD, seeding
+│       ├── ticker_feed.py   # /api/ticker-feed/* — personalized price quotes, financial news
+│       ├── crypto_gains.py  # /api/crypto/* — FIFO capital gains, trade sync, lots
 │       ├── pdf.py           # /api/pdf/* — PDF ingestion (Sonnet fallback), 4-tier matching
 │       └── pdf_nfs.py       # /api/pdf/nfs — deterministic NFS/Commonwealth parser ($0 cost)
 ├── ui/
@@ -132,21 +138,42 @@ vaultic/
 │   │       ├── SageChat.jsx     # Floating AI chat panel with Hey Sage, voice
 │   │       ├── NetWorthChart.jsx
 │   │       ├── PlaidLink.jsx
-│   │       ├── budget/          # 11 sub-components (GroupSection, ItemRow, etc.)
-│   │       ├── dashboard/       # 3 sub-components (AccountsList, etc.)
+│   │       ├── budget/          # 12 sub-components (GroupSection, ItemRow, etc.)
+│   │       ├── dashboard/       # 5 sub-components (PortfolioPerformance, I360SyncModal, etc.)
+│   │       ├── calendar/        # 4 sub-components (CalendarSection, EventFormModal, etc.)
 │   │       └── taxes/           # 7 sub-components (W4Wizard, EstPayments, etc.)
 │   ├── tests/e2e/
 │   │   ├── helpers.js       # Shared mock API setup for all E2E tests
 │   │   ├── auth.spec.js     # Login, wrong password, 2FA, logout
 │   │   ├── dashboard.spec.js # Net worth, accounts, navigation
+│   │   ├── calendar.spec.js # Calendar views, event modal, seeding
 │   │   └── sage.spec.js     # Sage chat, response, persistence
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.js
-├── tests/
+├── tests/                   # 458+ unit tests (one test_*.py per router)
 │   ├── conftest.py          # In-memory SQLite test DB, TestClient, auth fixtures
-│   ├── test_auth.py         # Auth endpoint tests
-│   └── test_accounts.py     # Account, net worth, manual entry tests
+│   ├── test_auth.py         # Auth, login, JWT, health
+│   ├── test_accounts.py     # Accounts, net worth, manual entries
+│   ├── test_account_numbers.py # Account number migration, unique indexes, I360 migrations
+│   ├── test_2fa.py          # TOTP setup, confirm, verify, disable
+│   ├── test_users.py        # User CRUD, admin endpoints, security log
+│   ├── test_sage.py         # Sage chat, tool dispatch, rate limiting
+│   ├── test_budget.py       # Budget groups, items, amounts, reorder, auto-assign
+│   ├── test_transactions.py # Transaction queries, balance history
+│   ├── test_splits.py       # Transaction splitting
+│   ├── test_tax.py          # Tax projection, draft return, estimated payments, AZ state
+│   ├── test_pdf.py          # PDF ingestion, 4-tier matching, historical detection
+│   ├── test_pdf_nfs.py      # NFS deterministic parser, masked account rejection
+│   ├── test_investor360.py  # I360 sync, account mapping
+│   ├── test_crypto_gains.py # FIFO lot matching, trade sync, gains calculation
+│   ├── test_calendar.py     # Calendar events CRUD, seeding
+│   ├── test_auth_refresh.py # Refresh tokens, mobile sessions
+│   ├── test_plaid.py        # Plaid link, token exchange
+│   ├── test_funds.py        # Sinking funds CRUD
+│   ├── test_sheet.py        # Google Sheets proxy
+│   ├── test_ticker_feed.py  # Ticker quotes, news feed
+│   └── test_rate_limit.py   # Sliding window rate limiting
 ├── data/                    # Created at runtime (gitignored)
 │   ├── vaultic.db           # SQLite database
 │   └── sage_notes.md        # Sage's persistent memory across sessions
@@ -193,6 +220,7 @@ flowchart TB
         OpenAI["🔊 OpenAI TTS\ntts-1 · fable voice · 1.2×"]
         Tavily["🔍 Tavily Search\nweb_search for Sage\ninclude_answer: true"]
         GSheets["📊 Google Sheets API\nFund Financials\nread-only · 10+ yrs history"]
+        I360API["📊 Investor360 API\nAdvisor360° portal\nholdings · balances · activity"]
         R2["☁️ Cloudflare R2\nvaultic-backup bucket\n7-day WAL retention"]
         GitHub["🐙 GitHub Actions\nCI/CD → SSH deploy\n→ restart systemd service"]
     end
@@ -202,7 +230,7 @@ flowchart TB
         Vanguard["📈 Vanguard\n401k"]
         Rocket["🏠 Rocket Mortgage\nPlaid OAuth — pending"]
         HealthEq["🏥 HealthEquity HSA\nPlaid OAuth — pending"]
-        Parker["📋 Parker Financial\nNFS / Investor360\n5 accounts + portfolio summary\nPDF statements only"]
+        Parker["📋 Parker Financial\nNFS / Investor360\n5 accounts + portfolio summary\nInvestor360 API sync + PDF history"]
         CoinbaseAcct["₿ Coinbase Account\ncrypto holdings"]
         Manual["✏️ Manual Entries\nhome · car · credit score\nOptum HSA · custom assets"]
     end
@@ -244,6 +272,10 @@ flowchart TB
     Scheduler --> Plaid
     Scheduler --> CoinbaseAPI
 
+    %% Investor360 sync
+    FastAPI --> I360API
+    I360API --> Parker
+
     %% Plaid → institutions
     Plaid --> Chase
     Plaid --> Vanguard
@@ -253,7 +285,7 @@ flowchart TB
     %% Coinbase → account
     CoinbaseAPI --> CoinbaseAcct
 
-    %% PDF source
+    %% PDF source (historical)
     Parker --> PDFui
 ```
 
@@ -420,6 +452,57 @@ Per-holding detail rows linked to a `manual_entries` row. Populated from PDF imp
 | gain_loss_pct | REAL | |
 | notes | TEXT | |
 
+### `financial_events`
+Financial calendar events (tax deadlines, budget meetings, custom events). Supports recurring events and reminders.
+
+| Column | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| username | TEXT | Owner |
+| title | TEXT | Event title |
+| description | TEXT | Optional details |
+| start_dt | TEXT | ISO datetime |
+| end_dt | TEXT | Optional end datetime |
+| all_day | INTEGER | 1/0 |
+| event_type | TEXT | tax_deadline, budget_meeting, custom, etc. |
+| recurring | TEXT | none, monthly, quarterly, yearly |
+| reminder_days_before | INTEGER | Default 3 |
+| auto_generated | INTEGER | 1 if seeded by system |
+
+### `crypto_trades`
+Coinbase trade history synced via Advanced Trade API fills endpoint.
+
+| Column | Type | Notes |
+|---|---|---|
+| trade_id | TEXT UNIQUE | Coinbase fill ID |
+| order_id | TEXT | Parent order |
+| product_id | TEXT | e.g. "BTC-USD" |
+| side | TEXT | BUY or SELL |
+| size | REAL | Quantity traded |
+| price | REAL | Price per unit |
+| fee | REAL | Trading fee |
+| trade_time | TEXT | ISO datetime |
+
+### `crypto_lots` / `crypto_gains`
+FIFO cost basis tracking. `crypto_lots` tracks acquisition lots (quantity_remaining decreases on sell). `crypto_gains` records realized gain/loss events with short_term/long_term classification (>365 days).
+
+### `ticker_quotes` / `news_articles`
+Cached market quotes and Tavily news articles for the personalized ticker feed. Quotes keyed by symbol (UNIQUE), articles deduplicated by URL.
+
+### Investor360 Tables
+
+| Table | Purpose |
+|---|---|
+| `i360_sync_log` | Audit log of every I360 sync (status, counts, duration, errors) |
+| `i360_account_map` | Maps I360 account IDs → Vaultic account IDs + account_number |
+| `i360_holdings` | Full holdings per sync date (43 fields: symbol, CUSIP, value, quantity, price, asset class, cost basis, gains, etc.) |
+| `i360_account_balances` | Per-account daily balances (market_value, cash_value, today's change) |
+| `i360_balance_history` | Monthly portfolio balance history (inception to present) |
+| `i360_performance` | TWR returns with S&P 500, bond, and T-bill benchmarks |
+| `i360_asset_allocation` | Asset allocation snapshots by asset name |
+| `i360_activity_summary` | Period activity: beginning/ending balance, contributions, gains, fees |
+| `i360_market_summary` | Market index quotes (S&P, Dow, Nasdaq, 10Y Treasury) |
+
 ---
 
 ## API Reference
@@ -483,8 +566,52 @@ All endpoints except `/api/auth/login`, `/api/auth/verify-2fa`, and `/api/health
 ### PDF — `/api/pdf`
 | Method | Path | Description |
 |---|---|---|
-| POST | `/ingest` | Upload PDF → parse with pdfplumber + Sonnet → return entries |
+| POST | `/ingest` | Upload PDF → parse with pdfplumber + NFS regex or Sonnet → return entries |
 | POST | `/save` | Save confirmed parsed entries as manual entries |
+
+### Investor360 — `/api/investor360`
+| Method | Path | Description |
+|---|---|---|
+| POST | `/sync` | Sync Parker Financial accounts via Investor360 API (requires session cookie) |
+| GET | `/status` | Current sync status and last sync time |
+| GET | `/holdings` | All I360 holdings across all accounts |
+| GET | `/holdings/{account_id}` | Holdings for one account |
+| GET | `/performance` | TWR performance returns with S&P 500/bond/T-bill benchmarks |
+| GET | `/asset-allocation` | Asset allocation breakdown |
+| GET | `/balance-history` | Monthly portfolio balance history (inception to present) |
+| GET | `/activity-summary` | Period activity: contributions, gains, fees |
+| GET | `/market-summary` | Market index quotes |
+| GET | `/sync-log` | Sync history audit log |
+| GET | `/bookmarklet.js` | Browser bookmarklet to capture I360 session cookie |
+
+### Calendar — `/api/calendar`
+| Method | Path | Description |
+|---|---|---|
+| GET | `/upcoming` | Upcoming events with optional reminder window |
+| POST | `/seed` | Idempotent seed of tax deadlines, 1040-ES, budget meetings |
+| GET | `/` | List events (filterable by date range) |
+| POST | `/` | Create event |
+| PATCH | `/{event_id}` | Update event |
+| DELETE | `/{event_id}` | Delete event |
+
+### Ticker Feed — `/api/ticker-feed`
+| Method | Path | Description |
+|---|---|---|
+| GET | `/tickers` | List tracked ticker symbols |
+| GET | `/quotes` | Latest cached quotes for all tickers |
+| POST | `/quotes/refresh` | Refresh quotes from market data |
+| GET | `/news` | Cached financial news articles |
+| POST | `/news/refresh` | Refresh news from Tavily |
+| GET | `/summary` | Combined quotes + news summary |
+
+### Crypto Gains — `/api/crypto`
+| Method | Path | Description |
+|---|---|---|
+| POST | `/sync-trades` | Sync Coinbase trade history via fills API |
+| GET | `/trades` | List all synced trades |
+| POST | `/calculate-gains` | Run FIFO lot matching and calculate gains |
+| GET | `/gains/{year}` | Realized gains/losses for a tax year (Schedule D) |
+| GET | `/lots` | Current lot inventory with remaining quantities |
 
 ---
 
@@ -492,7 +619,7 @@ All endpoints except `/api/auth/login`, `/api/auth/verify-2fa`, and `/api/health
 
 Sage is a conversational financial advisor built on Claude Haiku with a tool-use loop. He has access to:
 
-### Tools
+### Tools (25 in `sage_tools.py`)
 | Tool | What it does |
 |---|---|
 | `get_net_worth` | Latest net worth snapshot with full breakdown |
@@ -500,10 +627,26 @@ Sage is a conversational financial advisor built on Claude Haiku with a tool-use
 | `get_accounts` | All accounts with current balances |
 | `get_transactions` | Recent transactions (up to 200) |
 | `get_manual_entries` | Manually entered assets (home, car, credit score) |
-| `get_notes` | Read persistent notes file (`data/sage_notes.md`) |
+| `get_notes` | Read persistent notes file (`data/sage_notes_{user}.md`) |
 | `update_notes` | Write to persistent notes — Sage's long-term memory |
 | `web_search` | Tavily AI search — live prices, tax rules, rates, news |
 | `fetch_page` | Fetch and read a specific web page (up to 8,000 chars) |
+| `get_budget` | Current month's budget with groups, items, planned/spent |
+| `get_budget_history` | Historical budget data for any month |
+| `get_unassigned_transactions` | Pending transactions not yet assigned to budget items |
+| `assign_transaction` | Assign a transaction to a budget item |
+| `auto_assign_month` | Run auto-assignment rules for a month |
+| `search_budget_history` | Search past transactions by merchant or description |
+| `get_paystubs` | List uploaded paystubs with parsed data |
+| `get_vault_documents` | List documents in the vault |
+| `optimize_w4` | Run W-4 multi-job withholding optimizer |
+| `get_draft_return` | Generate draft tax return (federal + AZ) |
+| `get_tax_projection` | Live tax projection for current year |
+| `get_tax_history` | Year-over-year tax return history |
+| `get_upcoming_events` | Upcoming financial calendar events |
+| `get_crypto_gains` | Realized crypto capital gains (FIFO, Schedule D) |
+| `get_ticker_quotes` | Latest market quotes for tracked tickers |
+| `get_financial_news` | Recent financial news articles |
 
 ### Voice Modes
 - **Off** — text only
@@ -864,34 +1007,38 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend unit tests — 458+ tests across:**
+**Backend unit tests — 458+ tests across 22 files:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
-- `test_accounts.py` — Accounts, net worth (investable field, monthly aggregation), manual entries (all 10 categories)
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable
 - `test_users.py` — Create, delete, change password, admin endpoints
+- `test_accounts.py` — Accounts, net worth (investable field, monthly aggregation), manual entries (all 10 categories)
+- `test_account_numbers.py` — Account number migration, unique indexes, snapshot/holdings history migration
 - `test_sage.py` — Chat endpoint, tool dispatch, rate limiting (429)
+- `test_budget.py` — Budget CRUD (18 tests): auth guards, route-order regression, group/item CRUD, reorder, amounts, auto-assign, carryforward, CSV import
+- `test_transactions.py` — Balance history endpoints, transaction insertion
+- `test_splits.py` — Transaction splitting
+- `test_tax.py` — Tax endpoints (33+ tests): returns, projections, W-4 wizard, estimated payments, AZ state tax
 - `test_pdf.py` — PDF ingestion (23 tests): `_salvage_json` recovery, duplicate prevention, Tier 1/2/3 matching, is_historical, force_holdings, `_normalize_acct`
 - `test_pdf_nfs.py` — NFS deterministic parser (31 tests): holding extraction, section parsing, cash sweeps, negative amounts
-- `test_rate_limit.py` — Sliding window rate limit behavior
-- `test_transactions.py` — Balance history endpoints, transaction insertion
-- `test_sheet.py` — Google Sheet CSV parser (17 tests): `_parse_dollar`, `_month_sort_key`, endpoint structure/values/auth/error handling
-- `test_budget.py` — Budget CRUD (18 tests): auth guards, route-order regression, group/item CRUD, reorder, amounts, auto-assign, carryforward, CSV import
+- `test_investor360.py` — I360 sync, account mapping
+- `test_crypto_gains.py` — FIFO lot matching (22 tests): trade sync, gains calculation, lot inventory
+- `test_calendar.py` — Calendar events CRUD, seeding (30 tests)
+- `test_auth_refresh.py` — Refresh tokens, mobile sessions (15 tests)
+- `test_plaid.py` — Plaid link, token exchange
 - `test_funds.py` — Sinking fund CRUD (16 tests)
-- `test_tax.py` — Tax endpoints: returns, projections, W-4 wizard, estimated payments
+- `test_sheet.py` — Google Sheet CSV parser (17 tests): `_parse_dollar`, `_month_sort_key`, endpoint structure/values/auth/error handling
+- `test_ticker_feed.py` — Ticker quotes, news feed
+- `test_rate_limit.py` — Sliding window rate limit behavior
 
-**Playwright E2E — 18 tests across:**
+**Playwright E2E — 26 tests across 4 files:**
 - `tests/e2e/auth.spec.js` — Login, wrong password, 2FA step, logout
 - `tests/e2e/dashboard.spec.js` — Net worth display, accounts, manual entries, navigation
 - `tests/e2e/sage.spec.js` — Sage button, chat panel, response, session persistence, Hey Sage toggle
+- `tests/e2e/calendar.spec.js` — Calendar views, event modal, seeding (8 tests)
 
-All E2E tests use mocked API routes — no live backend required.
+All E2E tests use mocked API routes (catch-all + specific overrides) — no live backend required.
 
 ### What is NOT covered (gaps)
-
-**Backend:**
-- ⬜ Plaid link token, token exchange, sync (requires Plaid SDK mock)
-- ⬜ OpenAI TTS endpoint (requires OpenAI mock)
-- ⬜ Security log endpoint
 
 **Frontend:**
 - ⬜ No component unit tests (no Vitest/Jest setup)
@@ -900,7 +1047,7 @@ All E2E tests use mocked API routes — no live backend required.
 
 ## Costs
 
-All costs are for personal use (single user, ~15 connected accounts).
+All costs are for personal use (single user, ~22 connected accounts).
 
 ### Monthly Operating Costs
 
@@ -945,31 +1092,46 @@ All costs are for personal use (single user, ~15 connected accounts).
 | Rocket Mortgage | Mortgage | Plaid ✅ |
 | Optum / HealthEquity | HSA | Plaid ✅ |
 | Coinbase | Crypto | Coinbase Advanced Trade API ✅ |
-| River | Bitcoin | No retail API (B2B only) — moving BTC to Coinbase |
-| Parker Financial / NFS (Investor360) | IRAs, college fund | PDF Import ✅ |
+| River | Bitcoin | Transferred to Coinbase (2026-03-26) |
+| Parker Financial / NFS (Investor360) | IRAs, joint accounts | Investor360 API + PDF Import ✅ |
 | Home value | Asset | Manual entry ✅ |
 | Car value | Asset | Manual entry ✅ |
 | Credit score | Metric | Manual entry ✅ |
 
 ### Parker Financial / NFS Note
 
-Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client portal. The actual custodian is **National Financial Services (NFS)** — Fidelity's institutional arm. **Plaid does not support NFS** (Fidelity blocked all third-party aggregators for institutional accounts). Investor360 only exports PDFs, not CSV. The solution is the built-in **PDF Import** feature: download your monthly PDF from Investor360, drag it into Vaultic, and it parses automatically.
+Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client portal. The actual custodian is **National Financial Services (NFS)** — Fidelity's institutional arm. **Plaid does not support NFS** (Fidelity blocked all third-party aggregators for institutional accounts).
 
-NFS/Commonwealth statements are parsed by a **free deterministic regex parser** (`api/routers/pdf_nfs.py`) — no AI cost. Any other PDF format falls back to Claude Sonnet. Detection is automatic based on markers in the PDF text; no manual selection is needed. The response includes a `"parser"` field (`"nfs_deterministic"` or `"ai"`) for logging transparency.
+**Primary integration: Investor360 API sync.** Vaultic connects directly to the Investor360 API using a session cookie (manual authentication required — cannot be fully automated). The sync pulls holdings, balances, performance, asset allocation, activity summaries, and market data into dedicated `i360_*` tables. A browser bookmarklet (`/api/investor360/bookmarklet.js`) captures the session cookie for easy re-authentication.
+
+**Historical data: PDF import.** 14 months of historical Parker data was imported from monthly PDF statements. NFS/Commonwealth statements are parsed by a **free deterministic regex parser** (`api/routers/pdf_nfs.py`) — no AI cost. Any other PDF format falls back to Claude Sonnet. Detection is automatic based on markers in the PDF text; no manual selection is needed. Historical snapshots are migrated into `account_balances` and `i360_holdings` tables to provide continuous balance/holdings history alongside the live API data.
 
 ---
 
 ## Roadmap
 
-- [x] **Budget module** — zero-based budgeting with Plaid transaction auto-assignment, drag-to-reorder, external budget CSV import, month carryforward (complete)
-- [x] **Fund Financials** — Google Sheets read-only viewer + native sinking fund tracker (complete)
-- [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth (complete)
-- [x] **Continuous backup** — Litestream → Cloudflare R2, 7-day retention, one-command restore (complete)
-- [x] **Plaid Production** — approved 2026-03-17; non-OAuth institutions live; OAuth (Chase, Rocket Mortgage, Health Equity) pending approval (~early April 2026)
-- [x] **Test suite** — 353 backend unit tests + 26 Playwright E2E tests (complete)
+### Completed
+- [x] **Budget module** — zero-based budgeting with Plaid transaction auto-assignment, drag-to-reorder, external budget CSV import, month carryforward, archive system
+- [x] **Fund Financials** — Google Sheets read-only viewer + native sinking fund tracker
+- [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth
+- [x] **Continuous backup** — Litestream → Cloudflare R2, 7-day retention, one-command restore
+- [x] **Plaid Production** — approved 2026-03-17; non-OAuth institutions live
+- [x] **Test suite** — 458+ backend unit tests + 26 Playwright E2E tests
+- [x] **Sage budget tools** — full suite: `get_budget`, `get_budget_history`, auto-assign, transaction assignment, splits
+- [x] **Tax module** — W-4 multi-job optimizer, 1040-ES estimated tax calculator, tax projection, draft return, AZ state tax, document checklist, paystub upload
+- [x] **Capital gains tracker** — Coinbase trade sync, FIFO lot matching, short/long-term classification, Schedule D reporting, Sage tool
+- [x] **Financial calendar** — native calendar with tax deadlines, 1040-ES, budget meetings; react-big-calendar UI; Sage tool
+- [x] **Investor360 API sync** — Parker Financial accounts synced via Investor360 API; holdings, balances, performance, asset allocation, activity
+- [x] **Account number migration** — canonical `account_number` column across all tables; unique indexes; snapshot/holdings history backfill
+- [x] **Persistent mobile sessions** — refresh tokens (90-day rotating), "Keep me signed in" checkbox
+- [x] **Ticker feed** — personalized market quotes + financial news on dashboard
+- [x] **Security audit** — 2 CRITICAL, 4 HIGH, 10 MEDIUM, 10 LOW findings all fixed
+- [x] **Peer review** — 45+ code quality findings addressed; major component extractions (Budget, Taxes, Dashboard, sage.py)
+
+### In Progress / Upcoming
+- [ ] **Parker UI enhancements** — enhance account summary and details pages with I360 data (performance, asset allocation, activity)
+- [ ] **Daily Parker sync reminder** — notification to re-authenticate I360 session
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
-- [ ] **River Bitcoin** — no retail API; plan to transfer BTC to Coinbase
-- ✅ **Sage budget tools** — `get_budget`, `get_budget_history` so Sage can answer "how much did I spend on groceries last month?"
-- ✅ **Tax module** — W-4 multi-job withholding optimizer wizard, quarterly estimated tax calculator (1040-ES) with dual safe harbor analysis, tax projection, year-over-year history, paystub upload, AZ state tax, document checklist, crypto capital gains tracker
-- ✅ **Capital gains tracker** — Coinbase trade sync, FIFO lot matching, short/long-term classification, Schedule D reporting, Sage tool integration
-- [ ] **Mobile PWA** — installable on iPhone/Android home screen
+- [ ] **Uploader consolidation** — unified upload flow: vault-first, then parse, then import; single entry point
+- [ ] **Mobile PWA** — installable on iPhone/Android home screen; push notifications for pending review alerts
+- [ ] **Plaid compliance** — Dependabot, privacy policy, Information Security Policy (due 2026-09-18)
