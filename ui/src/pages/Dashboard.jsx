@@ -309,7 +309,13 @@ export default function Dashboard() {
             No accounts connected. Click <strong>+ Connect Account</strong> above.
           </div>
         ) : (
-          Object.entries(grouped).map(([institution, accts]) => {
+          Object.entries(grouped)
+            .sort(([, a], [, b]) => {
+              const aI360 = a.some(x => x.source === "investor360") ? 0 : 1;
+              const bI360 = b.some(x => x.source === "investor360") ? 0 : 1;
+              return aI360 - bI360;
+            })
+            .map(([institution, accts]) => {
             const item = plaidItems.find(i => i.institution_name === institution);
             return (
               <div className="card" key={institution} style={{ margin: 0 }}>
