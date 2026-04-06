@@ -16,6 +16,8 @@ import { fmt, fmtSigned, fmtDate } from "../utils/format.js";
 import CalendarSection from "../components/calendar/CalendarSection.jsx";
 import NewsFeedPanel from "../components/dashboard/NewsFeedPanel.jsx";
 import I360SyncModal from "../components/dashboard/I360SyncModal.jsx";
+import I360SummarySection from "../components/dashboard/I360SummarySection.jsx";
+import MarketSummaryCard from "../components/dashboard/MarketSummaryCard.jsx";
 
 // ── Category config ───────────────────────────────────────────────────────────
 
@@ -290,8 +292,14 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── Market & News Feed ── */}
+      {/* ── Market Summary ── */}
+      <MarketSummaryCard />
+
+      {/* ── News Feed ── */}
       <NewsFeedPanel />
+
+      {/* ── Parker Financial Portfolio Summary ── */}
+      <I360SummarySection />
 
       {/* ── Accounts: 2-column grid, each institution/section its own card ── */}
       <div className="account-grid">
