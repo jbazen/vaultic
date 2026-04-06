@@ -16,15 +16,16 @@ Vaultic is a self-hosted personal finance dashboard that aggregates all your acc
 6. [API Reference](#api-reference)
 7. [Sage AI Advisor](#sage-ai-advisor)
 8. [Security](#security)
-9. [Local Development Setup](#local-development-setup)
-10. [Environment Variables](#environment-variables)
-11. [Deployment](#deployment)
-12. [Backups & Disaster Recovery](#backups--disaster-recovery)
-13. [CI/CD Pipeline](#cicd-pipeline)
-14. [Running Tests](#running-tests)
-15. [Test Coverage](#test-coverage)
-16. [Costs](#costs)
-17. [Roadmap](#roadmap)
+9. [Development Process](#development-process)
+10. [Local Development Setup](#local-development-setup)
+11. [Environment Variables](#environment-variables)
+12. [Deployment](#deployment)
+13. [Backups & Disaster Recovery](#backups--disaster-recovery)
+14. [CI/CD Pipeline](#cicd-pipeline)
+15. [Running Tests](#running-tests)
+16. [Test Coverage](#test-coverage)
+17. [Costs](#costs)
+18. [Roadmap](#roadmap)
 
 ---
 
@@ -821,6 +822,27 @@ Deploy only runs if tests pass.
 
 ---
 
+## Development Process
+
+All work follows a strict process established after the April 2026 stabilization audit. Full details are in [`CLAUDE.md`](CLAUDE.md) (the authoritative source), but the key points are:
+
+1. **GitHub Issue first** — every commit references a tracked issue (`#N - type: description`)
+2. **Analyze before coding** — read existing code, trace data flow, understand impact
+3. **Small, testable units** — break work into subtasks tracked as checkboxes on the issue
+4. **Write tests** — unit, e2e, or integration as appropriate
+5. **Run full suite before push** — `pytest --ignore=tests/e2e` + `pytest tests/e2e/`
+6. **Verify in production** — server logs, web UI, net worth snapshot after deploy
+
+**Rules:**
+- One change at a time — test between unrelated changes
+- If you find a secondary issue, file a new GitHub issue — don't fix it inline
+- Never weaken security controls without explicit approval
+- Never commit secrets — `.env` + `.gitignore` first
+
+See [`CLAUDE.md`](CLAUDE.md) for the complete coding standards, component extraction rules, CSS conventions, security practices, and testing requirements.
+
+---
+
 ## Running Tests
 
 ```bash
@@ -842,7 +864,7 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend unit tests — 232 tests across:**
+**Backend unit tests — 458+ tests across:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
 - `test_accounts.py` — Accounts, net worth (investable field, monthly aggregation), manual entries (all 10 categories)
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable

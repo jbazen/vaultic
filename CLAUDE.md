@@ -1,6 +1,32 @@
 # Vaultic — Coding Standards
 
-These standards apply to all contributors — human or AI. They exist to prevent the classes of bugs and code quality issues found during the March 2026 peer review.
+These standards apply to all contributors — human or AI. They exist to prevent the classes of bugs and code quality issues found during the March 2026 peer review and the April 2026 stabilization audit.
+
+---
+
+## Development Process
+
+All work follows this process — no exceptions. This was established after a stabilization audit on 2026-04-06 revealed that rapid, untested changes were causing cascading bugs and data-continuity gaps.
+
+### For every change:
+
+1. **GitHub Issue first** — no code without a tracked issue (`gh issue create`)
+2. **Thorough analysis** — read existing code, trace the data flow, understand impact. For changes touching DB writes, JOINs, or account correlation, verify that historical data remains reachable.
+3. **Design discussion** — for non-trivial changes, discuss approach with owner before coding
+4. **Break into subtasks** — split into small, independently testable pieces. Add a `## Subtasks` section with checkboxes to the GitHub Issue (not separate child issues). Update checkboxes as work progresses.
+5. **Code in small units** — one focused change per commit, not multi-file sweeping changes
+6. **Write tests** — unit, e2e, integration as appropriate for the change
+7. **Run full test suite** — `pytest --ignore=tests/e2e` for unit tests, `pytest tests/e2e/` for e2e
+8. **Commit** — format: `#N - type: description (fixes #N)` referencing the GitHub Issue
+9. **Push + CI** — CI runs unit + e2e tests automatically; deploy only if both pass
+10. **Production verification** — after deploy, check: server logs (`journalctl -u vaultic-api`), web UI, net worth snapshot, Sage chat
+
+### Rules:
+
+- **One change at a time.** Never stack multiple unrelated changes in one session without testing between them.
+- **No same-session reactive coding.** If analysis reveals a secondary issue, file a GitHub issue for it — don't fix it inline in the current task.
+- **Never weaken security controls** (auth guards, rate limits, input validation) without explicit approval.
+- **Never add secrets to git** — add to `.env` and `.gitignore` first.
 
 ---
 
