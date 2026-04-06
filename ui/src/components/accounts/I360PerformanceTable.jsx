@@ -12,7 +12,7 @@ function fmtRet(val) {
 }
 
 export default function I360PerformanceTable({ data }) {
-  if (!data || data.length === 0) {
+  if (!Array.isArray(data) || data.length === 0) {
     return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No performance data available.</div>;
   }
 

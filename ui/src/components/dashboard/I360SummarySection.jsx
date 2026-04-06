@@ -33,7 +33,7 @@ function PieTooltipContent({ active, payload, total }) {
 // ── Asset Category Donut ──────────────────────────────────────────────────────
 
 function AssetCategoryDonut({ data }) {
-  if (!data || data.length === 0) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No allocation data.</div>;
+  if (!Array.isArray(data) || data.length === 0) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No allocation data.</div>;
 
   const items = data
     .map((d, i) => ({ name: d.asset_name, value: d.market_value, color: CATEGORY_COLORS[i % CATEGORY_COLORS.length] }))
@@ -77,7 +77,7 @@ function AssetCategoryDonut({ data }) {
 // ── Balance History Chart ─────────────────────────────────────────────────────
 
 function BalanceHistoryChart({ data }) {
-  if (!data || data.length === 0) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No balance history.</div>;
+  if (!Array.isArray(data) || data.length === 0) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No balance history.</div>;
 
   const ChartTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;

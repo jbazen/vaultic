@@ -14,7 +14,7 @@ export default function MarketSummaryCard() {
   }, []);
 
   if (loading) return null;
-  if (!data || data.length === 0) return null;
+  if (!Array.isArray(data) || data.length === 0) return null;
 
   const snappedAt = data[0]?.snapped_at;
 
