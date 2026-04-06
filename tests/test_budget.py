@@ -775,3 +775,45 @@ class TestArchiveRecreate:
                           json={"name": "UniqueGroup409", "type": "expense"},
                           headers=auth_headers)
         assert res.status_code == 409
+
+    def test_rename_item_over_archived_succeeds(self, client, auth_headers):
+        """Renaming an item to a name that matches an archived item should succeed."""
+        g = _create_group(client, auth_headers, "RenameItemGrp")
+        old = _create_item(client, auth_headers, g["id"], "OldName")
+        new = _create_item(client, auth_headers, g["id"], "NewName")
+        # Archive OldName
+        client.delete(f"/api/budget/items/{old['id']}", headers=auth_headers)
+        # Rename NewName → OldName — should succeed, not 500
+        res = client.patch(f"/api/budget/items/{new['id']}",
+                           json={"name": "OldName"}, headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["name"] == "OldName"
+
+    def test_rename_item_to_active_duplicate_returns_409(self, client, auth_headers):
+        g = _create_group(client, auth_headers, "RenDupGrp")
+        _create_item(client, auth_headers, g["id"], "ItemA")
+        b = _create_item(client, auth_headers, g["id"], "ItemB")
+        # Rename ItemB → ItemA (active) — should 409
+        res = client.patch(f"/api/budget/items/{b['id']}",
+                           json={"name": "ItemA"}, headers=auth_headers)
+        assert res.status_code == 409
+
+    def test_rename_group_over_archived_succeeds(self, client, auth_headers):
+        """Renaming a group to a name that matches an archived group should succeed."""
+        old = _create_group(client, auth_headers, "ArchivedGrpName")
+        new = _create_group(client, auth_headers, "ActiveGrpName")
+        # Archive old
+        client.delete(f"/api/budget/groups/{old['id']}", headers=auth_headers)
+        # Rename new → ArchivedGrpName — should succeed
+        res = client.patch(f"/api/budget/groups/{new['id']}",
+                           json={"name": "ArchivedGrpName"}, headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["name"] == "ArchivedGrpName"
+
+    def test_rename_group_to_active_duplicate_returns_409(self, client, auth_headers):
+        _create_group(client, auth_headers, "GrpX")
+        b = _create_group(client, auth_headers, "GrpY")
+        # Rename GrpY → GrpX (active) — should 409
+        res = client.patch(f"/api/budget/groups/{b['id']}",
+                           json={"name": "GrpX"}, headers=auth_headers)
+        assert res.status_code == 409

@@ -790,10 +790,20 @@ async def update_group(group_id: int, body: UpdateGroupBody, _user: str = Depend
         if gtype not in ("income", "expense"):
             raise HTTPException(status_code=400, detail="type must be 'income' or 'expense'")
 
+        # If an archived group with the target name exists, remove it so the
+        # rename can proceed without a UNIQUE constraint clash.
         conn.execute(
-            "UPDATE budget_groups SET name = ?, type = ? WHERE id = ?",
-            (name, gtype, group_id)
+            "DELETE FROM budget_groups WHERE name = ? AND is_archived = 1 AND id != ?",
+            (name, group_id)
         )
+
+        try:
+            conn.execute(
+                "UPDATE budget_groups SET name = ?, type = ? WHERE id = ?",
+                (name, gtype, group_id)
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="A group with this name already exists")
 
     return {"id": group_id, "name": name, "type": gtype}
 
@@ -877,10 +887,23 @@ async def update_item(item_id: int, body: UpdateItemBody, _user: str = Depends(g
         raise HTTPException(status_code=400, detail="name is required")
 
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM budget_items WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, group_id FROM budget_items WHERE id = ?", (item_id,)
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Item not found")
-        conn.execute("UPDATE budget_items SET name = ? WHERE id = ?", (name, item_id))
+
+        # If an archived item with the target name exists in the same group,
+        # remove it so the rename can proceed without a UNIQUE constraint clash.
+        conn.execute(
+            "DELETE FROM budget_items WHERE group_id = ? AND name = ? AND is_archived = 1 AND id != ?",
+            (row["group_id"], name, item_id)
+        )
+
+        try:
+            conn.execute("UPDATE budget_items SET name = ? WHERE id = ?", (name, item_id))
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="An item with this name already exists in this group")
 
     return {"id": item_id, "name": name}
 
