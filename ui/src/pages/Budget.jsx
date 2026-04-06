@@ -154,9 +154,12 @@ export default function Budget() {
     if (!draggedId || draggedId === targetGroupId) {
       setDragOverGroupId(null); return;
     }
-    const ids = groups.map(g => g.id);
+    // Use visible groups only — that's what the user sees and is reordering.
+    // Archived groups aren't in the list and keep their existing display_order.
+    const ids = visibleGroups.map(g => g.id);
     const fromIdx = ids.indexOf(draggedId);
     const toIdx   = ids.indexOf(targetGroupId);
+    if (fromIdx === -1 || toIdx === -1) { setDragOverGroupId(null); return; }
     ids.splice(fromIdx, 1);
     ids.splice(toIdx, 0, draggedId);
     setDragOverGroupId(null);
@@ -331,6 +334,33 @@ export default function Budget() {
                 onDragEnd={handleGroupDragEnd}
               />
             ))}
+
+            {/* Bottom drop zone — allows dragging a group to the very end */}
+            <div className="group-drop-bottom"
+              onDragOver={e => {
+                e.preventDefault();
+                if (dragGroupRef.current) setDragOverGroupId("__bottom__");
+              }}
+              onDrop={e => {
+                e.preventDefault();
+                const draggedId = dragGroupRef.current;
+                dragGroupRef.current = null;
+                document.body.classList.remove("group-drag-active");
+                setDragOverGroupId(null);
+                if (!draggedId) return;
+                const ids = visibleGroups.map(g => g.id).filter(id => id !== draggedId);
+                ids.push(draggedId);
+                reorderGroups(ids).then(silentLoad);
+              }}
+              onDragLeave={() => { if (dragOverGroupId === "__bottom__") setDragOverGroupId(null); }}
+              style={{
+                height: dragOverGroupId === "__bottom__" ? 48 : 8,
+                borderRadius: 8,
+                transition: "height 0.15s, background 0.15s",
+                background: dragOverGroupId === "__bottom__" ? "rgba(79,142,247,0.12)" : "transparent",
+                border: dragOverGroupId === "__bottom__" ? "2px dashed var(--accent)" : "2px dashed transparent",
+              }}
+            />
 
             {/* Add group */}
             <div style={{ marginTop: 8 }}>
