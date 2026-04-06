@@ -15,6 +15,7 @@ import csv
 import io
 import json
 import re
+import sqlite3
 from collections import defaultdict
 from datetime import date, datetime
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -680,14 +681,33 @@ async def create_group(body: GroupCreate, _user: str = Depends(get_current_user)
         raise HTTPException(status_code=400, detail="name is required")
 
     with get_db() as conn:
-        # Place new group at the end of the current display order
+        # If an archived group with this name exists, unarchive it
+        archived = conn.execute(
+            "SELECT id, type, display_order FROM budget_groups WHERE name = ? AND is_archived = 1",
+            (name,)
+        ).fetchone()
+        if archived:
+            conn.execute("UPDATE budget_groups SET is_archived = 0 WHERE id = ?", (archived["id"],))
+            return {
+                "id": archived["id"],
+                "name": name,
+                "type": archived["type"],
+                "display_order": archived["display_order"],
+                "total_planned": 0.0,
+                "total_spent": 0.0,
+                "items": [],
+            }
+
         max_row = conn.execute("SELECT COALESCE(MAX(display_order), 0) AS m FROM budget_groups").fetchone()
         order = max_row["m"] + 1
 
-        cur = conn.execute(
-            "INSERT INTO budget_groups (name, type, display_order) VALUES (?, ?, ?)",
-            (name, body.type, order)
-        )
+        try:
+            cur = conn.execute(
+                "INSERT INTO budget_groups (name, type, display_order) VALUES (?, ?, ?)",
+                (name, body.type, order)
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="A group with this name already exists")
         gid = cur.lastrowid
 
     return {
@@ -818,16 +838,28 @@ async def create_item(group_id: int, body: ItemCreate, _user: str = Depends(get_
         if not group:
             raise HTTPException(status_code=404, detail="Group not found")
 
+        # If an archived item with this name exists in the group, unarchive it
+        archived = conn.execute(
+            "SELECT id FROM budget_items WHERE group_id = ? AND name = ? AND is_archived = 1",
+            (group_id, name)
+        ).fetchone()
+        if archived:
+            conn.execute("UPDATE budget_items SET is_archived = 0 WHERE id = ?", (archived["id"],))
+            return {"id": archived["id"], "name": name, "planned": 0.0, "spent": 0.0, "remaining": 0.0}
+
         max_row = conn.execute(
             "SELECT COALESCE(MAX(display_order), 0) AS m FROM budget_items WHERE group_id = ?",
             (group_id,)
         ).fetchone()
         order = max_row["m"] + 1
 
-        cur = conn.execute(
-            "INSERT INTO budget_items (group_id, name, display_order) VALUES (?, ?, ?)",
-            (group_id, name, order)
-        )
+        try:
+            cur = conn.execute(
+                "INSERT INTO budget_items (group_id, name, display_order) VALUES (?, ?, ?)",
+                (group_id, name, order)
+            )
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="An item with this name already exists in this group")
         iid = cur.lastrowid
 
     return {"id": iid, "name": name, "planned": 0.0, "spent": 0.0, "remaining": 0.0}

@@ -732,3 +732,46 @@ class TestRefundHandling:
         # Spent should be -35.15 (credit), remaining should be 135.15
         assert test_item["spent"] == -35.15
         assert test_item["remaining"] == 135.15
+
+
+# ── Archive + recreate (issue #22) ────────────────────────────────────────────
+
+class TestArchiveRecreate:
+    """Creating an item/group with the same name as an archived one should unarchive it."""
+
+    def test_create_item_unarchives_existing(self, client, auth_headers):
+        g = _create_group(client, auth_headers, "Savings")
+        item = _create_item(client, auth_headers, g["id"], "Furniture")
+        # Archive it
+        res = client.delete(f"/api/budget/items/{item['id']}", headers=auth_headers)
+        assert res.status_code == 200
+        # Recreate — should unarchive, not 500
+        item2 = _create_item(client, auth_headers, g["id"], "Furniture")
+        assert item2["id"] == item["id"]
+        assert item2["name"] == "Furniture"
+
+    def test_create_group_unarchives_existing(self, client, auth_headers):
+        g = _create_group(client, auth_headers, "Old Group")
+        # Archive it
+        res = client.delete(f"/api/budget/groups/{g['id']}", headers=auth_headers)
+        assert res.status_code == 200
+        # Recreate — should unarchive, not 500
+        g2 = _create_group(client, auth_headers, "Old Group")
+        assert g2["id"] == g["id"]
+        assert g2["name"] == "Old Group"
+
+    def test_duplicate_active_item_returns_409(self, client, auth_headers):
+        g = _create_group(client, auth_headers, "Food409")
+        _create_item(client, auth_headers, g["id"], "Groceries")
+        # Try to create again without archiving — should 409
+        res = client.post(f"/api/budget/groups/{g['id']}/items",
+                          json={"name": "Groceries"}, headers=auth_headers)
+        assert res.status_code == 409
+
+    def test_duplicate_active_group_returns_409(self, client, auth_headers):
+        _create_group(client, auth_headers, "UniqueGroup409")
+        # Try to create again without archiving — should 409
+        res = client.post("/api/budget/groups",
+                          json={"name": "UniqueGroup409", "type": "expense"},
+                          headers=auth_headers)
+        assert res.status_code == 409
