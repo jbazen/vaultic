@@ -842,7 +842,7 @@ MIGRATIONS = [
         benchmark_sp500  REAL,
         benchmark_bond   REAL,
         benchmark_tbill  REAL,
-        UNIQUE(snapped_at, time_period)
+        account_id       INTEGER
     )""",
     # Asset allocation snapshots
     """CREATE TABLE IF NOT EXISTS i360_asset_allocation (
@@ -850,7 +850,7 @@ MIGRATIONS = [
         snapped_at   DATE NOT NULL,
         asset_name   TEXT NOT NULL,
         market_value REAL NOT NULL,
-        UNIQUE(snapped_at, asset_name)
+        account_id   INTEGER
     )""",
     # Period activity summary
     """CREATE TABLE IF NOT EXISTS i360_activity_summary (
@@ -869,7 +869,7 @@ MIGRATIONS = [
         net_change                    REAL,
         total_gain_loss_after_fee     REAL,
         credits_12b1                  REAL,
-        UNIQUE(snapped_at, start_date)
+        account_id                    INTEGER
     )""",
     # Market indices (DJI, NASDAQ, S&P500, Treasuries)
     """CREATE TABLE IF NOT EXISTS i360_market_summary (
@@ -902,20 +902,14 @@ MIGRATIONS = [
     "ON i360_holdings(account_number, snapped_at, i360_holding_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_i360_balances_acctnum_date "
     "ON i360_account_balances(account_number, snapped_at)",
-    # Per-account performance, activity, and allocation (#27)
-    "ALTER TABLE i360_performance ADD COLUMN account_id INTEGER",
-    "ALTER TABLE i360_asset_allocation ADD COLUMN account_id INTEGER",
-    "ALTER TABLE i360_activity_summary ADD COLUMN account_id INTEGER",
-    # Replace old UNIQUE constraints with account_id-aware ones.
-    # SQLite can't ALTER UNIQUE constraints, so we drop the old implicit indexes
-    # by creating new named ones. INSERT OR REPLACE keys off these.
-    "DROP INDEX IF EXISTS sqlite_autoindex_i360_performance_1",
+    # Per-account columns added via _migrate_i360_per_account_tables() below.
+    # SQLite can't drop UNIQUE constraints from CREATE TABLE, so we recreate
+    # the tables with account_id included in the UNIQUE constraint.
+    # These indexes are created after table recreation (or on fresh DBs).
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_i360_perf_snap_period_acct "
     "ON i360_performance(snapped_at, time_period, COALESCE(account_id, 0))",
-    "DROP INDEX IF EXISTS sqlite_autoindex_i360_asset_allocation_1",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_i360_alloc_snap_name_acct "
     "ON i360_asset_allocation(snapped_at, asset_name, COALESCE(account_id, 0))",
-    "DROP INDEX IF EXISTS sqlite_autoindex_i360_activity_summary_1",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_i360_activity_snap_start_acct "
     "ON i360_activity_summary(snapped_at, start_date, COALESCE(account_id, 0))",
 ]
@@ -929,6 +923,82 @@ def _migrate_set_existing_users_admin(conn):
     default to non-admin.
     """
     conn.execute("UPDATE users SET is_admin = 1 WHERE is_admin = 0 AND is_active = 1")
+
+
+def _migrate_i360_per_account_tables(conn):
+    """Recreate i360 tables so old UNIQUE constraints include account_id.
+
+    The original CREATE TABLE had e.g. UNIQUE(snapped_at, time_period) without
+    account_id. SQLite cannot drop autoindexes from CREATE TABLE constraints, so
+    INSERT OR REPLACE overwrote portfolio-wide rows with per-account data.
+
+    Fix: recreate tables without inline UNIQUE, then the named indexes from
+    MIGRATIONS (ux_i360_perf_snap_period_acct etc.) become the sole constraint.
+    """
+    # Only needed if the old autoindex still exists
+    autoindexes = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' "
+        "AND name LIKE 'sqlite_autoindex_i360_performance%'"
+    ).fetchall()]
+    if not autoindexes:
+        # Fresh DB or already migrated — ensure account_id column exists
+        for tbl in ("i360_performance", "i360_asset_allocation", "i360_activity_summary"):
+            cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()]
+            if "account_id" not in cols:
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN account_id INTEGER")
+        return
+
+    # ── Recreate i360_performance ─────────────────────────────────────────
+    conn.execute("""CREATE TABLE _i360_performance_new (
+        id INTEGER PRIMARY KEY, snapped_at DATE NOT NULL, time_period TEXT NOT NULL,
+        display_name TEXT, portfolio_return REAL, benchmark_sp500 REAL,
+        benchmark_bond REAL, benchmark_tbill REAL, account_id INTEGER
+    )""")
+    conn.execute("""INSERT OR IGNORE INTO _i360_performance_new
+        (id, snapped_at, time_period, display_name, portfolio_return,
+         benchmark_sp500, benchmark_bond, benchmark_tbill, account_id)
+        SELECT id, snapped_at, time_period, display_name, portfolio_return,
+               benchmark_sp500, benchmark_bond, benchmark_tbill, account_id
+        FROM i360_performance""")
+    conn.execute("DROP TABLE i360_performance")
+    conn.execute("ALTER TABLE _i360_performance_new RENAME TO i360_performance")
+
+    # ── Recreate i360_asset_allocation ────────────────────────────────────
+    conn.execute("""CREATE TABLE _i360_asset_allocation_new (
+        id INTEGER PRIMARY KEY, snapped_at DATE NOT NULL, asset_name TEXT NOT NULL,
+        market_value REAL NOT NULL, account_id INTEGER
+    )""")
+    conn.execute("""INSERT OR IGNORE INTO _i360_asset_allocation_new
+        (id, snapped_at, asset_name, market_value, account_id)
+        SELECT id, snapped_at, asset_name, market_value, account_id
+        FROM i360_asset_allocation""")
+    conn.execute("DROP TABLE i360_asset_allocation")
+    conn.execute("ALTER TABLE _i360_asset_allocation_new RENAME TO i360_asset_allocation")
+
+    # ── Recreate i360_activity_summary ────────────────────────────────────
+    conn.execute("""CREATE TABLE _i360_activity_summary_new (
+        id INTEGER PRIMARY KEY, snapped_at DATE NOT NULL, start_date DATE NOT NULL,
+        end_date DATE NOT NULL, beginning_balance REAL, ending_balance REAL,
+        net_contributions_withdrawals REAL, positions_change_in_value REAL,
+        interest REAL, cap_gains REAL, management_fee REAL, management_fees_paid REAL,
+        net_change REAL, total_gain_loss_after_fee REAL, credits_12b1 REAL,
+        account_id INTEGER
+    )""")
+    conn.execute("""INSERT OR IGNORE INTO _i360_activity_summary_new
+        (id, snapped_at, start_date, end_date, beginning_balance, ending_balance,
+         net_contributions_withdrawals, positions_change_in_value,
+         interest, cap_gains, management_fee, management_fees_paid,
+         net_change, total_gain_loss_after_fee, credits_12b1, account_id)
+        SELECT id, snapped_at, start_date, end_date, beginning_balance, ending_balance,
+               net_contributions_withdrawals, positions_change_in_value,
+               interest, cap_gains, management_fee, management_fees_paid,
+               net_change, total_gain_loss_after_fee, credits_12b1, account_id
+        FROM i360_activity_summary""")
+    conn.execute("DROP TABLE i360_activity_summary")
+    conn.execute("ALTER TABLE _i360_activity_summary_new RENAME TO i360_activity_summary")
+
+    # Named indexes from MIGRATIONS will be created after this runs
+    logger.info("Recreated i360 tables with per-account UNIQUE constraints")
 
 
 def _migrate_encrypt_totp_secrets(conn):
@@ -1182,6 +1252,12 @@ def _migrate_manual_entry_account_numbers(conn):
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
+        # Recreate i360 tables BEFORE migrations loop — the loop creates
+        # named UNIQUE indexes that must target the recreated tables.
+        try:
+            _migrate_i360_per_account_tables(conn)
+        except Exception as exc:
+            logger.warning("I360 per-account table migration failed: %s", exc)
         # Run migrations silently (ignore if column/table already exists)
         _expected_msg_fragments = (
             "duplicate column name",
@@ -1234,6 +1310,7 @@ def init_db():
             _migrate_manual_entry_account_numbers(conn)
         except Exception as exc:
             logger.warning("Manual entry account_number migration failed: %s", exc)
+        # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 
 @contextmanager
