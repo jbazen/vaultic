@@ -1,7 +1,7 @@
 /**
  * GroupSection — Collapsible budget group with drag-and-drop reordering, item list, and inline editing.
  */
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   updateBudgetGroup, deleteBudgetGroup,
   createBudgetItem, reorderItems,
@@ -49,11 +49,16 @@ export default function GroupSection({ group, month, colorIndex, onUpdate, onOpe
   }
 
   // ── Item drag state (items only reorder within this group) ────────────────
-  const [dragItemId, setDragItemId]       = useState(null);
+  // dragItemRef is a ref (not state) so that setting it during dragstart does
+  // NOT trigger a React re-render. Re-rendering mid-drag mutates the DOM and
+  // causes the browser to cancel the drag operation — the same root cause that
+  // broke group drag (fixed 2026-03-21). dragOverItemId stays as state because
+  // it's only set during dragOver, when the drag is already live.
+  const dragItemRef = useRef(null);
   const [dragOverItemId, setDragOverItemId] = useState(null);
 
   function handleItemDragStart(e, itemId) {
-    setDragItemId(itemId);
+    dragItemRef.current = itemId;
     e.dataTransfer.effectAllowed = "move";
     e.stopPropagation(); // prevent triggering group drag
   }
@@ -64,27 +69,46 @@ export default function GroupSection({ group, month, colorIndex, onUpdate, onOpe
     if (dragGroupRef?.current) return;
     e.preventDefault();
     e.stopPropagation();
-    if (dragItemId !== itemId) setDragOverItemId(itemId);
+    if (dragItemRef.current && dragItemRef.current !== itemId) setDragOverItemId(itemId);
   }
 
   async function handleItemDrop(e, targetItemId) {
     // When a GROUP is being dragged, do not handle the drop here — let it
     // bubble up to the GroupSection outer div where handleGroupDrop is registered.
-    if (dragGroupRef?.current || !dragItemId) return;
+    if (dragGroupRef?.current || !dragItemRef.current) return;
     e.preventDefault();
     e.stopPropagation();
-    if (dragItemId === targetItemId) {
-      setDragItemId(null); setDragOverItemId(null); return;
-    }
-    const visibleItems = group.items.filter(i => i.planned > 0 || i.spent !== 0);
-    const ids = visibleItems.map(i => i.id);
-    const fromIdx = ids.indexOf(dragItemId);
+    const draggedId = dragItemRef.current;
+    dragItemRef.current = null;
+    setDragOverItemId(null);
+    if (draggedId === targetItemId) return;
+    // group.items is already visibility-filtered by Budget.jsx — use it directly.
+    const ids = group.items.map(i => i.id);
+    const fromIdx = ids.indexOf(draggedId);
     const toIdx   = ids.indexOf(targetItemId);
+    if (fromIdx === -1 || toIdx === -1) return;
     ids.splice(fromIdx, 1);
-    ids.splice(toIdx, 0, dragItemId);
-    setDragItemId(null); setDragOverItemId(null);
+    ids.splice(toIdx, 0, draggedId);
     await reorderItems(ids);
     onUpdate();
+  }
+
+  async function handleItemDropBottom(e) {
+    if (dragGroupRef?.current || !dragItemRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedId = dragItemRef.current;
+    dragItemRef.current = null;
+    setDragOverItemId(null);
+    const ids = group.items.map(i => i.id).filter(id => id !== draggedId);
+    ids.push(draggedId);
+    await reorderItems(ids);
+    onUpdate();
+  }
+
+  function handleItemDragEnd() {
+    dragItemRef.current = null;
+    setDragOverItemId(null);
   }
 
   return (
@@ -206,14 +230,32 @@ export default function GroupSection({ group, month, colorIndex, onUpdate, onOpe
               <ItemRow key={item.id} item={item} month={month}
                 groupType={group.type} showSpent={showSpent}
                 onUpdate={onUpdate} onOpenItem={onOpenItem}
-                isDragOver={dragOverItemId === item.id && dragItemId !== item.id}
+                isDragOver={dragOverItemId === item.id && dragItemRef.current !== item.id}
                 dragHandleProps={{ onMouseDown: () => {} }}
                 onDragStart={e => handleItemDragStart(e, item.id)}
                 onDragOver={e => handleItemDragOver(e, item.id)}
                 onDrop={e => handleItemDrop(e, item.id)}
-                onDragEnd={() => { setDragItemId(null); setDragOverItemId(null); }}
+                onDragEnd={handleItemDragEnd}
               />
             ))}
+
+          {/* Bottom drop zone — allows dragging an item to the last position */}
+          <div
+            onDragOver={e => {
+              if (dragGroupRef?.current || !dragItemRef.current) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setDragOverItemId("__bottom__");
+            }}
+            onDrop={handleItemDropBottom}
+            onDragLeave={() => { if (dragOverItemId === "__bottom__") setDragOverItemId(null); }}
+            style={{
+              height: dragOverItemId === "__bottom__" ? 32 : 4,
+              transition: "height 0.15s, background 0.15s",
+              background: dragOverItemId === "__bottom__" ? "rgba(79,142,247,0.10)" : "transparent",
+              borderTop: dragOverItemId === "__bottom__" ? "2px solid var(--accent)" : "2px solid transparent",
+            }}
+          />
 
           {/* Group totals row */}
           {group.items.length > 0 && (
