@@ -97,7 +97,7 @@ async function apiFetch(path, options = {}) {
 
   let res;
   try {
-    res = await fetch(path, { ...options, headers, signal: controller.signal });
+    res = await fetch(path, { ...options, headers, signal: controller.signal, cache: "no-store" });
   } finally {
     clearTimeout(timer);
   }

@@ -115,6 +115,12 @@ async def security_and_logging_middleware(request: Request, call_next):
             f"HTTP_{response.status_code}  ip={ip}  user={username}  {method} {path}"
         )
 
+    # Prevent browsers and Cloudflare from caching API responses — data changes
+    # frequently and stale responses cause cross-browser sync issues (e.g. budget
+    # items created in one browser not appearing in another after hard refresh).
+    if path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+
     # Security headers
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
