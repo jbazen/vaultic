@@ -259,6 +259,13 @@ def sync_all():
     # skipped, ensuring today's snapshot always reflects the full picture.
     _take_net_worth_snapshot(today)
 
+    # Check if Parker/I360 data is stale and send a push reminder (once per day)
+    try:
+        from api.push import notify_stale_i360
+        notify_stale_i360()
+    except Exception as push_err:
+        logger.warning(f"I360 stale push check failed (non-fatal): {push_err}")
+
     security_log.log_sync_event(f"COMPLETED  ok={ok}  failed={failed}")
 
 

@@ -281,3 +281,71 @@ def notify_pending_review(count: int) -> None:
                     "UPDATE push_subscriptions SET is_active = 0 WHERE id = ?", (sid,)
                 )
         logger.info(f"Deactivated {len(expired_ids)} expired push subscription(s)")
+
+
+# In-memory date stamp to avoid sending multiple stale I360 reminders per day.
+# Reset on server restart (fine — sync runs 4x/day, so at most one extra).
+_last_i360_stale_notify_date: str | None = None
+
+
+def notify_stale_i360() -> None:
+    """Send a push notification if Parker/I360 data hasn't synced in >24h.
+
+    Called by sync_all() after each sync cycle. Uses an in-memory date guard
+    so at most one reminder is sent per calendar day, even though sync_all
+    runs 4× daily.
+    """
+    global _last_i360_stale_notify_date
+
+    if not is_configured():
+        return
+
+    from datetime import date, datetime
+
+    today_str = date.today().isoformat()
+    if _last_i360_stale_notify_date == today_str:
+        return  # already notified today
+
+    from api.database import get_db
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT synced_at FROM i360_sync_log ORDER BY synced_at DESC LIMIT 1"
+        ).fetchone()
+
+    if not row:
+        return  # I360 not configured — no sync log at all
+
+    synced_at = datetime.fromisoformat(row["synced_at"])
+    hours_ago = (datetime.now() - synced_at).total_seconds() / 3600
+
+    if hours_ago <= 24:
+        return  # data is fresh
+
+    title = "Vaultic — Parker Sync Needed"
+    body = f"Parker accounts haven't synced in {int(hours_ago)}h. Log in to Commonwealth to refresh."
+
+    with get_db() as conn:
+        subs = conn.execute(
+            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE is_active = 1"
+        ).fetchall()
+
+    expired_ids = []
+    for sub in subs:
+        subscription = {
+            "endpoint": sub["endpoint"],
+            "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
+        }
+        ok = send_push_notification(subscription, title, body, url="/accounts")
+        if not ok:
+            expired_ids.append(sub["id"])
+
+    if expired_ids:
+        with get_db() as conn:
+            for sid in expired_ids:
+                conn.execute(
+                    "UPDATE push_subscriptions SET is_active = 0 WHERE id = ?", (sid,)
+                )
+
+    _last_i360_stale_notify_date = today_str
+    logger.info(f"Sent I360 stale reminder — last sync {int(hours_ago)}h ago")
