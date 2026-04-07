@@ -262,8 +262,12 @@ def _store_account_balances(
         )
 
 
-def _store_performance(conn, perf_data: list, today: date):
-    """Store TWR performance returns with benchmarks."""
+def _store_performance(conn, perf_data: list, today: date, account_id: int | None = None):
+    """Store TWR performance returns with benchmarks.
+
+    account_id=None stores portfolio-wide data; pass a Vaultic account ID
+    for per-account performance.
+    """
     for entry in perf_data:
         if entry.get("hideMe"):
             continue
@@ -286,21 +290,21 @@ def _store_performance(conn, perf_data: list, today: date):
         conn.execute(
             """INSERT OR REPLACE INTO i360_performance
                (snapped_at, time_period, display_name, portfolio_return,
-                benchmark_sp500, benchmark_bond, benchmark_tbill)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                benchmark_sp500, benchmark_bond, benchmark_tbill, account_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (today.isoformat(), period, display, portfolio,
-             sp500, bond, tbill),
+             sp500, bond, tbill, account_id),
         )
 
 
-def _store_asset_allocation(conn, alloc_data: dict, today: date):
+def _store_asset_allocation(conn, alloc_data: dict, today: date, account_id: int | None = None):
     """Store asset allocation breakdown."""
     for entry in alloc_data.get("assetBalances", []):
         conn.execute(
             """INSERT OR REPLACE INTO i360_asset_allocation
-               (snapped_at, asset_name, market_value)
-               VALUES (?, ?, ?)""",
-            (today.isoformat(), entry["assetName"], entry["marketValue"]),
+               (snapped_at, asset_name, market_value, account_id)
+               VALUES (?, ?, ?, ?)""",
+            (today.isoformat(), entry["assetName"], entry["marketValue"], account_id),
         )
 
 
@@ -316,7 +320,7 @@ def _store_balance_history(conn, history_data: dict):
         )
 
 
-def _store_activity_summary(conn, activity_data: list, today: date, start_date: str):
+def _store_activity_summary(conn, activity_data: list, today: date, start_date: str, account_id: int | None = None):
     """Store period activity summary."""
     if not activity_data:
         return
@@ -327,8 +331,8 @@ def _store_activity_summary(conn, activity_data: list, today: date, start_date: 
             beginning_balance, ending_balance,
             net_contributions_withdrawals, positions_change_in_value,
             interest, cap_gains, management_fee, management_fees_paid,
-            net_change, total_gain_loss_after_fee, credits_12b1)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            net_change, total_gain_loss_after_fee, credits_12b1, account_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             today.isoformat(), start_date, today.isoformat(),
             entry.get("beginningBalance"),
@@ -342,6 +346,7 @@ def _store_activity_summary(conn, activity_data: list, today: date, start_date: 
             entry.get("netChange"),
             entry.get("totalGainLossAfterFee"),
             entry.get("credits12B1"),
+            account_id,
         ),
     )
 
@@ -717,6 +722,71 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
         if data.get("market"):
             _store_market_summary(conn, data["market"])
 
+    # 5. Fetch per-account performance, activity, and allocation
+    if acct_mapping:
+        # Build i360_id → (vaultic_id, account_name) lookup
+        with get_db() as conn:
+            acct_info = {}
+            for row in conn.execute(
+                "SELECT i360_account_id, account_id, registration_description "
+                "FROM i360_account_map"
+            ).fetchall():
+                acct_info[row["i360_account_id"]] = (
+                    row["account_id"],
+                    row["registration_description"] or str(row["i360_account_id"]),
+                )
+
+        per_acct_calls = []
+        for i360_id, vaultic_id in acct_mapping.items():
+            info = acct_info.get(i360_id)
+            if not info:
+                continue
+            vaultic_id, acct_name = info
+            per_acct_calls.append(
+                safe_call(
+                    f"perf_{i360_id}",
+                    client.get_performance(household_id, today, account_id=i360_id, account_name=acct_name),
+                )
+            )
+            per_acct_calls.append(
+                safe_call(
+                    f"activity_{i360_id}",
+                    client.get_activity_summary(household_id, today, account_id=i360_id, account_name=acct_name),
+                )
+            )
+            per_acct_calls.append(
+                safe_call(
+                    f"alloc_{i360_id}",
+                    client.get_asset_allocation(household_id, today, account_id=i360_id, account_name=acct_name),
+                )
+            )
+
+        if per_acct_calls:
+            per_results = await asyncio.gather(*per_acct_calls)
+            with get_db() as conn:
+                for call_name, call_data in per_results:
+                    if call_data is None:
+                        continue
+                    # Parse "type_i360id" to get account info
+                    parts = call_name.split("_", 1)
+                    call_type = parts[0]
+                    i360_id_str = parts[1]
+                    try:
+                        i360_id_val = int(i360_id_str)
+                    except ValueError:
+                        continue
+                    info = acct_info.get(i360_id_val)
+                    if not info:
+                        continue
+                    vid = info[0]
+                    if call_type == "perf":
+                        _store_performance(conn, call_data, today, account_id=vid)
+                    elif call_type == "activity":
+                        _store_activity_summary(conn, call_data, today, start_date, account_id=vid)
+                    elif call_type == "alloc":
+                        _store_asset_allocation(conn, call_data, today, account_id=vid)
+
+    with get_db() as conn:
         # Remove old manual entries now superseded by I360 live data
         if acct_mapping:
             _remove_superseded_manual_entries(conn)
@@ -915,35 +985,66 @@ def get_account_holdings(account_id: int, user=Depends(get_current_user)):
 
 
 @router.get("/performance")
-def get_performance(user=Depends(get_current_user)):
-    """Latest TWR performance returns with benchmarks."""
+def get_performance(account_id: int | None = None, user=Depends(get_current_user)):
+    """Latest TWR performance returns with benchmarks.
+
+    Pass ?account_id=N for per-account performance; omit for portfolio-wide.
+    """
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT MAX(snapped_at) AS d FROM i360_performance"
-        ).fetchone()
+        if account_id is not None:
+            row = conn.execute(
+                "SELECT MAX(snapped_at) AS d FROM i360_performance WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT MAX(snapped_at) AS d FROM i360_performance WHERE account_id IS NULL"
+            ).fetchone()
         if not row or not row["d"]:
             return []
-        rows = conn.execute(
-            "SELECT * FROM i360_performance WHERE snapped_at = ?",
-            (row["d"],),
-        ).fetchall()
+        if account_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM i360_performance WHERE snapped_at = ? AND account_id = ?",
+                (row["d"], account_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM i360_performance WHERE snapped_at = ? AND account_id IS NULL",
+                (row["d"],),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
 @router.get("/asset-allocation")
-def get_asset_allocation(user=Depends(get_current_user)):
-    """Latest asset allocation breakdown."""
+def get_asset_allocation(account_id: int | None = None, user=Depends(get_current_user)):
+    """Latest asset allocation breakdown.
+
+    Pass ?account_id=N for per-account allocation; omit for portfolio-wide.
+    """
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT MAX(snapped_at) AS d FROM i360_asset_allocation"
-        ).fetchone()
+        if account_id is not None:
+            row = conn.execute(
+                "SELECT MAX(snapped_at) AS d FROM i360_asset_allocation WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT MAX(snapped_at) AS d FROM i360_asset_allocation WHERE account_id IS NULL"
+            ).fetchone()
         if not row or not row["d"]:
             return []
-        rows = conn.execute(
-            """SELECT * FROM i360_asset_allocation
-               WHERE snapped_at = ? ORDER BY market_value DESC""",
-            (row["d"],),
-        ).fetchall()
+        if account_id is not None:
+            rows = conn.execute(
+                """SELECT * FROM i360_asset_allocation
+                   WHERE snapped_at = ? AND account_id = ? ORDER BY market_value DESC""",
+                (row["d"], account_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT * FROM i360_asset_allocation
+                   WHERE snapped_at = ? AND account_id IS NULL ORDER BY market_value DESC""",
+                (row["d"],),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -958,18 +1059,33 @@ def get_balance_history(user=Depends(get_current_user)):
 
 
 @router.get("/activity-summary")
-def get_activity_summary(user=Depends(get_current_user)):
-    """Latest activity summary."""
+def get_activity_summary(account_id: int | None = None, user=Depends(get_current_user)):
+    """Latest activity summary.
+
+    Pass ?account_id=N for per-account activity; omit for portfolio-wide.
+    """
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT MAX(snapped_at) AS d FROM i360_activity_summary"
-        ).fetchone()
+        if account_id is not None:
+            row = conn.execute(
+                "SELECT MAX(snapped_at) AS d FROM i360_activity_summary WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT MAX(snapped_at) AS d FROM i360_activity_summary WHERE account_id IS NULL"
+            ).fetchone()
         if not row or not row["d"]:
             return {}
-        result = conn.execute(
-            "SELECT * FROM i360_activity_summary WHERE snapped_at = ?",
-            (row["d"],),
-        ).fetchone()
+        if account_id is not None:
+            result = conn.execute(
+                "SELECT * FROM i360_activity_summary WHERE snapped_at = ? AND account_id = ?",
+                (row["d"], account_id),
+            ).fetchone()
+        else:
+            result = conn.execute(
+                "SELECT * FROM i360_activity_summary WHERE snapped_at = ? AND account_id IS NULL",
+                (row["d"],),
+            ).fetchone()
         return dict(result) if result else {}
 
 

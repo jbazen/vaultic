@@ -65,17 +65,17 @@ export default function I360AccountCard({ account, onRenamed, BalanceChart }) {
     setActiveTab(tab);
     if (tab === "performance" && performance === null) {
       setLoading(true);
-      try { const data = await i360Performance(); setPerformance(data); }
+      try { const data = await i360Performance(account.id); setPerformance(data); }
       finally { setLoading(false); }
     }
     if (tab === "activity" && activity === null) {
       setLoading(true);
-      try { const data = await i360ActivitySummary(); setActivity(data); }
+      try { const data = await i360ActivitySummary(account.id); setActivity(data); }
       finally { setLoading(false); }
     }
     if (tab === "allocation" && allocation === null) {
       setLoading(true);
-      try { const data = await i360AssetAllocation(); setAllocation(data); }
+      try { const data = await i360AssetAllocation(account.id); setAllocation(data); }
       finally { setLoading(false); }
     }
   }

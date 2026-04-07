@@ -1123,20 +1123,23 @@ export async function i360AccountHoldings(accountId) {
   const res = await apiFetch(`/api/investor360/holdings/${accountId}`);
   return res.json();
 }
-export async function i360Performance() {
-  const res = await apiFetch("/api/investor360/performance");
+export async function i360Performance(accountId) {
+  const q = accountId != null ? `?account_id=${accountId}` : "";
+  const res = await apiFetch(`/api/investor360/performance${q}`);
   return res.json();
 }
-export async function i360AssetAllocation() {
-  const res = await apiFetch("/api/investor360/asset-allocation");
+export async function i360AssetAllocation(accountId) {
+  const q = accountId != null ? `?account_id=${accountId}` : "";
+  const res = await apiFetch(`/api/investor360/asset-allocation${q}`);
   return res.json();
 }
 export async function i360BalanceHistory() {
   const res = await apiFetch("/api/investor360/balance-history");
   return res.json();
 }
-export async function i360ActivitySummary() {
-  const res = await apiFetch("/api/investor360/activity-summary");
+export async function i360ActivitySummary(accountId) {
+  const q = accountId != null ? `?account_id=${accountId}` : "";
+  const res = await apiFetch(`/api/investor360/activity-summary${q}`);
   return res.json();
 }
 export async function i360MarketSummary() {

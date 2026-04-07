@@ -248,12 +248,27 @@ class Investor360Client:
         self.warnings.extend(validate_response("account_balances", data))
         return data
 
-    async def get_performance(self, household_id: int, as_of: date) -> list:
-        """TWR returns: MTD, QTD, YTD, 1/3/5yr, inception vs benchmarks."""
+    async def get_performance(
+        self, household_id: int, as_of: date,
+        *, account_id: int | None = None, account_name: str | None = None,
+    ) -> list:
+        """TWR returns: MTD, QTD, YTD, 1/3/5yr, inception vs benchmarks.
+
+        Pass account_id + account_name for per-account performance.
+        Omit both for portfolio-wide (All Accounts).
+        """
+        if account_id is not None:
+            group_type = 5
+            selection_value = account_id
+            group_name = account_name or str(account_id)
+        else:
+            group_type = 0
+            selection_value = household_id
+            group_name = "All Accounts"
         body = {
-            "accountSelectionGroupType": 0,
-            "accountSelectionValue": household_id,
-            "groupName": "All Accounts",
+            "accountSelectionGroupType": group_type,
+            "accountSelectionValue": selection_value,
+            "groupName": group_name,
             "asOfDate": f"{as_of.isoformat()}T00:00:00",
             "startDate": f"{as_of.year}-01-01T00:00:00",
             "endDate": f"{as_of.isoformat()}T00:00:00",
@@ -266,20 +281,34 @@ class Investor360Client:
         self.warnings.extend(validate_response("performance", data))
         return data
 
-    async def get_asset_allocation(self, household_id: int, as_of: date) -> dict:
+    async def get_asset_allocation(
+        self, household_id: int, as_of: date,
+        *, account_id: int | None = None, account_name: str | None = None,
+    ) -> dict:
         """Asset class breakdown with market values.
 
         Uses yesterday's date because today's allocation isn't available
         until after market close.
+
+        Pass account_id + account_name for per-account allocation.
+        Omit both for portfolio-wide (All Accounts).
         """
         from datetime import timedelta
+        if account_id is not None:
+            group_type = 5
+            selection_value = account_id
+            group_name = account_name or str(account_id)
+        else:
+            group_type = 0
+            selection_value = household_id
+            group_name = "All Accounts"
         # Try yesterday first (today's data not available during market hours)
         for offset in [1, 0, 2]:
             target = as_of - timedelta(days=offset)
             body = {
-                "accountSelectionGroupType": 0,
-                "accountSelectionValue": household_id,
-                "groupName": "All Accounts",
+                "accountSelectionGroupType": group_type,
+                "accountSelectionValue": selection_value,
+                "groupName": group_name,
                 "asOfDate": f"{target.isoformat()}T00:00:00",
                 "householdId": 0,
                 "assetType": 1,
@@ -319,14 +348,27 @@ class Investor360Client:
         return data
 
     async def get_activity_summary(
-        self, household_id: int, as_of: date, start_date: str | None = None
+        self, household_id: int, as_of: date, start_date: str | None = None,
+        *, account_id: int | None = None, account_name: str | None = None,
     ) -> list:
-        """Period contributions, withdrawals, fees, net change."""
+        """Period contributions, withdrawals, fees, net change.
+
+        Pass account_id + account_name for per-account activity.
+        Omit both for portfolio-wide (All Accounts).
+        """
         start = start_date or f"{as_of.year}-01-01"
+        if account_id is not None:
+            group_type = 5
+            selection_value = account_id
+            group_name = account_name or str(account_id)
+        else:
+            group_type = 0
+            selection_value = household_id
+            group_name = "All Accounts"
         body = {
-            "accountSelectionGroupType": 0,
-            "accountSelectionValue": household_id,
-            "groupName": "All Accounts",
+            "accountSelectionGroupType": group_type,
+            "accountSelectionValue": selection_value,
+            "groupName": group_name,
             "asOfDate": f"{as_of.isoformat()}T00:00:00",
             "startDate": f"{start}T00:00:00",
             "householdId": 0,

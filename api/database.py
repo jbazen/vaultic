@@ -902,6 +902,22 @@ MIGRATIONS = [
     "ON i360_holdings(account_number, snapped_at, i360_holding_id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_i360_balances_acctnum_date "
     "ON i360_account_balances(account_number, snapped_at)",
+    # Per-account performance, activity, and allocation (#27)
+    "ALTER TABLE i360_performance ADD COLUMN account_id INTEGER",
+    "ALTER TABLE i360_asset_allocation ADD COLUMN account_id INTEGER",
+    "ALTER TABLE i360_activity_summary ADD COLUMN account_id INTEGER",
+    # Replace old UNIQUE constraints with account_id-aware ones.
+    # SQLite can't ALTER UNIQUE constraints, so we drop the old implicit indexes
+    # by creating new named ones. INSERT OR REPLACE keys off these.
+    "DROP INDEX IF EXISTS sqlite_autoindex_i360_performance_1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_i360_perf_snap_period_acct "
+    "ON i360_performance(snapped_at, time_period, COALESCE(account_id, 0))",
+    "DROP INDEX IF EXISTS sqlite_autoindex_i360_asset_allocation_1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_i360_alloc_snap_name_acct "
+    "ON i360_asset_allocation(snapped_at, asset_name, COALESCE(account_id, 0))",
+    "DROP INDEX IF EXISTS sqlite_autoindex_i360_activity_summary_1",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_i360_activity_snap_start_acct "
+    "ON i360_activity_summary(snapped_at, start_date, COALESCE(account_id, 0))",
 ]
 
 
