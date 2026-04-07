@@ -302,7 +302,8 @@ class Investor360Client:
             group_type = 0
             selection_value = household_id
             group_name = "All Accounts"
-        # Try yesterday first (today's data not available during market hours)
+        # Try yesterday (1), then today (0), then two days ago (2).
+        # Today's allocation isn't available until after market close.
         for offset in [1, 0, 2]:
             target = as_of - timedelta(days=offset)
             body = {

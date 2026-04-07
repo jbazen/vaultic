@@ -350,6 +350,184 @@ class TestStoreHelpers:
         assert data["net_contributions_withdrawals"] == 4200.0
 
 
+# ── Per-account data tests ─────────────────────────────────────────────────
+
+class TestPerAccountData:
+    """Verify per-account queries return account-specific data, not portfolio-wide."""
+
+    def test_per_account_performance(self, client, auth_headers):
+        from api.database import get_db
+        from api.routers.investor360 import _store_performance
+        from datetime import date
+
+        today = date.today()
+        portfolio_data = [{"timePeriod": "YTDReturn", "displayName": "YTD",
+                           "portfolio": "5.25", "benchmarks": [], "hideMe": False}]
+        acct_data = [{"timePeriod": "YTDReturn", "displayName": "YTD",
+                      "portfolio": "8.10", "benchmarks": [], "hideMe": False}]
+        with get_db() as conn:
+            _store_performance(conn, portfolio_data, today)           # portfolio-wide
+            _store_performance(conn, acct_data, today, account_id=1)  # per-account
+
+        # Portfolio-wide (no param)
+        resp = client.get("/api/investor360/performance", headers=auth_headers)
+        data = resp.json()
+        assert data[0]["portfolio_return"] == 5.25
+
+        # Per-account
+        resp = client.get("/api/investor360/performance?account_id=1", headers=auth_headers)
+        data = resp.json()
+        assert data[0]["portfolio_return"] == 8.10
+
+    def test_per_account_allocation(self, client, auth_headers):
+        from api.database import get_db
+        from api.routers.investor360 import _store_asset_allocation
+        from datetime import date
+
+        today = date.today()
+        # Use a unique asset name to avoid collision with other tests
+        portfolio_alloc = {"assetBalances": [{"assetName": "Per-Acct Test Bond", "marketValue": 50000}]}
+        acct_alloc = {"assetBalances": [{"assetName": "Per-Acct Test Bond", "marketValue": 12000}]}
+        with get_db() as conn:
+            _store_asset_allocation(conn, portfolio_alloc, today)
+            _store_asset_allocation(conn, acct_alloc, today, account_id=2)
+
+        # Per-account should return only the account-specific data
+        resp = client.get("/api/investor360/asset-allocation?account_id=2", headers=auth_headers)
+        data = resp.json()
+        bond_rows = [d for d in data if d["asset_name"] == "Per-Acct Test Bond"]
+        assert len(bond_rows) == 1
+        assert bond_rows[0]["market_value"] == 12000
+
+    def test_per_account_activity(self, client, auth_headers):
+        from api.database import get_db
+        from api.routers.investor360 import _store_activity_summary
+        from datetime import date
+
+        today = date.today()
+        portfolio_act = [{"beginningBalance": 500000, "endingBalance": 510000}]
+        acct_act = [{"beginningBalance": 100000, "endingBalance": 102000}]
+        with get_db() as conn:
+            _store_activity_summary(conn, portfolio_act, today, f"{today.year}-01-01")
+            _store_activity_summary(conn, acct_act, today, f"{today.year}-01-01", account_id=3)
+
+        resp = client.get("/api/investor360/activity-summary", headers=auth_headers)
+        data = resp.json()
+        assert data["beginning_balance"] == 500000
+
+        resp = client.get("/api/investor360/activity-summary?account_id=3", headers=auth_headers)
+        data = resp.json()
+        assert data["beginning_balance"] == 100000
+
+    def test_per_account_returns_empty_when_no_data(self, client, auth_headers):
+        """Querying a non-existent account_id returns empty, not portfolio data."""
+        from api.database import get_db
+        from api.routers.investor360 import _store_performance
+        from datetime import date
+
+        today = date.today()
+        with get_db() as conn:
+            _store_performance(conn, [{"timePeriod": "MTD", "displayName": "MTD",
+                                       "portfolio": "1.0", "benchmarks": [], "hideMe": False}], today)
+
+        resp = client.get("/api/investor360/performance?account_id=999", headers=auth_headers)
+        assert resp.json() == []
+
+
+# ── Migration test ─────────────────────────────────────────────────────────
+
+class TestI360Migration:
+    """Verify the table recreation migration preserves data and fixes constraints."""
+
+    def test_migration_preserves_data_and_allows_per_account(self):
+        """Simulate old schema with autoindex, run migration, verify coexistence."""
+        import sqlite3
+        import tempfile
+        import os
+
+        db_path = tempfile.mktemp(suffix=".db")
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+
+            # Create table with OLD schema (inline UNIQUE, no account_id)
+            conn.execute("""CREATE TABLE i360_performance (
+                id INTEGER PRIMARY KEY, snapped_at DATE NOT NULL,
+                time_period TEXT NOT NULL, display_name TEXT,
+                portfolio_return REAL, benchmark_sp500 REAL,
+                benchmark_bond REAL, benchmark_tbill REAL,
+                UNIQUE(snapped_at, time_period)
+            )""")
+            conn.execute("ALTER TABLE i360_performance ADD COLUMN account_id INTEGER")
+            conn.execute(
+                "INSERT INTO i360_performance (snapped_at, time_period, portfolio_return) "
+                "VALUES ('2026-04-06', 'MTD', 1.5)"
+            )
+            conn.commit()
+
+            # Verify autoindex exists
+            autoindexes = [r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND name LIKE 'sqlite_autoindex_i360_performance%'"
+            ).fetchall()]
+            assert len(autoindexes) > 0
+
+            # Run the migration logic (inline, since we can't call the real function
+            # without full DB setup)
+            conn.execute("""CREATE TABLE _i360_performance_new (
+                id INTEGER PRIMARY KEY, snapped_at DATE NOT NULL,
+                time_period TEXT NOT NULL, display_name TEXT,
+                portfolio_return REAL, benchmark_sp500 REAL,
+                benchmark_bond REAL, benchmark_tbill REAL, account_id INTEGER
+            )""")
+            conn.execute("""INSERT OR IGNORE INTO _i360_performance_new
+                (id, snapped_at, time_period, display_name, portfolio_return,
+                 benchmark_sp500, benchmark_bond, benchmark_tbill, account_id)
+                SELECT id, snapped_at, time_period, display_name, portfolio_return,
+                       benchmark_sp500, benchmark_bond, benchmark_tbill, account_id
+                FROM i360_performance""")
+            conn.execute("DROP TABLE i360_performance")
+            conn.execute("ALTER TABLE _i360_performance_new RENAME TO i360_performance")
+            conn.execute(
+                "CREATE UNIQUE INDEX ux_i360_perf_snap_period_acct "
+                "ON i360_performance(snapped_at, time_period, COALESCE(account_id, 0))"
+            )
+            conn.commit()
+
+            # Verify autoindex is gone
+            autoindexes = [r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND name LIKE 'sqlite_autoindex_i360_performance%'"
+            ).fetchall()]
+            assert len(autoindexes) == 0
+
+            # Existing portfolio data preserved
+            rows = conn.execute("SELECT * FROM i360_performance").fetchall()
+            assert len(rows) == 1
+            assert rows[0]["portfolio_return"] == 1.5
+
+            # Per-account insert now coexists with portfolio row
+            conn.execute(
+                "INSERT OR REPLACE INTO i360_performance "
+                "(snapped_at, time_period, portfolio_return, account_id) "
+                "VALUES ('2026-04-06', 'MTD', 2.5, 42)"
+            )
+            conn.commit()
+
+            rows = conn.execute(
+                "SELECT * FROM i360_performance ORDER BY account_id"
+            ).fetchall()
+            assert len(rows) == 2
+            assert rows[0]["portfolio_return"] == 1.5   # portfolio-wide
+            assert rows[0]["account_id"] is None
+            assert rows[1]["portfolio_return"] == 2.5   # per-account
+            assert rows[1]["account_id"] == 42
+
+        finally:
+            conn.close()
+            os.unlink(db_path)
+
+
 # ── Sync log test ──────────────────────────────────────────────────────────
 
 class TestSyncLog:

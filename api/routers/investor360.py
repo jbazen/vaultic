@@ -767,7 +767,8 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
                 for call_name, call_data in per_results:
                     if call_data is None:
                         continue
-                    # Parse "type_i360id" to get account info
+                    # Parse call_name format "type_i360id" (e.g. "perf_3753496")
+                    # to route data to the correct storage function and Vaultic account.
                     parts = call_name.split("_", 1)
                     call_type = parts[0]
                     i360_id_str = parts[1]
@@ -989,6 +990,7 @@ def get_performance(account_id: int | None = None, user=Depends(get_current_user
     """Latest TWR performance returns with benchmarks.
 
     Pass ?account_id=N for per-account performance; omit for portfolio-wide.
+    Portfolio rows have account_id IS NULL; per-account rows have account_id = N.
     """
     with get_db() as conn:
         if account_id is not None:

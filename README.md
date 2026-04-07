@@ -1116,12 +1116,13 @@ Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client po
 - [x] **Coinbase integration** — Coinbase Advanced Trade API with CDP JWT auth
 - [x] **Continuous backup** — Litestream → Cloudflare R2, 7-day retention, one-command restore
 - [x] **Plaid Production** — approved 2026-03-17; non-OAuth institutions live
-- [x] **Test suite** — 458+ backend unit tests + 26 Playwright E2E tests
+- [x] **Test suite** — 475+ backend unit tests + 26 Playwright E2E tests
 - [x] **Sage budget tools** — full suite: `get_budget`, `get_budget_history`, auto-assign, transaction assignment, splits
 - [x] **Tax module** — W-4 multi-job optimizer, 1040-ES estimated tax calculator, tax projection, draft return, AZ state tax, document checklist, paystub upload
 - [x] **Capital gains tracker** — Coinbase trade sync, FIFO lot matching, short/long-term classification, Schedule D reporting, Sage tool
 - [x] **Financial calendar** — native calendar with tax deadlines, 1040-ES, budget meetings; react-big-calendar UI; Sage tool
-- [x] **Investor360 API sync** — Parker Financial accounts synced via Investor360 API; holdings, balances, performance, asset allocation, activity
+- [x] **Investor360 API sync** — Parker Financial accounts synced via Investor360 API; holdings, balances, performance, asset allocation, activity; per-account drill-down for each Parker account
+- [x] **Parker sync reminder** — daily push notification when Investor360 session is stale (>24h)
 - [x] **Account number migration** — canonical `account_number` column across all tables; unique indexes; snapshot/holdings history backfill
 - [x] **Persistent mobile sessions** — refresh tokens (90-day rotating), "Keep me signed in" checkbox
 - [x] **Ticker feed** — personalized market quotes + financial news on dashboard
@@ -1129,8 +1130,7 @@ Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client po
 - [x] **Peer review** — 45+ code quality findings addressed; major component extractions (Budget, Taxes, Dashboard, sage.py)
 
 ### In Progress / Upcoming
-- [ ] **Parker UI enhancements** — enhance account summary and details pages with I360 data (performance, asset allocation, activity)
-- [ ] **Daily Parker sync reminder** — notification to re-authenticate I360 session
+- [ ] **Insperity data integration** — replicate I360-style ingestion for Insperity 401K (performance, activity, allocation)
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
 - [ ] **Uploader consolidation** — unified upload flow: vault-first, then parse, then import; single entry point
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen; push notifications for pending review alerts

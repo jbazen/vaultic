@@ -1123,6 +1123,7 @@ export async function i360AccountHoldings(accountId) {
   const res = await apiFetch(`/api/investor360/holdings/${accountId}`);
   return res.json();
 }
+// Pass accountId for per-account data; omit for portfolio-wide.
 export async function i360Performance(accountId) {
   const q = accountId != null ? `?account_id=${accountId}` : "";
   const res = await apiFetch(`/api/investor360/performance${q}`);
