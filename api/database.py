@@ -1190,11 +1190,9 @@ def init_db():
             _migrate_encrypt_totp_secrets(conn)
         except Exception as exc:
             logger.warning("TOTP encryption migration failed: %s", exc)
-        # One-time: archive old budget items/groups with no recent planned amounts
-        try:
-            _migrate_auto_archive_budget(conn)
-        except Exception as exc:
-            logger.warning("Budget auto-archive migration failed: %s", exc)
+        # Auto-archive migration removed — it ran on every startup and re-archived
+        # newly created items that had $0 planned, undoing user actions. The original
+        # migration has already run; future archiving is user-initiated only (DELETE).
         # Populate account_number for Coinbase accounts + backfill account_balances
         try:
             _migrate_coinbase_account_numbers(conn)
