@@ -158,7 +158,7 @@ def _store_prices(conn, prices: list[dict], snapped_at: date):
 
 
 def _update_manual_entry(conn, total_balance: float | None, today: date):
-    """Update the Insperity manual_entries row with latest balance and snapshot."""
+    """Update the Insperity manual_entries row with latest balance."""
     if total_balance is None:
         return
     conn.execute(
@@ -166,7 +166,6 @@ def _update_manual_entry(conn, total_balance: float | None, today: date):
         "WHERE account_number = ? AND category = 'invested'",
         (total_balance, today.isoformat(), INSPERITY_ACCOUNT_NUMBER),
     )
-    _take_net_worth_snapshot(today.isoformat())
 
 
 # ── Sync endpoint ────────────────────────────────────────────────────────────
@@ -270,8 +269,12 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
              json.dumps(warnings) if warnings else None),
         )
 
-        # Update manual entry + net worth snapshot
+        # Update manual entry balance (inside transaction)
         _update_manual_entry(conn, total_balance, today)
+
+    # Snapshot after DB transaction closes (opens its own connection)
+    if total_balance is not None:
+        _take_net_worth_snapshot(today.isoformat())
 
     duration_ms = int((time.time() - start_time) * 1000)
 
@@ -377,8 +380,12 @@ def sync_local(req: LocalSyncRequest, user=Depends(get_current_user)):
              "; ".join(errors) if errors else None),
         )
 
-        # Update manual entry + net worth snapshot
+        # Update manual entry balance (inside transaction)
         _update_manual_entry(conn, total_balance, today)
+
+    # Snapshot after DB transaction closes (opens its own connection)
+    if total_balance is not None:
+        _take_net_worth_snapshot(today.isoformat())
 
     return {
         "ok": True,
