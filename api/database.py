@@ -1263,12 +1263,24 @@ def _migrate_i360_account_numbers(conn):
 
 
 def _migrate_restore_insperity(conn):
-    """Restore Insperity 401K manual entry that was deleted by blanket DELETE.
+    """Restore Insperity 401K manual entry and normalize account_number.
 
-    Re-creates the manual_entries row with account_number = 'insperity_401k'.
+    Re-creates the manual_entries row with account_number = '105001401K'.
+    Renames old 'insperity_401k' references across all tables.
     Fixes NULL account_number on orphaned snapshots and holdings snapshots.
     Idempotent — skips if entry already exists.
     """
+    # Rename old account_number to new canonical form
+    for tbl, col in [
+        ("manual_entries", "account_number"),
+        ("manual_entry_snapshots", "account_number"),
+        ("manual_holdings_snapshots", "account_number"),
+    ]:
+        conn.execute(
+            f"UPDATE {tbl} SET {col} = '105001401K' "
+            f"WHERE {col} = 'insperity_401k'"
+        )
+
     # Check if entry already exists
     existing = conn.execute(
         "SELECT id FROM manual_entries "
@@ -1285,7 +1297,7 @@ def _migrate_restore_insperity(conn):
         conn.execute(
             "INSERT INTO manual_entries "
             "(name, category, value, account_number, entered_at, exclude_from_net_worth) "
-            "VALUES ('INSPERITY 401K PLAN', 'invested', ?, 'insperity_401k', "
+            "VALUES ('INSPERITY 401K PLAN', 'invested', ?, '105001401K', "
             "date('now'), 0)",
             (value,),
         )
@@ -1293,12 +1305,12 @@ def _migrate_restore_insperity(conn):
 
     # Fix NULL account_number on orphaned snapshots
     conn.execute(
-        "UPDATE manual_entry_snapshots SET account_number = 'insperity_401k' "
+        "UPDATE manual_entry_snapshots SET account_number = '105001401K' "
         "WHERE name = 'INSPERITY 401K PLAN' "
         "AND (account_number IS NULL OR account_number = '')"
     )
     conn.execute(
-        "UPDATE manual_holdings_snapshots SET account_number = 'insperity_401k' "
+        "UPDATE manual_holdings_snapshots SET account_number = '105001401K' "
         "WHERE entry_name = 'INSPERITY 401K PLAN' "
         "AND (account_number IS NULL OR account_number = '')"
     )

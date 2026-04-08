@@ -524,7 +524,7 @@ class TestI360AccountNumbers:
 
 
 class TestInsperityRestore:
-    """Insperity 401K restored with account_number = 'insperity_401k'."""
+    """Insperity 401K restored with account_number = '105001401K'."""
 
     def test_migration_restores_insperity_entry(self):
         with _test_get_db() as conn:
@@ -545,7 +545,7 @@ class TestInsperityRestore:
             ).fetchone()
             assert row is not None
             assert row["category"] == "invested"
-            assert row["account_number"] == "insperity_401k"
+            assert row["account_number"] == "105001401K"
             assert row["value"] == 1391.66
 
     def test_migration_fixes_snapshot_account_number(self):
@@ -565,7 +565,7 @@ class TestInsperityRestore:
                 "SELECT account_number FROM manual_entry_snapshots "
                 "WHERE name = 'INSPERITY 401K PLAN'"
             ).fetchone()
-            assert snap[0] == "insperity_401k"
+            assert snap[0] == "105001401K"
 
     def test_migration_fixes_holdings_snapshot_account_number(self):
         with _test_get_db() as conn:
@@ -585,7 +585,7 @@ class TestInsperityRestore:
                 "SELECT account_number FROM manual_holdings_snapshots "
                 "WHERE entry_name = 'INSPERITY 401K PLAN'"
             ).fetchone()
-            assert snap[0] == "insperity_401k"
+            assert snap[0] == "105001401K"
 
     def test_migration_uses_snapshot_value_if_available(self):
         """If snapshot exists, use its value rather than hardcoded fallback."""
@@ -832,7 +832,7 @@ class TestRemoveSuperseded:
             self._seed_i360_map(conn, "B37705429")
             conn.execute(
                 "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
-                "VALUES ('RM_TEST_Insperity', 'invested', 1391.66, '2026-04-01', 'insperity_401k')"
+                "VALUES ('RM_TEST_Insperity', 'invested', 1391.66, '2026-04-01', '105001401K')"
             )
             conn.commit()
             try:

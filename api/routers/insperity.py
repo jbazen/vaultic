@@ -21,8 +21,11 @@ from api.insperity_client import (
     PageChangedError,
     parse_curl_cookies,
 )
+from api.sync import _take_net_worth_snapshot
 
 logger = logging.getLogger(__name__)
+
+INSPERITY_ACCOUNT_NUMBER = "105001401K"
 router = APIRouter(prefix="/api/insperity", tags=["insperity"])
 
 
@@ -154,6 +157,18 @@ def _store_prices(conn, prices: list[dict], snapped_at: date):
         )
 
 
+def _update_manual_entry(conn, total_balance: float | None, today: date):
+    """Update the Insperity manual_entries row with latest balance and snapshot."""
+    if total_balance is None:
+        return
+    conn.execute(
+        "UPDATE manual_entries SET value = ?, entered_at = ? "
+        "WHERE account_number = ? AND category = 'invested'",
+        (total_balance, today.isoformat(), INSPERITY_ACCOUNT_NUMBER),
+    )
+    _take_net_worth_snapshot(today.isoformat())
+
+
 # ── Sync endpoint ────────────────────────────────────────────────────────────
 
 @router.post("/sync")
@@ -254,6 +269,9 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
              "; ".join(errors) if errors else None,
              json.dumps(warnings) if warnings else None),
         )
+
+        # Update manual entry + net worth snapshot
+        _update_manual_entry(conn, total_balance, today)
 
     duration_ms = int((time.time() - start_time) * 1000)
 
@@ -358,6 +376,9 @@ def sync_local(req: LocalSyncRequest, user=Depends(get_current_user)):
             (status, holdings_count, total_balance, duration_ms,
              "; ".join(errors) if errors else None),
         )
+
+        # Update manual entry + net worth snapshot
+        _update_manual_entry(conn, total_balance, today)
 
     return {
         "ok": True,

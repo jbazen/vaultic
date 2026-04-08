@@ -507,3 +507,82 @@ class TestSyncLocal:
                            headers=auth_headers, json=payload)
         assert resp.status_code == 200
         assert resp.json()["status"] == "success"
+
+
+class TestSyncUpdatesManualEntry:
+    """Sync-local should update manual_entries and trigger net worth snapshot."""
+
+    PAYLOAD = {
+        "summary": {"account_balance": 1500.00, "vested_balance": 1500.00},
+        "holdings": {
+            "holdings": [
+                {"fund": "Test Fund", "balance": 1500.00,
+                 "shares": 100.0, "price": 15.00, "ratio_pct": 100.0}
+            ],
+            "total_balance": 1500.00,
+        },
+    }
+
+    def _seed_manual_entry(self):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute(
+                "DELETE FROM manual_entries "
+                "WHERE account_number = '105001401K'"
+            )
+            conn.execute(
+                "INSERT INTO manual_entries "
+                "(name, category, value, account_number, entered_at, "
+                "exclude_from_net_worth) "
+                "VALUES ('INSPERITY 401K PLAN', 'invested', 1000.00, "
+                "'105001401K', '2026-04-01', 0)"
+            )
+
+    def test_sync_local_updates_manual_entry_value(self, client, auth_headers):
+        self._seed_manual_entry()
+        resp = client.post("/api/insperity/sync-local",
+                           headers=auth_headers, json=self.PAYLOAD)
+        assert resp.status_code == 200
+
+        from api.database import get_db
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT value FROM manual_entries "
+                "WHERE account_number = '105001401K'"
+            ).fetchone()
+        assert row["value"] == 1500.00
+
+    def test_sync_local_triggers_net_worth_snapshot(self, client, auth_headers):
+        self._seed_manual_entry()
+        resp = client.post("/api/insperity/sync-local",
+                           headers=auth_headers, json=self.PAYLOAD)
+        assert resp.status_code == 200
+
+        from api.database import get_db
+        from datetime import date
+        today = date.today().isoformat()
+        with get_db() as conn:
+            snap = conn.execute(
+                "SELECT invested FROM net_worth_snapshots "
+                "WHERE snapped_at = ?", (today,)
+            ).fetchone()
+        assert snap is not None, "net worth snapshot should exist after sync"
+        assert snap["invested"] >= 1500.00
+
+    def test_sync_local_no_balance_skips_update(self, client, auth_headers):
+        """If sync has no total_balance, manual entry should not change."""
+        self._seed_manual_entry()
+        payload = {"performance": {
+            "cumulative": {"1_month": 1.0, "3_month": 2.0, "ytd": 3.0},
+            "annualized": {"1_month": 1.0, "3_month": 0.5, "ytd": 0.3},
+        }}
+        client.post("/api/insperity/sync-local",
+                     headers=auth_headers, json=payload)
+
+        from api.database import get_db
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT value FROM manual_entries "
+                "WHERE account_number = '105001401K'"
+            ).fetchone()
+        assert row["value"] == 1000.00
