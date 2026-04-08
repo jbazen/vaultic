@@ -9,6 +9,7 @@ import PlaidLink from "../components/PlaidLink.jsx";
 import EditableNotes from "../components/EditableNotes.jsx";
 import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
 import I360AccountCard from "../components/accounts/I360AccountCard.jsx";
+import InsperityAccountCard from "../components/accounts/InsperityAccountCard.jsx";
 import { isRetirementAccount } from "../utils/accounts.js";
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { fmt, fmtCrypto, fmtPrice, fmtPercent as fmtPct, fmtNum, fmtDate, fmtCompact, fmtAxisDate } from "../utils/format.js";
@@ -992,7 +993,11 @@ export default function Accounts() {
           <div className="account-list">
             {[...manualEntries.filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth))]
               .sort((a, b) => (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name))
-              .map(entry => (
+              .map(entry => entry.account_number === "105001401K" ? (
+                <InsperityAccountCard key={entry.id} entry={entry}
+                  onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+                  onToggleExclude={load} onRenamed={load} />
+              ) : (
                 <ManualInvestmentCard key={entry.id} entry={entry}
                   onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
                   onToggleExclude={load} onRenamed={load} />
