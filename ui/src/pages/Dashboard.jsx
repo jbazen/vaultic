@@ -16,6 +16,7 @@ import { fmt, fmtSigned, fmtDate } from "../utils/format.js";
 import CalendarSection from "../components/calendar/CalendarSection.jsx";
 import NewsFeedPanel from "../components/dashboard/NewsFeedPanel.jsx";
 import I360SyncModal from "../components/dashboard/I360SyncModal.jsx";
+import InsperitySyncModal from "../components/dashboard/InsperitySyncModal.jsx";
 import I360SummarySection from "../components/dashboard/I360SummarySection.jsx";
 import MarketSummaryCard from "../components/dashboard/MarketSummaryCard.jsx";
 
@@ -56,6 +57,7 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [i360Open, setI360Open] = useState(false);
+  const [insperityOpen, setInsperityOpen] = useState(false);
   const mountedRef = useRef(true);
 
   async function load() {
@@ -173,6 +175,9 @@ export default function Dashboard() {
           <PlaidLink onSuccess={load} />
           <button className="btn btn-secondary" onClick={() => setI360Open(true)}>
             ⟳ Parker
+          </button>
+          <button className="btn btn-secondary" onClick={() => setInsperityOpen(true)}>
+            ⟳ Insperity
           </button>
           <button className="btn btn-secondary" onClick={handleCoinbaseSync} disabled={coinbaseSyncing}>
             {coinbaseSyncing ? "Syncing…" : "⟳ Coinbase"}
@@ -412,6 +417,7 @@ export default function Dashboard() {
       </div>
 
       <I360SyncModal open={i360Open} onClose={() => setI360Open(false)} onSynced={load} />
+      <InsperitySyncModal open={insperityOpen} onClose={() => setInsperityOpen(false)} onSynced={load} />
     </div>
   );
 }

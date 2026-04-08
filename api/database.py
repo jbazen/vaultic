@@ -912,6 +912,64 @@ MIGRATIONS = [
     "ON i360_asset_allocation(snapped_at, asset_name, COALESCE(account_id, 0))",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_i360_activity_snap_start_acct "
     "ON i360_activity_summary(snapped_at, start_date, COALESCE(account_id, 0))",
+    # ── Insperity 401K tables ────────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS insperity_sync_log (
+        id              INTEGER PRIMARY KEY,
+        synced_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status          TEXT NOT NULL,
+        holdings_count  INTEGER DEFAULT 0,
+        total_balance   REAL,
+        duration_ms     INTEGER,
+        error           TEXT,
+        warnings        TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS insperity_holdings (
+        id          INTEGER PRIMARY KEY,
+        snapped_at  DATE NOT NULL,
+        fund        TEXT NOT NULL,
+        balance     REAL,
+        shares      REAL,
+        price       REAL,
+        ratio_pct   REAL,
+        UNIQUE(snapped_at, fund)
+    )""",
+    """CREATE TABLE IF NOT EXISTS insperity_performance (
+        id          INTEGER PRIMARY KEY,
+        snapped_at  DATE NOT NULL,
+        period      TEXT NOT NULL,
+        cumulative  REAL,
+        annualized  REAL,
+        UNIQUE(snapped_at, period)
+    )""",
+    """CREATE TABLE IF NOT EXISTS insperity_contributions (
+        id                INTEGER PRIMARY KEY,
+        snapped_at        DATE NOT NULL UNIQUE,
+        pretax_pct        REAL,
+        roth_pct          REAL,
+        ytd_employee      REAL,
+        ytd_employer      REAL,
+        last_ee_amount    REAL,
+        last_er_amount    REAL,
+        last_ee_date      TEXT,
+        last_er_date      TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS insperity_activity (
+        id                 INTEGER PRIMARY KEY,
+        snapped_at         DATE NOT NULL UNIQUE,
+        beginning_balance  REAL,
+        ending_balance     REAL,
+        contributions      REAL
+    )""",
+    """CREATE TABLE IF NOT EXISTS insperity_prices (
+        id          INTEGER PRIMARY KEY,
+        snapped_at  DATE NOT NULL,
+        fund        TEXT NOT NULL,
+        asset_class TEXT,
+        price       REAL,
+        prior_price REAL,
+        change_pct  REAL,
+        UNIQUE(snapped_at, fund)
+    )""",
 ]
 
 

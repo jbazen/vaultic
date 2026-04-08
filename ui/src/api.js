@@ -1155,3 +1155,43 @@ export async function i360Bookmarklet() {
   const res = await apiFetch("/api/investor360/bookmarklet.js");
   return res.json();
 }
+
+
+// ── Insperity 401K ──────────────────────────────────────────────────────────
+export async function insperitySync(curlCommand) {
+  const res = await apiFetch("/api/insperity/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ curl_command: curlCommand }),
+    timeout: 60000,
+  });
+  return res.json();
+}
+export async function insperityStatus() {
+  const res = await apiFetch("/api/insperity/status");
+  return res.json();
+}
+export async function insperityHoldings() {
+  const res = await apiFetch("/api/insperity/holdings");
+  return res.json();
+}
+export async function insperityPerformance() {
+  const res = await apiFetch("/api/insperity/performance");
+  return res.json();
+}
+export async function insperityContributions() {
+  const res = await apiFetch("/api/insperity/contributions");
+  return res.json();
+}
+export async function insperityActivity() {
+  const res = await apiFetch("/api/insperity/activity");
+  return res.json();
+}
+export async function insperityPrices() {
+  const res = await apiFetch("/api/insperity/prices");
+  return res.json();
+}
+export async function insperitySyncLog(limit = 20) {
+  const res = await apiFetch(`/api/insperity/sync-log?limit=${limit}`);
+  return res.json();
+}
