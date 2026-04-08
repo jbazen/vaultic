@@ -318,6 +318,16 @@ class TestInsperityRouter:
         assert resp.status_code == 200
         assert resp.json() == []
 
+    def test_transactions_empty(self, client, auth_headers):
+        resp = client.get("/api/insperity/transactions", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_allocations_empty(self, client, auth_headers):
+        resp = client.get("/api/insperity/allocations", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
     def test_sync_log_empty(self, client, auth_headers):
         resp = client.get("/api/insperity/sync-log", headers=auth_headers)
         assert resp.status_code == 200
@@ -377,6 +387,38 @@ class TestInsperityStorage:
         assert data["roth_pct"] == 6.0
         assert data["ytd_employee"] == 934.62
 
+    def test_store_and_retrieve_transactions(self, client, auth_headers):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute(
+                """INSERT INTO insperity_transactions
+                   (snapped_at, txn_date, description, code, amount, shares, price)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("2026-04-08", "03/02/2026", "Ssg Sp500 M/ Ee Roth", "09U",
+                 249.23, 20.7952, 11.985),
+            )
+        resp = client.get("/api/insperity/transactions", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) >= 1
+        assert data[0]["description"] == "Ssg Sp500 M/ Ee Roth"
+        assert data[0]["amount"] == 249.23
+
+    def test_store_and_retrieve_allocations(self, client, auth_headers):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute(
+                """INSERT INTO insperity_allocations
+                   (snapped_at, fund, target_pct, asset_class)
+                   VALUES (?, ?, ?, ?)""",
+                ("2026-04-08", "Ssga S&P 500 Index Fund", 80.0, "Large Cap"),
+            )
+        resp = client.get("/api/insperity/allocations", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) >= 1
+        assert data[0]["target_pct"] == 80.0
+
     def test_sync_log_after_insert(self, client, auth_headers):
         from api.database import get_db
         with get_db() as conn:
@@ -392,3 +434,76 @@ class TestInsperityStorage:
         assert len(data) >= 1
         assert data[0]["status"] == "success"
         assert data[0]["total_balance"] == 1398.69
+
+
+class TestSyncLocal:
+    """Test the sync-local endpoint that accepts pre-parsed data."""
+
+    def test_sync_local_full_data(self, client, auth_headers):
+        payload = {
+            "summary": {"account_balance": 1398.69, "vested_balance": 1398.69},
+            "holdings": {
+                "holdings": [
+                    {"fund": "Test Fund", "balance": 1398.69,
+                     "shares": 100.0, "price": 13.99, "ratio_pct": 100.0}
+                ],
+                "total_balance": 1398.69,
+            },
+            "performance": {
+                "cumulative": {"1_month": 1.43, "3_month": 1.43, "ytd": 1.43},
+                "annualized": {"1_month": 1.43, "3_month": 0.48, "ytd": 0.29},
+            },
+            "contributions": {
+                "rates": {"pretax_pct": 0.0, "roth_pct": 6.0},
+                "ytd": {"employee": 934.62, "employer": 467.31},
+                "last": {"employee_amount": 311.54, "employee_date": "03/30/2026",
+                         "employer_amount": 155.77, "employer_date": "03/30/2026"},
+            },
+            "allocations": {
+                "allocations": [
+                    {"fund": "Test Fund", "target_pct": 100.0, "asset_class": "Large Cap"}
+                ]
+            },
+            "activity": {
+                "beginning_balance": 0, "ending_balance": 1398.69,
+                "contributions": 1401.93,
+                "transactions": [
+                    {"date": "03/02/2026", "description": "Test Contrib",
+                     "code": "09U", "amount": 249.23, "shares": 20.79, "price": 11.99}
+                ],
+            },
+            "prices": [
+                {"fund": "Test Fund", "asset_class": "Large Cap",
+                 "date": "04/08/2026", "price": 13.99,
+                 "prior_date": "03/10/2026", "prior_price": 14.20,
+                 "change_pct": -1.48}
+            ],
+        }
+        resp = client.post("/api/insperity/sync-local",
+                           headers=auth_headers, json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["status"] == "success"
+        assert data["holdings"] == 1
+        assert data["total_balance"] == 1398.69
+
+    def test_sync_local_requires_auth(self, client):
+        resp = client.post("/api/insperity/sync-local", json={})
+        assert resp.status_code == 401
+
+    def test_sync_local_partial(self, client, auth_headers):
+        """Sync with only holdings — should still succeed."""
+        payload = {
+            "holdings": {
+                "holdings": [
+                    {"fund": "Partial Fund", "balance": 500.0,
+                     "shares": 50.0, "price": 10.0, "ratio_pct": 100.0}
+                ],
+                "total_balance": 500.0,
+            },
+        }
+        resp = client.post("/api/insperity/sync-local",
+                           headers=auth_headers, json=payload)
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "success"

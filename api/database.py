@@ -958,7 +958,29 @@ MIGRATIONS = [
         snapped_at         DATE NOT NULL UNIQUE,
         beginning_balance  REAL,
         ending_balance     REAL,
-        contributions      REAL
+        contributions      REAL,
+        vested_balance     REAL
+    )""",
+    # Individual contribution/fee/rebalance transactions from activity page
+    """CREATE TABLE IF NOT EXISTS insperity_transactions (
+        id          INTEGER PRIMARY KEY,
+        snapped_at  DATE NOT NULL,
+        txn_date    TEXT NOT NULL,
+        description TEXT NOT NULL,
+        code        TEXT,
+        amount      REAL,
+        shares      REAL,
+        price       REAL,
+        UNIQUE(snapped_at, txn_date, description, code, amount)
+    )""",
+    # Target contribution allocation percentages by fund
+    """CREATE TABLE IF NOT EXISTS insperity_allocations (
+        id          INTEGER PRIMARY KEY,
+        snapped_at  DATE NOT NULL,
+        fund        TEXT NOT NULL,
+        target_pct  REAL,
+        asset_class TEXT,
+        UNIQUE(snapped_at, fund)
     )""",
     """CREATE TABLE IF NOT EXISTS insperity_prices (
         id          INTEGER PRIMARY KEY,
@@ -970,6 +992,8 @@ MIGRATIONS = [
         change_pct  REAL,
         UNIQUE(snapped_at, fund)
     )""",
+    # Migration: add vested_balance to existing insperity_activity tables
+    "ALTER TABLE insperity_activity ADD COLUMN vested_balance REAL",
 ]
 
 

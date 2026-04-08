@@ -106,10 +106,21 @@ class _TableExtractor(HTMLParser):
 
 
 def _parse_tables(html: str) -> list[list[str]]:
-    """Parse HTML into a list of table rows (each row = list of cell texts)."""
+    """Parse HTML into a list of table rows (each row = list of cell texts).
+
+    Strips non-breaking spaces (\\xa0) from cells and filters out empty cells
+    to normalize across different page renderings.
+    """
     parser = _TableExtractor()
     parser.feed(html)
-    return parser.rows
+    # Normalize: strip \xa0 / &nbsp; and filter empty cells
+    cleaned = []
+    for row in parser.rows:
+        cells = [c.replace("\xa0", " ").strip() for c in row]
+        cells = [c for c in cells if c]
+        if cells:
+            cleaned.append(cells)
+    return cleaned
 
 
 def _parse_dollar(s: str) -> float | None:
@@ -156,11 +167,15 @@ def parse_holdings(html: str) -> dict:
     total = None
 
     for row in rows:
-        # Total row has 3 cells: ['Total', '$1,398.69', '100%']
-        if len(row) >= 2 and row[0].strip().lower() == "total" and "$" in row[1]:
-            total = _parse_dollar(row[1])
+        # Total row: look for "Total" anywhere in the row + a dollar amount
+        if any(c.strip().lower() == "total" for c in row):
+            for c in row:
+                val = _parse_dollar(c)
+                if val and val > 0:
+                    total = val
+                    break
             continue
-        # Holding rows have 5 cells: fund, balance, shares, price, ratio
+        # Holding rows have 5+ cells: fund, balance, shares, price, ratio
         if len(row) >= 5 and "$" in row[1]:
             holdings.append({
                 "fund": row[0].strip(),
@@ -347,24 +362,49 @@ def parse_activity(html: str) -> dict:
     for row in rows:
         if not row:
             continue
-        label = row[0].strip()
+        # Find the label — may be at row[0] or shifted by padding cells
+        row_text = " ".join(row)
 
-        if label == "Beginning Balance" and len(row) >= 2:
-            beginning = _parse_dollar(row[1])
-        elif label == "Ending Balance" and len(row) >= 2:
-            ending = _parse_dollar(row[1])
-        elif label == "Contributions" and len(row) >= 2:
-            contributions = _parse_dollar(row[1])
-        elif re.match(r"\d{2}/\d{2}/\d{4}", label) and len(row) >= 5:
-            # Transaction row: date, description, code, amount, shares, price
-            transactions.append({
-                "date": label,
-                "description": row[1].strip(),
-                "code": row[2].strip() if len(row) > 2 else "",
-                "amount": _parse_dollar(row[3]) if len(row) > 3 else None,
-                "shares": _parse_dollar(row[4]) if len(row) > 4 else None,
-                "price": _parse_dollar(row[5]) if len(row) > 5 else None,
-            })
+        if "Beginning Balance" in row_text:
+            # Find the first dollar-like value after the label
+            for c in row:
+                val = _parse_dollar(c)
+                if val is not None or c.strip() == "$.00":
+                    beginning = val or 0
+                    break
+        elif "Ending Balance" in row_text:
+            for c in row:
+                val = _parse_dollar(c)
+                if val is not None:
+                    ending = val
+                    break
+        elif row[0].strip() == "Contributions" or (
+            len(row) >= 2 and row[0].strip() == "Contributions"
+        ):
+            for c in row[1:]:
+                val = _parse_dollar(c)
+                if val is not None:
+                    contributions = val
+                    break
+        else:
+            # Look for transaction rows: find a date in any cell
+            date_cell = None
+            date_idx = -1
+            for i, c in enumerate(row):
+                if re.match(r"\d{2}/\d{2}/\d{4}", c.strip()):
+                    date_cell = c.strip()
+                    date_idx = i
+                    break
+            if date_cell and len(row) >= date_idx + 5:
+                rest = row[date_idx + 1:]
+                transactions.append({
+                    "date": date_cell,
+                    "description": rest[0].strip() if len(rest) > 0 else "",
+                    "code": rest[1].strip() if len(rest) > 1 else "",
+                    "amount": _parse_dollar(rest[2]) if len(rest) > 2 else None,
+                    "shares": _parse_dollar(rest[3]) if len(rest) > 3 else None,
+                    "price": _parse_dollar(rest[4]) if len(rest) > 4 else None,
+                })
 
     if beginning is None and ending is None:
         raise ValueError(

@@ -95,19 +95,47 @@ def _store_contributions(conn, contrib: dict, snapped_at: date):
     )
 
 
-def _store_activity(conn, activity: dict, snapped_at: date):
-    """Store activity summary."""
+def _store_activity(conn, activity: dict, snapped_at: date,
+                    vested_balance: float | None = None):
+    """Store activity summary and individual transactions."""
     conn.execute(
         """INSERT INTO insperity_activity
-           (snapped_at, beginning_balance, ending_balance, contributions)
-           VALUES (?, ?, ?, ?)
+           (snapped_at, beginning_balance, ending_balance, contributions, vested_balance)
+           VALUES (?, ?, ?, ?, ?)
            ON CONFLICT(snapped_at) DO UPDATE SET
              beginning_balance=excluded.beginning_balance,
              ending_balance=excluded.ending_balance,
-             contributions=excluded.contributions""",
+             contributions=excluded.contributions,
+             vested_balance=excluded.vested_balance""",
         (snapped_at.isoformat(), activity["beginning_balance"],
-         activity["ending_balance"], activity["contributions"]),
+         activity["ending_balance"], activity["contributions"], vested_balance),
     )
+    # Store individual transactions (contributions, fees, rebalances)
+    for t in activity.get("transactions", []):
+        conn.execute(
+            """INSERT INTO insperity_transactions
+               (snapped_at, txn_date, description, code, amount, shares, price)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(snapped_at, txn_date, description, code, amount)
+               DO UPDATE SET shares=excluded.shares, price=excluded.price""",
+            (snapped_at.isoformat(), t["date"], t["description"],
+             t.get("code", ""), t.get("amount"), t.get("shares"), t.get("price")),
+        )
+
+
+def _store_allocations(conn, alloc_data: dict, snapped_at: date):
+    """Store target contribution allocation percentages."""
+    for a in alloc_data.get("allocations", []):
+        conn.execute(
+            """INSERT INTO insperity_allocations
+               (snapped_at, fund, target_pct, asset_class)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(snapped_at, fund)
+               DO UPDATE SET target_pct=excluded.target_pct,
+                            asset_class=excluded.asset_class""",
+            (snapped_at.isoformat(), a["fund"], a.get("target_pct"),
+             a.get("asset_class")),
+        )
 
 
 def _store_prices(conn, prices: list[dict], snapped_at: date):
@@ -207,7 +235,11 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
             _store_contributions(conn, data["contributions"], today)
 
         if data.get("activity"):
-            _store_activity(conn, data["activity"], today)
+            vested = (data["summary"] or {}).get("vested_balance")
+            _store_activity(conn, data["activity"], today, vested)
+
+        if data.get("allocations"):
+            _store_allocations(conn, data["allocations"], today)
 
         if data.get("prices"):
             _store_prices(conn, data["prices"], today)
@@ -239,6 +271,101 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
         "duration_ms": duration_ms,
         "errors": errors if errors else None,
         "warnings": warnings if warnings else None,
+    }
+
+
+# ── Local sync endpoint (accepts pre-parsed data from local script) ──────────
+
+class LocalSyncRequest(BaseModel):
+    """Pre-parsed data from local sync script."""
+    summary: dict | None = None
+    holdings: dict | None = None
+    performance: dict | None = None
+    contributions: dict | None = None
+    allocations: dict | None = None
+    activity: dict | None = None
+    prices: list | None = None
+
+
+@router.post("/sync-local")
+def sync_local(req: LocalSyncRequest, user=Depends(get_current_user)):
+    """Store pre-parsed Insperity data from a local sync script.
+
+    Used when the scrape must run from the user's machine (Cloudflare
+    cookies are IP-bound and won't work from the server).
+    """
+    start_time = time.time()
+    today = _today()
+    holdings_count = 0
+    total_balance = None
+    errors = []
+
+    with get_db() as conn:
+        if req.holdings:
+            try:
+                holdings_count = _store_holdings(
+                    conn, req.holdings["holdings"], today
+                )
+                total_balance = req.holdings.get("total_balance")
+            except Exception as exc:
+                errors.append(f"holdings: {exc}")
+
+        if req.summary:
+            if total_balance is None:
+                total_balance = req.summary.get("account_balance")
+
+        if req.performance:
+            try:
+                _store_performance(conn, req.performance, today)
+            except Exception as exc:
+                errors.append(f"performance: {exc}")
+
+        if req.contributions:
+            try:
+                _store_contributions(conn, req.contributions, today)
+            except Exception as exc:
+                errors.append(f"contributions: {exc}")
+
+        if req.activity:
+            try:
+                vested = (req.summary or {}).get("vested_balance")
+                _store_activity(conn, req.activity, today, vested)
+            except Exception as exc:
+                errors.append(f"activity: {exc}")
+
+        if req.allocations:
+            try:
+                _store_allocations(conn, req.allocations, today)
+            except Exception as exc:
+                errors.append(f"allocations: {exc}")
+
+        if req.prices:
+            try:
+                _store_prices(conn, req.prices, today)
+            except Exception as exc:
+                errors.append(f"prices: {exc}")
+
+        status = "failed" if not any([
+            req.holdings, req.performance, req.contributions,
+            req.activity, req.prices,
+        ]) else ("partial" if errors else "success")
+
+        duration_ms = int((time.time() - start_time) * 1000)
+        conn.execute(
+            """INSERT INTO insperity_sync_log
+               (status, holdings_count, total_balance, duration_ms, error)
+               VALUES (?, ?, ?, ?, ?)""",
+            (status, holdings_count, total_balance, duration_ms,
+             "; ".join(errors) if errors else None),
+        )
+
+    return {
+        "ok": True,
+        "status": status,
+        "holdings": holdings_count,
+        "total_balance": total_balance,
+        "duration_ms": duration_ms,
+        "errors": errors if errors else None,
     }
 
 
@@ -301,13 +428,37 @@ def get_contributions(user=Depends(get_current_user)):
 
 @router.get("/activity")
 def get_activity(user=Depends(get_current_user)):
-    """Latest activity summary."""
+    """Latest activity summary with vested balance."""
     with get_db() as conn:
         row = conn.execute(
             """SELECT * FROM insperity_activity
                ORDER BY snapped_at DESC LIMIT 1"""
         ).fetchone()
         return dict(row) if row else {}
+
+
+@router.get("/transactions")
+def get_transactions(user=Depends(get_current_user)):
+    """Latest activity transactions (contributions, fees, rebalances)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM insperity_transactions
+               WHERE snapped_at = (SELECT MAX(snapped_at) FROM insperity_transactions)
+               ORDER BY txn_date, description"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@router.get("/allocations")
+def get_allocations(user=Depends(get_current_user)):
+    """Latest target contribution allocations by fund."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM insperity_allocations
+               WHERE snapped_at = (SELECT MAX(snapped_at) FROM insperity_allocations)
+               ORDER BY target_pct DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 @router.get("/prices")

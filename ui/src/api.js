@@ -1187,6 +1187,14 @@ export async function insperityActivity() {
   const res = await apiFetch("/api/insperity/activity");
   return res.json();
 }
+export async function insperityTransactions() {
+  const res = await apiFetch("/api/insperity/transactions");
+  return res.json();
+}
+export async function insperityAllocations() {
+  const res = await apiFetch("/api/insperity/allocations");
+  return res.json();
+}
 export async function insperityPrices() {
   const res = await apiFetch("/api/insperity/prices");
   return res.json();
