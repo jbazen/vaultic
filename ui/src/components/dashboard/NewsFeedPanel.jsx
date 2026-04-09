@@ -48,6 +48,7 @@ function NewsTile({ article }) {
 
   return (
     <a href={article.url} target="_blank" rel="noopener noreferrer"
+      title={article.title}
       style={{
         display: "flex", gap: 10, padding: 10,
         background: "var(--bg3)", borderRadius: 8,
