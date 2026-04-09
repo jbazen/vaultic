@@ -32,42 +32,64 @@ function TickerChip({ symbol, price, changePct, assetType }) {
   );
 }
 
-function NewsItem({ article }) {
-  const topicColors = {
-    crypto: "var(--orange)", equity: "var(--accent)", macro: "#22d3ee",
-  };
-  const badgeColor = topicColors[article.relevance] || "var(--text2)";
+/** Category accent colors — always shown as left border on each tile. */
+const TOPIC_COLORS = {
+  crypto: "var(--orange)", equity: "var(--accent)", macro: "#22d3ee",
+};
 
+/**
+ * NewsTile — compact card with colored category accent, thumbnail/favicon,
+ * 2-line clamped title, source name, and relative time.
+ */
+function NewsTile({ article }) {
+  const accentColor = TOPIC_COLORS[article.relevance] || "var(--text2)";
   const timeAgo = article.published_at ? _relativeTime(article.published_at) : "";
+  const imgSrc = article.image_url || "";
 
   return (
     <a href={article.url} target="_blank" rel="noopener noreferrer"
       style={{
-        display: "block", padding: "12px 0",
-        borderBottom: "1px solid var(--border)", textDecoration: "none", color: "inherit",
+        display: "flex", gap: 10, padding: 10,
+        background: "var(--bg3)", borderRadius: 8,
+        borderLeft: `3px solid ${accentColor}`,
+        textDecoration: "none", color: "inherit",
+        minHeight: 72, alignItems: "center",
       }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span style={{
-          fontSize: 10, fontWeight: 700, textTransform: "uppercase",
-          color: badgeColor, letterSpacing: "0.5px",
-        }}>
-          {article.relevance}
-        </span>
-        {article.source_name && (
-          <span style={{ fontSize: 11, color: "var(--text2)" }}>{article.source_name}</span>
-        )}
-        {timeAgo && (
-          <span style={{ fontSize: 11, color: "var(--text2)" }}>{timeAgo}</span>
-        )}
-      </div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", lineHeight: 1.4, marginBottom: 4 }}>
-        {article.title}
-      </div>
-      {article.snippet && (
-        <div style={{ fontSize: 12, color: "var(--text2)", lineHeight: 1.4 }}>
-          {article.snippet.length > 180 ? article.snippet.slice(0, 180) + "..." : article.snippet}
-        </div>
+      {/* Thumbnail or favicon */}
+      {imgSrc && (
+        <img src={imgSrc} alt="" loading="lazy"
+          style={{
+            width: 48, height: 48, borderRadius: 6, objectFit: "cover",
+            flexShrink: 0, background: "var(--bg)",
+          }}
+          onError={e => { e.target.style.display = "none"; }}
+        />
       )}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        {/* Title — 2-line clamp */}
+        <div style={{
+          fontSize: 13, fontWeight: 600, color: "var(--text)", lineHeight: 1.35,
+          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}>
+          {article.title}
+        </div>
+        {/* Source + category badge + time */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+          <span style={{
+            fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+            color: accentColor, letterSpacing: "0.5px",
+          }}>
+            {article.relevance}
+          </span>
+          {article.source_name && (
+            <span style={{ fontSize: 11, color: "var(--text2)" }}>{article.source_name}</span>
+          )}
+          {timeAgo && (
+            <span style={{ fontSize: 11, color: "var(--text2)" }}>{timeAgo}</span>
+          )}
+        </div>
+      </div>
     </a>
   );
 }
@@ -168,11 +190,15 @@ export default function NewsFeedPanel() {
         </div>
       )}
 
-      {/* News list */}
+      {/* News tile grid */}
       {news.length > 0 && (
-        <div>
-          {news.slice(0, 10).map((a, i) => (
-            <NewsItem key={a.url || i} article={a} />
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))",
+          gap: 10,
+        }}>
+          {news.slice(0, 12).map((a, i) => (
+            <NewsTile key={a.url || i} article={a} />
           ))}
         </div>
       )}

@@ -227,13 +227,19 @@ def _fetch_news(tickers: dict) -> list[dict]:
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
+                domain = _extract_domain(url)
+                # Use Tavily image if available, otherwise Google favicon service
+                image_url = r.get("image") or ""
+                if not image_url and domain:
+                    image_url = f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
                 articles.append({
                     "title": r.get("title", ""),
                     "url": url,
                     "snippet": (r.get("content", "") or "")[:300],
-                    "source_name": _extract_domain(url),
+                    "source_name": domain,
                     "relevance": topic,
                     "published_at": r.get("published_date"),
+                    "image_url": image_url,
                 })
         except Exception as e:
             logger.warning("Tavily search failed for topic '%s': %s", topic, e)
@@ -313,7 +319,7 @@ def get_news(user=Depends(get_current_user)):
     """Return cached news articles."""
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT title, url, source_name, snippet, relevance, published_at, fetched_at "
+            "SELECT title, url, source_name, snippet, relevance, published_at, fetched_at, image_url "
             "FROM news_articles ORDER BY fetched_at DESC, published_at DESC LIMIT 20"
         ).fetchall()
     return {"articles": [dict(r) for r in rows]}
@@ -336,13 +342,15 @@ def refresh_news(user=Depends(get_current_user)):
         )
         for a in articles:
             conn.execute(
-                """INSERT INTO news_articles (title, url, source_name, snippet, relevance, published_at, fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO news_articles
+                   (title, url, source_name, snippet, relevance, published_at, fetched_at, image_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(url) DO UPDATE SET
                      title=excluded.title, snippet=excluded.snippet,
-                     relevance=excluded.relevance, fetched_at=excluded.fetched_at""",
+                     relevance=excluded.relevance, fetched_at=excluded.fetched_at,
+                     image_url=excluded.image_url""",
                 (a["title"], a["url"], a.get("source_name"), a.get("snippet"),
-                 a.get("relevance"), a.get("published_at"), now),
+                 a.get("relevance"), a.get("published_at"), now, a.get("image_url")),
             )
         conn.commit()
 
@@ -394,7 +402,7 @@ def get_feed_summary(user=Depends(get_current_user)):
             "market_cap, source, fetched_at FROM ticker_quotes ORDER BY asset_type, symbol"
         ).fetchall()
         articles = conn.execute(
-            "SELECT title, url, source_name, snippet, relevance, published_at, fetched_at "
+            "SELECT title, url, source_name, snippet, relevance, published_at, fetched_at, image_url "
             "FROM news_articles ORDER BY fetched_at DESC, published_at DESC LIMIT 15"
         ).fetchall()
 
@@ -444,12 +452,14 @@ def _do_refresh_news(tickers: dict):
         )
         for a in articles:
             conn.execute(
-                """INSERT INTO news_articles (title, url, source_name, snippet, relevance, published_at, fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO news_articles
+                   (title, url, source_name, snippet, relevance, published_at, fetched_at, image_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(url) DO UPDATE SET
                      title=excluded.title, snippet=excluded.snippet,
-                     relevance=excluded.relevance, fetched_at=excluded.fetched_at""",
+                     relevance=excluded.relevance, fetched_at=excluded.fetched_at,
+                     image_url=excluded.image_url""",
                 (a["title"], a["url"], a.get("source_name"), a.get("snippet"),
-                 a.get("relevance"), a.get("published_at"), now),
+                 a.get("relevance"), a.get("published_at"), now, a.get("image_url")),
             )
         conn.commit()

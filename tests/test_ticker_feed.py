@@ -128,15 +128,16 @@ class TestNews:
         now = datetime.utcnow().isoformat()
         with db_module.get_db() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO news_articles (title, url, source_name, snippet, relevance, fetched_at) "
-                "VALUES ('BTC hits 100k', 'https://example.com/btc', 'example.com', 'Bitcoin surged...', 'crypto', ?)",
+                "INSERT OR REPLACE INTO news_articles (title, url, source_name, snippet, relevance, fetched_at, image_url) "
+                "VALUES ('BTC hits 100k', 'https://example.com/btc', 'example.com', 'Bitcoin surged...', 'crypto', ?, 'https://example.com/img.jpg')",
                 (now,)
             )
             conn.commit()
 
         resp = client.get("/api/feed/news", headers=auth_headers)
         data = resp.json()
-        assert any(a["title"] == "BTC hits 100k" for a in data["articles"])
+        btc = next(a for a in data["articles"] if a["title"] == "BTC hits 100k")
+        assert btc["image_url"] == "https://example.com/img.jpg"
 
     @patch("api.routers.ticker_feed._fetch_news")
     def test_refresh_news(self, mock_fetch, client, auth_headers):
