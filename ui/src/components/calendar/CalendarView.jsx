@@ -54,7 +54,7 @@ export default function CalendarView({
 }) {
   return (
     <div className="calendar-rbc-wrapper" style={{
-      height: 420, overflowY: "auto",
+      flex: 1, minHeight: 0, overflowY: "auto",
     }}>
       <Calendar
         localizer={localizer}

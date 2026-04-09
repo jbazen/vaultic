@@ -289,13 +289,13 @@ export default function Dashboard() {
       </div>
 
       {/* ── Portfolio Performance + Calendar (side by side, equal height) ── */}
-      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start", marginBottom: 20 }}>
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "stretch", marginBottom: 20 }}>
         {portfolioPerf.length >= 2 && (
           <div style={{ flex: "1 1 400px", minWidth: 0, display: "flex" }}>
             <PortfolioPerformanceCard data={portfolioPerf} />
           </div>
         )}
-        <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+        <div style={{ flex: "1 1 340px", minWidth: 0, display: "flex" }}>
           <CalendarSection />
         </div>
       </div>
