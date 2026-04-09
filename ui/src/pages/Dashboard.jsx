@@ -3,7 +3,7 @@ import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries,
   getPlaidItems, removePlaidItem, syncCoinbase, getPortfolioPerformance,
-  getMarketRates,
+  getMarketRates, i360SyncLog,
 } from "../api.js";
 import NetWorthChart from "../components/NetWorthChart.jsx";
 import PlaidLink from "../components/PlaidLink.jsx";
@@ -58,12 +58,13 @@ export default function Dashboard() {
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [i360Open, setI360Open] = useState(false);
   const [insperityOpen, setInsperityOpen] = useState(false);
+  const [i360LastSync, setI360LastSync] = useState(null);
   const mountedRef = useRef(true);
 
   async function load() {
     setLoadError(false);
     try {
-      const [nwData, hist, accts, manual, items, perf, rates] = await Promise.all([
+      const [nwData, hist, accts, manual, items, perf, rates, i360Log] = await Promise.all([
         getNetWorthLatest(),
         getNetWorthHistory(1825),
         getAccounts(),
@@ -71,6 +72,7 @@ export default function Dashboard() {
         getPlaidItems(),
         getPortfolioPerformance(1825),
         getMarketRates().catch(() => ({ rates: [] })),
+        i360SyncLog(1).catch(() => []),
       ]);
       if (!mountedRef.current) return;
       setNw(nwData);
@@ -80,6 +82,7 @@ export default function Dashboard() {
       setPlaidItems(items);
       setPortfolioPerf(perf);
       setMarketRates(rates?.rates ?? []);
+      setI360LastSync(i360Log?.[0]?.synced_at || null);
     } catch (e) {
       if (!mountedRef.current) return;
       setLoadError(true);
@@ -322,14 +325,16 @@ export default function Dashboard() {
             })
             .map(([institution, accts]) => {
             const item = plaidItems.find(i => i.institution_name === institution);
+            const isI360 = accts.some(x => x.source === "investor360");
+            const syncedAt = item?.last_synced_at || (isI360 ? i360LastSync : null);
             return (
               <div className="card" key={institution} style={{ margin: 0 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                   <div>
                     <span style={{ fontWeight: 700, fontSize: 15 }}>{institution}</span>
-                    {item?.last_synced_at && (
+                    {syncedAt && (
                       <span style={{ fontSize: 11, color: "var(--text2)", marginLeft: 10 }}>
-                        synced {fmtDate(item.last_synced_at)}
+                        synced {fmtDate(syncedAt)}
                       </span>
                     )}
                   </div>
