@@ -54,7 +54,7 @@ export default function CalendarView({
 }) {
   return (
     <div className="calendar-rbc-wrapper" style={{
-      flex: 1, minHeight: 300, maxHeight: 500, overflowY: "auto",
+      height: 420, overflowY: "auto",
     }}>
       <Calendar
         localizer={localizer}
@@ -74,7 +74,7 @@ export default function CalendarView({
         )}}
         views={["month", "week", "day"]}
         defaultView="month"
-        style={{ height: view === "month" ? "100%" : 800 }}
+        style={{ height: view === "month" ? 400 : 800 }}
         popup                           /* month view: "+N more" opens popup */
         showMultiDayTimes               /* timed events show time in week/day */
         step={30}                       /* 30-min slot intervals in week/day */
