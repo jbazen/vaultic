@@ -1293,6 +1293,7 @@ def _migrate_restore_insperity(conn):
             "WHERE name = 'INSPERITY 401K PLAN' AND category = 'invested' "
             "ORDER BY snapped_at DESC LIMIT 1"
         ).fetchone()
+        # Fallback: initial balance when account was first connected (2026-03)
         value = snap["value"] if snap else 1391.66
         conn.execute(
             "INSERT INTO manual_entries "

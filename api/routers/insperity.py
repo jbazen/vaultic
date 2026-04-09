@@ -158,7 +158,12 @@ def _store_prices(conn, prices: list[dict], snapped_at: date):
 
 
 def _update_manual_entry(conn, total_balance: float | None, today: date):
-    """Update the Insperity manual_entries row with latest balance."""
+    """Update the Insperity manual_entries row with latest balance.
+
+    Called inside the sync transaction so the balance is committed atomically
+    with the insperity_* table writes. The net worth snapshot is triggered
+    separately AFTER this transaction closes (to avoid nested connections).
+    """
     if total_balance is None:
         return
     conn.execute(

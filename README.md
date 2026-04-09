@@ -1087,7 +1087,7 @@ All costs are for personal use (single user, ~22 connected accounts).
 | Chase | Checking, Savings, Money Market, Credit Card | Plaid ✅ |
 | Vanguard | 401k | Plaid ✅ |
 | Voya | 401k | Plaid ✅ |
-| Insperity | 401k | Plaid ✅ |
+| Insperity | 401k | HTML Scraper + Local Sync ✅ |
 | Robinhood | Brokerage | Plaid ✅ |
 | Rocket Mortgage | Mortgage | Plaid ✅ |
 | Optum / HealthEquity | HSA | Plaid ✅ |
@@ -1130,7 +1130,7 @@ Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client po
 - [x] **Peer review** — 45+ code quality findings addressed; major component extractions (Budget, Taxes, Dashboard, sage.py)
 
 ### In Progress / Upcoming
-- [ ] **Insperity data integration** — replicate I360-style ingestion for Insperity 401K (performance, activity, allocation)
+- [x] **Insperity data integration** — HTML scraper for 7 data types (holdings, performance, contributions, activity, transactions, allocations, prices); local sync script; detail view with 5 tabs on Accounts page; auto-updates net worth on sync
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
 - [ ] **Uploader consolidation** — unified upload flow: vault-first, then parse, then import; single entry point
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen; push notifications for pending review alerts

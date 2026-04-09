@@ -1,5 +1,14 @@
+/**
+ * E2E tests for the Insperity 401K detail view on the Accounts page.
+ *
+ * Verifies the InsperityAccountCard renders with all 5 tabs:
+ *   Holdings, Transactions, Performance, Contributions, Allocation.
+ * All Insperity API endpoints are mocked with representative data.
+ */
 import { test, expect } from "@playwright/test";
 import { mockAllAPIs, loginMocked } from "./helpers.js";
+
+// ── Mock data matching the shapes returned by /api/insperity/* endpoints ────
 
 const INSPERITY_ENTRY = {
   id: 99, name: "INSPERITY 401K PLAN", category: "invested",
@@ -40,6 +49,7 @@ const MOCK_TRANSACTIONS = [
   { txn_date: "03/30/2026", description: "Employer Match", code: "30U", amount: 155.77, shares: 10.40, price: 14.98 },
 ];
 
+/** Register mocks for all Insperity detail endpoints used by InsperityAccountCard. */
 async function mockInsperityAPIs(page) {
   await page.route("**/api/insperity/status", r =>
     r.fulfill({ json: { synced: true, last_sync: "2026-04-08T12:00:00", status: "success", total_balance: 1398.69, holdings_count: 2, duration_ms: 3, error: null } }));

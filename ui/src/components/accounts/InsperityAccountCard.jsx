@@ -1,3 +1,19 @@
+/**
+ * InsperityAccountCard — expandable detail card for the Insperity 401K account.
+ *
+ * Displays the account balance in a collapsible header with 5 lazy-loaded tabs:
+ *   Holdings (merged with fund price data), Transactions, Performance,
+ *   Contributions, and Allocation.
+ *
+ * Data is fetched from dedicated /api/insperity/* endpoints (not the generic
+ * manual_entries API). Each tab loads on first click to avoid unnecessary calls.
+ *
+ * Props:
+ *   entry          — manual_entries row (id, name, value, entered_at, account_number)
+ *   onDelete       — callback after entry deletion
+ *   onToggleExclude — callback after toggling net worth exclusion
+ *   onRenamed      — callback after rename to refresh parent
+ */
 import { useState } from "react";
 import {
   insperityStatus, insperityHoldings, insperityPrices,
@@ -6,6 +22,7 @@ import {
 } from "../../api.js";
 import { fmt, fmtDate, fmtPercent } from "../../utils/format.js";
 
+/** Inline style for tab buttons — active tab gets accent background. */
 function tabBtn(active) {
   return {
     background: active ? "var(--accent)" : "var(--bg)",
@@ -19,9 +36,11 @@ function tabBtn(active) {
 
 /* ── Holdings + Prices tab ─────────────────────────────────────────────────── */
 
+/** Fund holdings table with prior price + change columns merged from /prices. */
 function HoldingsTab({ holdings, prices }) {
   if (!holdings?.length) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No holdings data.</div>;
 
+  // Index prices by fund name for O(1) lookup when rendering each holding row
   const priceMap = {};
   (prices || []).forEach(p => { priceMap[p.fund] = p; });
 
@@ -64,6 +83,7 @@ function HoldingsTab({ holdings, prices }) {
 
 /* ── Transactions tab ──────────────────────────────────────────────────────── */
 
+/** 401K activity transactions — contributions, employer matches, rebalances. */
 function TransactionsTab({ transactions }) {
   if (!transactions?.length) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No transaction data.</div>;
   return (
@@ -98,8 +118,10 @@ function TransactionsTab({ transactions }) {
 
 /* ── Performance tab ───────────────────────────────────────────────────────── */
 
+/** Human-readable labels for performance period keys from the API. */
 const PERIOD_LABELS = { "1_month": "1 Month", "3_month": "3 Month", ytd: "YTD" };
 
+/** Rate of return table — cumulative and annualized for each period. */
 function PerformanceTab({ performance }) {
   if (!performance?.length) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No performance data.</div>;
   return (
@@ -130,6 +152,7 @@ function PerformanceTab({ performance }) {
 
 /* ── Contributions tab ─────────────────────────────────────────────────────── */
 
+/** Two-column grid: pretax/roth rates, YTD totals, and last contribution details. */
 function ContributionsTab({ contributions }) {
   if (!contributions || !contributions.snapped_at) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No contributions data.</div>;
   const c = contributions;
@@ -158,6 +181,7 @@ function ContributionsTab({ contributions }) {
 
 /* ── Allocations tab ───────────────────────────────────────────────────────── */
 
+/** Target contribution allocation percentages per fund with asset class labels. */
 function AllocationsTab({ allocations }) {
   if (!allocations?.length) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No allocation data.</div>;
   return (
@@ -204,6 +228,7 @@ export default function InsperityAccountCard({ entry, onDelete, onToggleExclude,
   const [contributions, setContributions] = useState(null);
   const [allocations, setAllocations] = useState(null);
 
+  /** Toggle expand/collapse. On first expand, fetch holdings + prices + status. */
   async function handleToggle() {
     const next = !expanded;
     setExpanded(next);
@@ -220,11 +245,13 @@ export default function InsperityAccountCard({ entry, onDelete, onToggleExclude,
     }
   }
 
+  /** Click anywhere on header row to toggle — skip if clicking a button/input/link. */
   function handleRowClick(e) {
     if (e.target.closest("button, input, a")) return;
     handleToggle();
   }
 
+  /** Switch tab and lazy-load its data on first access. */
   async function handleTabChange(tab) {
     setActiveTab(tab);
     if (tab === "transactions" && transactions === null) {
