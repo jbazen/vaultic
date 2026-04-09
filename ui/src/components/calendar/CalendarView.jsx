@@ -74,7 +74,7 @@ export default function CalendarView({
         )}}
         views={["month", "week", "day"]}
         defaultView="month"
-        style={{ height: "100%" }}
+        style={{ height: view === "month" ? 400 : 800 }}
         popup                           /* month view: "+N more" opens popup */
         showMultiDayTimes               /* timed events show time in week/day */
         step={30}                       /* 30-min slot intervals in week/day */
