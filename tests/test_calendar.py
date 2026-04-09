@@ -268,3 +268,80 @@ class TestHelpers:
         assert aug1.weekday() == 5       # confirm assumption
         result = _first_saturday(2026, 8)
         assert result == date(2026, 8, 1)
+
+
+class TestRecurringEvents:
+    """Recurring event expansion and series deletion."""
+
+    def test_monthly_creates_13_events(self, client, auth_headers):
+        """Monthly recurrence: 1 original + 12 future = 13 total."""
+        data = _create(client, auth_headers, title="Monthly Standup",
+                       recurring="monthly", start_dt="2026-06-01")
+        assert data["series_id"] is not None
+
+        events = client.get("/api/calendar", headers=auth_headers).json()
+        series = [e for e in events if e.get("series_id") == data["series_id"]]
+        assert len(series) == 13
+
+    def test_weekly_creates_13_events(self, client, auth_headers):
+        data = _create(client, auth_headers, title="Weekly Check-in",
+                       recurring="weekly", start_dt="2026-06-01")
+        events = client.get("/api/calendar", headers=auth_headers).json()
+        series = [e for e in events if e.get("series_id") == data["series_id"]]
+        assert len(series) == 13
+
+    def test_quarterly_creates_13_events(self, client, auth_headers):
+        data = _create(client, auth_headers, title="Quarterly Review",
+                       recurring="quarterly", start_dt="2026-06-01")
+        events = client.get("/api/calendar", headers=auth_headers).json()
+        series = [e for e in events if e.get("series_id") == data["series_id"]]
+        assert len(series) == 13
+
+    def test_annually_creates_13_events(self, client, auth_headers):
+        data = _create(client, auth_headers, title="Annual Review",
+                       recurring="annually", start_dt="2026-06-01")
+        events = client.get("/api/calendar", headers=auth_headers).json()
+        series = [e for e in events if e.get("series_id") == data["series_id"]]
+        assert len(series) == 13
+
+    def test_non_recurring_has_no_series_id(self, client, auth_headers):
+        data = _create(client, auth_headers, title="One-off Event", recurring="none")
+        assert data.get("series_id") is None
+
+    def test_delete_series_removes_all(self, client, auth_headers):
+        data = _create(client, auth_headers, title="To Delete Series",
+                       recurring="monthly", start_dt="2026-07-01")
+        series_id = data["series_id"]
+
+        # Verify series exists
+        events = client.get("/api/calendar", headers=auth_headers).json()
+        before = [e for e in events if e.get("series_id") == series_id]
+        assert len(before) == 13
+
+        # Delete entire series
+        res = client.delete(f"/api/calendar/series/{series_id}", headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["deleted"] == 13
+
+        # Verify all gone
+        events = client.get("/api/calendar", headers=auth_headers).json()
+        after = [e for e in events if e.get("series_id") == series_id]
+        assert len(after) == 0
+
+    def test_delete_single_from_series(self, client, auth_headers):
+        """Deleting one event from a series leaves the rest intact."""
+        data = _create(client, auth_headers, title="Partial Delete",
+                       recurring="monthly", start_dt="2026-08-01")
+        series_id = data["series_id"]
+        first_id = data["id"]
+
+        # Delete just the first event
+        client.delete(f"/api/calendar/{first_id}", headers=auth_headers)
+
+        events = client.get("/api/calendar", headers=auth_headers).json()
+        remaining = [e for e in events if e.get("series_id") == series_id]
+        assert len(remaining) == 12
+
+    def test_delete_nonexistent_series_returns_404(self, client, auth_headers):
+        res = client.delete("/api/calendar/series/fake-uuid", headers=auth_headers)
+        assert res.status_code == 404

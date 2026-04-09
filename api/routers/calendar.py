@@ -11,6 +11,8 @@ Endpoints (specific routes before parameterized — per CLAUDE.md):
   PATCH /api/calendar/{event_id} — update an event
   DELETE /api/calendar/{event_id}— soft-delete an event
 """
+import calendar as cal_mod
+import uuid
 from datetime import date, timedelta
 from typing import Optional
 
@@ -224,24 +226,91 @@ def list_events(
     return [dict(r) for r in rows]
 
 
+def _add_months(d: date, months: int) -> date:
+    """Add N months to a date, clamping to the last day of the target month."""
+    month = d.month - 1 + months
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, cal_mod.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _generate_occurrences(start: date, recurring: str, count: int = 12) -> list[date]:
+    """Generate future occurrence dates for a recurring event (excludes the first)."""
+    dates = []
+    for i in range(1, count + 1):
+        if recurring == "weekly":
+            dates.append(start + timedelta(weeks=i))
+        elif recurring == "monthly":
+            dates.append(_add_months(start, i))
+        elif recurring == "quarterly":
+            dates.append(_add_months(start, i * 3))
+        elif recurring == "annually":
+            dates.append(_add_months(start, i * 12))
+    return dates
+
+
 @router.post("")
 def create_event(body: CreateEventBody, user: str = Depends(get_current_user)):
-    """Create a new calendar event. Returns the new event's id."""
+    """Create a new calendar event. If recurring, expands into individual rows
+    for the next 12 occurrences sharing a common series_id."""
+    series_id = str(uuid.uuid4()) if body.recurring != "none" else None
+
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO financial_events
                  (username, title, description, start_dt, end_dt, all_day,
-                  event_type, recurring, reminder_days_before)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                  event_type, recurring, reminder_days_before, series_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 user, body.title, body.description,
                 body.start_dt, body.end_dt,
                 1 if body.all_day else 0,
                 body.event_type, body.recurring,
-                body.reminder_days_before,
+                body.reminder_days_before, series_id,
             ),
         )
-    return {"ok": True, "id": cur.lastrowid}
+        first_id = cur.lastrowid
+
+        # Expand recurring events into individual future rows
+        if body.recurring != "none":
+            start_date = date.fromisoformat(body.start_dt[:10])
+            for occ_date in _generate_occurrences(start_date, body.recurring):
+                occ_dt = occ_date.isoformat()
+                conn.execute(
+                    """INSERT INTO financial_events
+                         (username, title, description, start_dt, end_dt, all_day,
+                          event_type, recurring, reminder_days_before, series_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        user, body.title, body.description,
+                        occ_dt, None,
+                        1 if body.all_day else 0,
+                        body.event_type, body.recurring,
+                        body.reminder_days_before, series_id,
+                    ),
+                )
+
+    return {"ok": True, "id": first_id, "series_id": series_id}
+
+
+@router.delete("/series/{series_id}")
+def delete_series(series_id: str, user: str = Depends(get_current_user)):
+    """Soft-delete all events in a recurring series."""
+    with get_db() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM financial_events "
+            "WHERE series_id = ? AND username = ? AND is_active = 1",
+            (series_id, user),
+        ).fetchone()[0]
+        if count == 0:
+            raise HTTPException(status_code=404, detail="Series not found")
+        conn.execute(
+            "UPDATE financial_events SET is_active = 0 "
+            "WHERE series_id = ? AND username = ?",
+            (series_id, user),
+        )
+    return {"ok": True, "deleted": count}
 
 
 @router.patch("/{event_id}")

@@ -996,6 +996,8 @@ MIGRATIONS = [
     "ALTER TABLE insperity_activity ADD COLUMN vested_balance REAL",
     # Migration: add image_url to news_articles for tile thumbnails
     "ALTER TABLE news_articles ADD COLUMN image_url TEXT",
+    # Migration: add series_id to link recurring event instances
+    "ALTER TABLE financial_events ADD COLUMN series_id TEXT",
 ]
 
 

@@ -17,6 +17,7 @@ import {
   createCalendarEvent,
   updateCalendarEvent,
   deleteCalendarEvent,
+  deleteCalendarSeries,
 } from "../../api";
 import { EVENT_TYPES, RECURRING_OPTIONS, formatEventDts } from "./calendarUtils";
 
@@ -139,10 +140,28 @@ export default function EventFormModal({
   }
 
   async function handleDelete() {
-    if (!window.confirm("Delete this event?")) return;
+    const hasSeries = !!initialEvent.series_id;
+    let deleteSeries = false;
+
+    if (hasSeries) {
+      const choice = window.prompt(
+        "This event is part of a recurring series.\n\n" +
+        "Type 'series' to delete the entire series, or press OK to delete just this event.",
+        ""
+      );
+      if (choice === null) return; // cancelled
+      deleteSeries = choice.toLowerCase().trim() === "series";
+    } else {
+      if (!window.confirm("Delete this event?")) return;
+    }
+
     setSaving(true);
     try {
-      await deleteCalendarEvent(initialEvent.id);
+      if (deleteSeries) {
+        await deleteCalendarSeries(initialEvent.series_id);
+      } else {
+        await deleteCalendarEvent(initialEvent.id);
+      }
       onDelete(initialEvent.id);
       onClose();
     } catch (e) {
