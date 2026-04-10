@@ -998,13 +998,55 @@ MIGRATIONS = [
     "ALTER TABLE news_articles ADD COLUMN image_url TEXT",
     # Migration: add series_id to link recurring event instances
     "ALTER TABLE financial_events ADD COLUMN series_id TEXT",
-    # User-controlled ordering of institution groups on Dashboard/Accounts pages
+    # User-controlled ordering of institution groups; one row per (page, institution_name)
+    # so Dashboard and Accounts pages can be ordered independently. Schema upgrade
+    # from the page-less version is handled by _migrate_institution_order_per_page().
     """CREATE TABLE IF NOT EXISTS institution_display_order (
-        institution_name TEXT PRIMARY KEY,
+        page             TEXT NOT NULL,
+        institution_name TEXT NOT NULL,
         display_order    INTEGER NOT NULL,
-        updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+        updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (page, institution_name)
     )""",
 ]
+
+
+def _migrate_institution_order_per_page(conn):
+    """One-time: upgrade institution_display_order from a single shared list
+    to per-page ordering. The original schema used institution_name as the
+    sole PRIMARY KEY; the new schema adds a 'page' column with composite
+    PRIMARY KEY (page, institution_name).
+
+    If the table already has the 'page' column, this is a no-op. Otherwise,
+    existing rows (if any) are copied into the 'dashboard' page, and a new
+    'accounts' page starts empty so users can drag it independently.
+    """
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(institution_display_order)").fetchall()]
+    if not cols or "page" in cols:
+        return  # fresh DB or already migrated
+
+    # Snapshot existing rows from the old schema
+    old_rows = conn.execute(
+        "SELECT institution_name, display_order FROM institution_display_order"
+    ).fetchall()
+
+    conn.execute("ALTER TABLE institution_display_order RENAME TO _institution_display_order_old")
+    conn.execute("""
+        CREATE TABLE institution_display_order (
+            page             TEXT NOT NULL,
+            institution_name TEXT NOT NULL,
+            display_order    INTEGER NOT NULL,
+            updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (page, institution_name)
+        )
+    """)
+    for r in old_rows:
+        conn.execute(
+            "INSERT INTO institution_display_order (page, institution_name, display_order) "
+            "VALUES ('dashboard', ?, ?)",
+            (r["institution_name"], r["display_order"]),
+        )
+    conn.execute("DROP TABLE _institution_display_order_old")
 
 
 def _migrate_set_existing_users_admin(conn):
@@ -1363,6 +1405,13 @@ def init_db():
             _migrate_i360_per_account_tables(conn)
         except Exception as exc:
             logger.warning("I360 per-account table migration failed: %s", exc)
+        # Upgrade institution_display_order to per-page schema BEFORE migrations
+        # loop, because the loop's CREATE TABLE IF NOT EXISTS would otherwise
+        # silently skip the schema change.
+        try:
+            _migrate_institution_order_per_page(conn)
+        except Exception as exc:
+            logger.warning("institution_display_order migration failed: %s", exc)
         # Run migrations silently (ignore if column/table already exists)
         _expected_msg_fragments = (
             "duplicate column name",

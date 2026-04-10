@@ -884,7 +884,7 @@ export default function Accounts() {
         getAccounts(),
         getPlaidItems(),
         getManualEntries(),
-        getInstitutionOrder().catch(() => ({ names: [] })),
+        getInstitutionOrder("accounts").catch(() => ({ names: [] })),
       ]);
       setAccounts(accts);
       setItems(its);
@@ -991,7 +991,7 @@ export default function Accounts() {
     keys.splice(toIdx, 0, sourceKey);
 
     try {
-      await reorderInstitutions(keys);
+      await reorderInstitutions("accounts", keys);
       await load();
     } catch (_) { /* non-fatal */ }
   }

@@ -11,12 +11,16 @@ from api.database import get_db
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
+# Pages that may store independent institution-ordering rows.
+ORDER_PAGES = ("dashboard", "accounts")
+
 
 class AccountNotesBody(BaseModel):
     notes: str = ""
 
 
 class InstitutionReorderBody(BaseModel):
+    page: str
     names: list[str]
 
 
@@ -41,8 +45,7 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 b.native_balance, b.unit_price,
                 b.snapped_at,
                 m.registration_type, m.registration_group,
-                m.investment_objective, m.open_date,
-                COALESCE(ido.display_order, 999999) AS institution_order
+                m.investment_objective, m.open_date
             FROM accounts a
             LEFT JOIN account_balances b ON b.account_number = a.account_number
                 AND b.snapped_at = (
@@ -50,10 +53,8 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                     WHERE account_number = a.account_number
                 )
             LEFT JOIN i360_account_map m ON m.account_id = a.id
-            LEFT JOIN institution_display_order ido
-                ON ido.institution_name = a.institution_name
             WHERE a.is_active = 1
-            ORDER BY institution_order, a.institution_name, a.name
+            ORDER BY a.institution_name, a.name
         """).fetchall()
     result = []
     for row in rows:
@@ -64,12 +65,18 @@ async def list_accounts(_user: str = Depends(get_current_user)):
 
 
 @router.get("/institutions/order")
-async def get_institution_order(_user: str = Depends(get_current_user)):
-    """Return the user-saved institution display order as an array of names."""
+async def get_institution_order(
+    page: str = Query(...),
+    _user: str = Depends(get_current_user),
+):
+    """Return the user-saved institution display order for one page."""
+    if page not in ORDER_PAGES:
+        raise HTTPException(status_code=400, detail=f"page must be one of {ORDER_PAGES}")
     with get_db() as conn:
         rows = conn.execute(
             "SELECT institution_name FROM institution_display_order "
-            "ORDER BY display_order ASC"
+            "WHERE page = ? ORDER BY display_order ASC",
+            (page,),
         ).fetchall()
     return {"names": [r["institution_name"] for r in rows]}
 
@@ -80,18 +87,20 @@ async def reorder_institutions(
     _user: str = Depends(get_current_user),
 ):
     """
-    Persist the user's preferred order of institution groups.
-    Replaces the table contents with the supplied list (0-based order).
-    Institutions absent from the list fall back to alphabetical at the end.
+    Persist the user's preferred order of institution groups for one page.
+    Replaces only that page's rows with the supplied list (0-based order).
+    Dashboard and Accounts pages are ordered independently.
     """
+    if body.page not in ORDER_PAGES:
+        raise HTTPException(status_code=400, detail=f"page must be one of {ORDER_PAGES}")
     names = [n for n in body.names if n and n.strip()]
     with get_db() as conn:
-        conn.execute("DELETE FROM institution_display_order")
+        conn.execute("DELETE FROM institution_display_order WHERE page = ?", (body.page,))
         for order, name in enumerate(names):
             conn.execute(
-                "INSERT INTO institution_display_order (institution_name, display_order) "
-                "VALUES (?, ?)",
-                (name, order),
+                "INSERT INTO institution_display_order (page, institution_name, display_order) "
+                "VALUES (?, ?, ?)",
+                (body.page, name, order),
             )
     return {"ok": True, "count": len(names)}
 

@@ -84,7 +84,7 @@ export default function Dashboard() {
         getPortfolioPerformance(1825),
         getMarketRates().catch(() => ({ rates: [] })),
         i360SyncLog(1).catch(() => []),
-        getInstitutionOrder().catch(() => ({ names: [] })),
+        getInstitutionOrder("dashboard").catch(() => ({ names: [] })),
       ]);
       if (!mountedRef.current) return;
       setNw(nwData);
@@ -218,7 +218,7 @@ export default function Dashboard() {
     keys.splice(toIdx, 0, sourceKey);
 
     try {
-      await reorderInstitutions(keys);
+      await reorderInstitutions("dashboard", keys);
       await load();
     } catch (_) { /* non-fatal — leave order as-is */ }
   }

@@ -207,15 +207,15 @@ export async function getAccounts() {
   return res.json();
 }
 
-export async function getInstitutionOrder() {
-  const res = await apiFetch("/api/accounts/institutions/order");
+export async function getInstitutionOrder(page) {
+  const res = await apiFetch(`/api/accounts/institutions/order?page=${encodeURIComponent(page)}`);
   return res.json();
 }
 
-export async function reorderInstitutions(names) {
+export async function reorderInstitutions(page, names) {
   const res = await apiFetch("/api/accounts/institutions/reorder", {
     method: "PATCH",
-    body: JSON.stringify({ names }),
+    body: JSON.stringify({ page, names }),
   });
   return res.json();
 }
