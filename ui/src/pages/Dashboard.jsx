@@ -136,6 +136,25 @@ export default function Dashboard() {
     return acc;
   }, {});
 
+  // Latest manual entry per category
+  const latestManual = manualEntries.reduce((acc, e) => {
+    if (!acc[e.category] || e.entered_at > acc[e.category].entered_at) acc[e.category] = e;
+    return acc;
+  }, {});
+
+  const creditScore = latestManual["credit_score"];
+  const homeValue = latestManual["home_value"];
+  const carValue = latestManual["car_value"];
+  const otherAssets = manualEntries.filter(e => e.category === "other_asset");
+  const liabilities = manualEntries.filter(e => e.category === "other_liability");
+  // Excluded entries (e.g. "Overall Portfolio") sort first, then alphabetical
+  const sortManual = arr => [...arr].sort((a, b) =>
+    (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name)
+  );
+  const manualInvested = sortManual(manualEntries.filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth)));
+  const manualInvestedOther = manualEntries.filter(e => e.category === "invested" && !e.account_number && !e.exclude_from_net_worth);
+  const manualLiquid = sortManual(manualEntries.filter(e => e.category === "liquid"));
+
   // Build the unified block list — institutions AND manual sections, all
   // draggable in one shared order. Each block has a stable string key that
   // is stored in institution_display_order on reorder.
@@ -208,25 +227,6 @@ export default function Dashboard() {
     dragInstRef.current = null;
     document.body.classList.remove("inst-drag-active");
   }
-
-  // Latest manual entry per category
-  const latestManual = manualEntries.reduce((acc, e) => {
-    if (!acc[e.category] || e.entered_at > acc[e.category].entered_at) acc[e.category] = e;
-    return acc;
-  }, {});
-
-  const creditScore = latestManual["credit_score"];
-  const homeValue = latestManual["home_value"];
-  const carValue = latestManual["car_value"];
-  const otherAssets = manualEntries.filter(e => e.category === "other_asset");
-  const liabilities = manualEntries.filter(e => e.category === "other_liability");
-  // Excluded entries (e.g. "Overall Portfolio") sort first, then alphabetical
-  const sortManual = arr => [...arr].sort((a, b) =>
-    (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name)
-  );
-  const manualInvested = sortManual(manualEntries.filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth)));
-  const manualInvestedOther = manualEntries.filter(e => e.category === "invested" && !e.account_number && !e.exclude_from_net_worth);
-  const manualLiquid = sortManual(manualEntries.filter(e => e.category === "liquid"));
 
   // Consolidated allocation across all manual investment holdings
   const allHoldings = manualInvested.flatMap(e => e.holdings || []);
