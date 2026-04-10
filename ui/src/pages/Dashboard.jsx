@@ -3,7 +3,7 @@ import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries,
   getPlaidItems, removePlaidItem, syncCoinbase, getPortfolioPerformance,
-  getMarketRates, i360SyncLog,
+  getMarketRates, i360SyncLog, reorderInstitutions,
 } from "../api.js";
 import NetWorthChart from "../components/NetWorthChart.jsx";
 import PlaidLink from "../components/PlaidLink.jsx";
@@ -60,6 +60,8 @@ export default function Dashboard() {
   const [insperityOpen, setInsperityOpen] = useState(false);
   const [i360LastSync, setI360LastSync] = useState(null);
   const mountedRef = useRef(true);
+  // Drag-and-drop refs (avoid setState during dragstart — see CLAUDE.md)
+  const dragInstRef = useRef(null);
 
   async function load() {
     setLoadError(false);
@@ -122,6 +124,55 @@ export default function Dashboard() {
     acc[k].push(a);
     return acc;
   }, {});
+
+  // Ordered institution list: backend supplies institution_order via JOIN.
+  // Unordered groups (999999) fall back to I360-first then alphabetical.
+  const orderedInstitutions = Object.entries(grouped).sort(([nameA, a], [nameB, b]) => {
+    const oA = a[0]?.institution_order ?? 999999;
+    const oB = b[0]?.institution_order ?? 999999;
+    if (oA !== oB) return oA - oB;
+    const i360A = a.some(x => x.source === "investor360") ? 0 : 1;
+    const i360B = b.some(x => x.source === "investor360") ? 0 : 1;
+    if (i360A !== i360B) return i360A - i360B;
+    return nameA.localeCompare(nameB);
+  });
+
+  function handleInstDragStart(e, name) {
+    dragInstRef.current = name;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", name);
+    document.body.classList.add("inst-drag-active");
+  }
+
+  function handleInstDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  async function handleInstDrop(e, targetName) {
+    e.preventDefault();
+    const sourceName = dragInstRef.current;
+    dragInstRef.current = null;
+    document.body.classList.remove("inst-drag-active");
+    if (!sourceName || sourceName === targetName) return;
+
+    const names = orderedInstitutions.map(([n]) => n);
+    const fromIdx = names.indexOf(sourceName);
+    const toIdx = names.indexOf(targetName);
+    if (fromIdx < 0 || toIdx < 0) return;
+    names.splice(fromIdx, 1);
+    names.splice(toIdx, 0, sourceName);
+
+    try {
+      await reorderInstitutions(names);
+      await load();
+    } catch (_) { /* non-fatal — leave order as-is */ }
+  }
+
+  function handleInstDragEnd() {
+    dragInstRef.current = null;
+    document.body.classList.remove("inst-drag-active");
+  }
 
   // Latest manual entry per category
   const latestManual = manualEntries.reduce((acc, e) => {
@@ -317,23 +368,33 @@ export default function Dashboard() {
             No accounts connected. Click <strong>+ Connect Account</strong> above.
           </div>
         ) : (
-          Object.entries(grouped)
-            .sort(([, a], [, b]) => {
-              const aI360 = a.some(x => x.source === "investor360") ? 0 : 1;
-              const bI360 = b.some(x => x.source === "investor360") ? 0 : 1;
-              return aI360 - bI360;
-            })
-            .map(([institution, accts]) => {
+          orderedInstitutions.map(([institution, accts]) => {
             const item = plaidItems.find(i => i.institution_name === institution);
             const isI360 = accts.some(x => x.source === "investor360");
             const syncedAt = item?.last_synced_at || (isI360 ? i360LastSync : null);
             return (
-              <div className="card" key={institution} style={{ margin: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <div>
+              <div
+                className="card inst-drop-target"
+                key={institution}
+                style={{ margin: 0 }}
+                onDragOver={handleInstDragOver}
+                onDrop={(e) => handleInstDrop(e, institution)}
+              >
+                <div
+                  draggable
+                  onDragStart={(e) => handleInstDragStart(e, institution)}
+                  onDragEnd={handleInstDragEnd}
+                  title="Drag to reorder"
+                  style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    marginBottom: 12, cursor: "grab",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ color: "var(--text2)", fontSize: 14, userSelect: "none" }}>⋮⋮</span>
                     <span style={{ fontWeight: 700, fontSize: 15 }}>{institution}</span>
                     {syncedAt && (
-                      <span style={{ fontSize: 11, color: "var(--text2)", marginLeft: 10 }}>
+                      <span style={{ fontSize: 11, color: "var(--text2)", marginLeft: 6 }}>
                         synced {fmtDate(syncedAt)}
                       </span>
                     )}

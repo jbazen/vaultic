@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries,
   getAccountHoldings, getAccountInvestmentTransactions, toggleExcludeFromNetWorth,
   deleteManualEntry, updateAccountNotes, renameManualEntry, getBalanceHistory,
-  getManualEntryHistory,
+  getManualEntryHistory, reorderInstitutions,
 } from "../api.js";
 import PlaidLink from "../components/PlaidLink.jsx";
 import EditableNotes from "../components/EditableNotes.jsx";
@@ -866,6 +866,8 @@ export default function Accounts() {
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [coinbaseStatus, setCoinbaseStatus] = useState(null);
   const [manualEntries, setManualEntries] = useState([]);
+  // Drag-and-drop ref (avoid setState during dragstart — see CLAUDE.md)
+  const dragInstRef = useRef(null);
 
   async function load() {
     setLoadError(false);
@@ -914,6 +916,51 @@ export default function Accounts() {
     return acc;
   }, {});
 
+  // Order institution groups by backend display_order (999999 = unset → alphabetical fallback)
+  const orderedInstitutions = Object.entries(grouped).sort(([nameA, a], [nameB, b]) => {
+    const oA = a[0]?.institution_order ?? 999999;
+    const oB = b[0]?.institution_order ?? 999999;
+    if (oA !== oB) return oA - oB;
+    return nameA.localeCompare(nameB);
+  });
+
+  function handleInstDragStart(e, name) {
+    dragInstRef.current = name;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", name);
+    document.body.classList.add("inst-drag-active");
+  }
+
+  function handleInstDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }
+
+  async function handleInstDrop(e, targetName) {
+    e.preventDefault();
+    const sourceName = dragInstRef.current;
+    dragInstRef.current = null;
+    document.body.classList.remove("inst-drag-active");
+    if (!sourceName || sourceName === targetName) return;
+
+    const names = orderedInstitutions.map(([n]) => n);
+    const fromIdx = names.indexOf(sourceName);
+    const toIdx = names.indexOf(targetName);
+    if (fromIdx < 0 || toIdx < 0) return;
+    names.splice(fromIdx, 1);
+    names.splice(toIdx, 0, sourceName);
+
+    try {
+      await reorderInstitutions(names);
+      await load();
+    } catch (_) { /* non-fatal */ }
+  }
+
+  function handleInstDragEnd() {
+    dragInstRef.current = null;
+    document.body.classList.remove("inst-drag-active");
+  }
+
   return (
     <div>
       <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -953,18 +1000,35 @@ export default function Accounts() {
           <p style={{ fontSize: "13px" }}>Click "Connect Account" to link your first institution via Plaid.</p>
         </div>
       ) : (
-        Object.entries(grouped).map(([institution, accts]) => {
+        orderedInstitutions.map(([institution, accts]) => {
           const item = items.find(i => i.institution_name === institution);
           return (
-            <div className="card" key={institution}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 16 }}>{institution}</div>
-                  {item?.last_synced_at && (
-                    <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>
-                      Synced {fmtDate(item.last_synced_at)}
-                    </div>
-                  )}
+            <div
+              className="card inst-drop-target"
+              key={institution}
+              onDragOver={handleInstDragOver}
+              onDrop={(e) => handleInstDrop(e, institution)}
+            >
+              <div
+                draggable
+                onDragStart={(e) => handleInstDragStart(e, institution)}
+                onDragEnd={handleInstDragEnd}
+                title="Drag to reorder"
+                style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  marginBottom: 16, cursor: "grab",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ color: "var(--text2)", fontSize: 16, userSelect: "none" }}>⋮⋮</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>{institution}</div>
+                    {item?.last_synced_at && (
+                      <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>
+                        Synced {fmtDate(item.last_synced_at)}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 {item && (
                   <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}

@@ -754,3 +754,12 @@
   padding: 1px 2px;
 }
 
+/* Institution drag-and-drop visual feedback (Dashboard + Accounts) */
+body.inst-drag-active .inst-drop-target {
+  outline: 2px dashed transparent;
+  transition: outline-color 80ms linear;
+}
+body.inst-drag-active .inst-drop-target:hover {
+  outline-color: var(--accent);
+}
+

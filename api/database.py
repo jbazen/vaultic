@@ -998,6 +998,12 @@ MIGRATIONS = [
     "ALTER TABLE news_articles ADD COLUMN image_url TEXT",
     # Migration: add series_id to link recurring event instances
     "ALTER TABLE financial_events ADD COLUMN series_id TEXT",
+    # User-controlled ordering of institution groups on Dashboard/Accounts pages
+    """CREATE TABLE IF NOT EXISTS institution_display_order (
+        institution_name TEXT PRIMARY KEY,
+        display_order    INTEGER NOT NULL,
+        updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""",
 ]
 
 

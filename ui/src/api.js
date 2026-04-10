@@ -207,6 +207,19 @@ export async function getAccounts() {
   return res.json();
 }
 
+export async function getInstitutionOrder() {
+  const res = await apiFetch("/api/accounts/institutions/order");
+  return res.json();
+}
+
+export async function reorderInstitutions(names) {
+  const res = await apiFetch("/api/accounts/institutions/reorder", {
+    method: "PATCH",
+    body: JSON.stringify({ names }),
+  });
+  return res.json();
+}
+
 export async function getBalanceHistory(accountId, days = 365) {
   const res = await apiFetch(`/api/accounts/${accountId}/balances?days=${days}`);
   return res.json();

@@ -392,3 +392,84 @@ class TestManualEntries:
         # Confirm gone
         entries = client.get("/api/manual", headers=auth_headers).json()
         assert not any(e["name"] == "To Be Deleted" for e in entries)
+
+
+class TestInstitutionReorder:
+    """Drag-and-drop institution reordering on Dashboard/Accounts pages."""
+
+    def test_get_order_unauthenticated_returns_401(self, client):
+        res = client.get("/api/accounts/institutions/order")
+        assert res.status_code == 401
+
+    def test_reorder_unauthenticated_returns_401(self, client):
+        res = client.patch("/api/accounts/institutions/reorder", json={"names": []})
+        assert res.status_code == 401
+
+    def test_reorder_persists_and_returns(self, client, auth_headers):
+        """Reorder endpoint stores names; GET order returns them in saved order."""
+        names = ["Chase", "Robinhood", "Voya"]
+        res = client.patch(
+            "/api/accounts/institutions/reorder",
+            headers=auth_headers,
+            json={"names": names},
+        )
+        assert res.status_code == 200
+        assert res.json()["ok"] is True
+        assert res.json()["count"] == 3
+
+        order = client.get("/api/accounts/institutions/order", headers=auth_headers).json()
+        assert order["names"] == names
+
+    def test_reorder_replaces_previous(self, client, auth_headers):
+        """A second reorder call wipes the prior list."""
+        client.patch("/api/accounts/institutions/reorder", headers=auth_headers,
+                     json={"names": ["A", "B", "C"]})
+        client.patch("/api/accounts/institutions/reorder", headers=auth_headers,
+                     json={"names": ["X", "Y"]})
+        order = client.get("/api/accounts/institutions/order", headers=auth_headers).json()
+        assert order["names"] == ["X", "Y"]
+
+    def test_reorder_strips_empty_names(self, client, auth_headers):
+        """Blank/whitespace-only names are filtered out."""
+        client.patch("/api/accounts/institutions/reorder", headers=auth_headers,
+                     json={"names": ["Real", "", "  ", "Also Real"]})
+        order = client.get("/api/accounts/institutions/order", headers=auth_headers).json()
+        assert order["names"] == ["Real", "Also Real"]
+
+    def test_get_accounts_includes_institution_order(self, client, auth_headers):
+        """Each account row from GET /api/accounts must include institution_order."""
+        res = client.get("/api/accounts", headers=auth_headers)
+        assert res.status_code == 200
+        for acct in res.json():
+            assert "institution_order" in acct
+
+    def test_get_accounts_respects_saved_order(self, client, auth_headers):
+        """Saved institution order should sort accounts in GET /api/accounts."""
+        from api.database import get_db
+
+        # Insert two accounts under distinct institutions
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO accounts (name, type, institution_name, is_active) "
+                "VALUES ('Acct Z', 'depository', 'ZZZ Bank', 1)"
+            )
+            conn.execute(
+                "INSERT INTO accounts (name, type, institution_name, is_active) "
+                "VALUES ('Acct A', 'depository', 'AAA Bank', 1)"
+            )
+
+        # Save order with ZZZ first
+        client.patch("/api/accounts/institutions/reorder", headers=auth_headers,
+                     json={"names": ["ZZZ Bank", "AAA Bank"]})
+
+        accts = client.get("/api/accounts", headers=auth_headers).json()
+        # Filter to only the two we inserted
+        relevant = [a for a in accts if a["institution_name"] in ("ZZZ Bank", "AAA Bank")]
+        # ZZZ should sort before AAA because of explicit display_order
+        institutions_in_order = [a["institution_name"] for a in relevant]
+        # First occurrence of each institution
+        seen = []
+        for inst in institutions_in_order:
+            if inst not in seen:
+                seen.append(inst)
+        assert seen == ["ZZZ Bank", "AAA Bank"]
