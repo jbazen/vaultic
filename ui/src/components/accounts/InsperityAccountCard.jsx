@@ -118,8 +118,19 @@ function TransactionsTab({ transactions }) {
 
 /* ── Performance tab ───────────────────────────────────────────────────────── */
 
-/** Human-readable labels for performance period keys from the API. */
-const PERIOD_LABELS = { "1_month": "1 Month", "3_month": "3 Month", ytd: "YTD" };
+/** Human-readable labels for performance period keys from the API.
+ *  Insperity returns whichever periods are available for the account's
+ *  history window, so any unknown key falls back to its raw form. */
+const PERIOD_LABELS = {
+  "1_month": "1 Month",
+  "3_month": "3 Month",
+  "6_month": "6 Month",
+  ytd: "YTD",
+  "1_year": "1 Year",
+  "3_year": "3 Year",
+  "5_year": "5 Year",
+  "10_year": "10 Year",
+};
 
 /** Rate of return table — cumulative and annualized for each period. */
 function PerformanceTab({ performance }) {

@@ -197,17 +197,34 @@ def parse_holdings(html: str) -> dict:
     return {"holdings": holdings, "total_balance": total}
 
 
+def _normalize_period(label: str) -> str:
+    """Normalize a period label like '1 Month' or 'Year To Date' into a snake_case key."""
+    s = label.strip().lower()
+    if s == "year to date":
+        return "ytd"
+    return s.replace(" ", "_")
+
+
 def parse_performance(html: str) -> dict:
     """Parse investment_return.aspx → rate of return periods.
 
+    Insperity serves two layouts:
+      - Full history: Cumulative + Annualized each have 3 horizontal cells
+        (1 Month / 3 Month / YTD).
+      - Limited history: each section is one column wide and may use
+        different periods (e.g. Cumulative=1 Month, Annualized=1 Year).
+
     Returns:
         {
-            "cumulative": {"1_month": float, "3_month": float, "ytd": float},
-            "annualized": {"1_month": float, "3_month": float, "ytd": float},
-            "as_of": str | None,  # e.g. "4/30/2026"
+            "cumulative": {<period_key>: float, ...},
+            "annualized": {<period_key>: float, ...},
+            "as_of": str | None,  # e.g. "3/31/2026"
         }
 
-    Raises ValueError if no performance rows found.
+    Period keys are derived from the labels Insperity uses, normalized to
+    snake_case (e.g. "1 Month" -> "1_month", "1 Year" -> "1_year").
+
+    Raises ValueError only if neither section has any period/value pairs.
     """
     rows = _parse_tables(html)
 
@@ -219,23 +236,62 @@ def parse_performance(html: str) -> dict:
             if m:
                 as_of = m.group(1)
 
-    # Performance rows: exactly 3 cells, all percentages
-    pct_rows = []
+    # Walk rows in document order, tracking the current section header.
+    # Within each section, accumulate label cells (no %) and value cells (with %)
+    # then zip them positionally to build {period: value} pairs.
+    sections = {"cumulative": {"labels": [], "values": []},
+                "annualized": {"labels": [], "values": []}}
+    current = None
     for row in rows:
-        if len(row) == 3 and all("%" in c or c.strip() == "0%" for c in row):
-            pct_rows.append(row)
+        # Detect a new section header — single-cell row containing exactly the word
+        joined = " ".join(row).strip().lower()
+        if joined == "cumulative":
+            current = "cumulative"
+            continue
+        if joined == "annualized":
+            current = "annualized"
+            continue
+        if current is None:
+            continue
+        # Classify cells: a row may contain a mix, but in practice Insperity
+        # puts label cells and value cells in separate <tr>s.
+        for cell in row:
+            stripped = cell.strip()
+            if not stripped:
+                continue
+            if "%" in stripped:
+                sections[current]["values"].append(stripped)
+            elif _looks_like_period(stripped):
+                sections[current]["labels"].append(stripped)
 
-    if len(pct_rows) < 2:
+    cumulative = _zip_periods(sections["cumulative"])
+    annualized = _zip_periods(sections["annualized"])
+
+    if not cumulative and not annualized:
         raise ValueError(
-            "performance: expected 2 rows of period returns (cumulative + annualized), "
-            f"found {len(pct_rows)} — page structure may have changed"
+            "performance: no Cumulative or Annualized period data found "
+            "— page structure may have changed"
         )
 
-    periods = ["1_month", "3_month", "ytd"]
-    cumulative = {p: _parse_pct(pct_rows[0][i]) for i, p in enumerate(periods)}
-    annualized = {p: _parse_pct(pct_rows[1][i]) for i, p in enumerate(periods)}
-
     return {"cumulative": cumulative, "annualized": annualized, "as_of": as_of}
+
+
+def _looks_like_period(s: str) -> bool:
+    """True if s looks like a period label such as '1 Month', 'YTD',
+    'Year To Date', or '1 Year'."""
+    s_low = s.lower().strip()
+    if s_low in ("ytd", "year to date"):
+        return True
+    return bool(re.fullmatch(r"\d+\s+(month|months|year|years|day|days)", s_low))
+
+
+def _zip_periods(section: dict) -> dict:
+    """Zip parallel labels/values lists into {normalized_key: float}."""
+    out = {}
+    for label, value in zip(section["labels"], section["values"]):
+        key = _normalize_period(label)
+        out[key] = _parse_pct(value)
+    return out
 
 
 def parse_contributions(html: str) -> dict:

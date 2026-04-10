@@ -107,8 +107,13 @@ HOLDINGS_HTML = """
 PERFORMANCE_HTML = """
 <table><tr><td>My Rate of Return</td><td>Available through 4/30/2026</td></tr></table>
 <table>
+<tr><th colspan="3">Cumulative</th></tr>
 <tr><th>1 Month</th><th>3 Month</th><th>Year To Date</th></tr>
 <tr><td>1.43%</td><td>1.43%</td><td>1.43%</td></tr>
+</table>
+<table>
+<tr><th colspan="3">Annualized</th></tr>
+<tr><th>1 Month</th><th>3 Month</th><th>Year To Date</th></tr>
 <tr><td>1.43%</td><td>.48%</td><td>.29%</td></tr>
 </table>
 """
@@ -182,7 +187,8 @@ class TestHoldingsParser:
 
 
 class TestPerformanceParser:
-    def test_parse_performance(self):
+    def test_parse_performance_full_horizontal_layout(self):
+        """Old layout: 3 horizontal periods per section."""
         result = parse_performance(PERFORMANCE_HTML)
         assert result["as_of"] == "4/30/2026"
         assert result["cumulative"]["1_month"] == 1.43
@@ -190,9 +196,33 @@ class TestPerformanceParser:
         assert result["annualized"]["3_month"] == 0.48
         assert result["annualized"]["ytd"] == 0.29
 
+    def test_parse_performance_limited_history_layout(self):
+        """Limited-history layout from real Insperity HTML fixture: 1 cell wide,
+        single period per section, with Cumulative=1 Month and Annualized=1 Year."""
+        from pathlib import Path
+        fixture = Path(__file__).parent / "fixtures" / "insperity_investment_return_limited.html"
+        html = fixture.read_text(encoding="utf-8")
+        result = parse_performance(html)
+        assert result["as_of"] == "3/31/2026"
+        assert result["cumulative"] == {"1_month": -2.87}
+        assert result["annualized"] == {"1_year": 0.0}
+
     def test_parse_performance_no_data_raises(self):
-        with pytest.raises(ValueError, match="expected 2 rows"):
+        with pytest.raises(ValueError, match="no Cumulative or Annualized"):
             parse_performance("<table><tr><td>No data</td></tr></table>")
+
+    def test_parse_performance_only_cumulative_present(self):
+        """Annualized may be entirely absent if there's not even 1 month of data."""
+        html = """
+        <table>
+        <tr><th>Cumulative</th></tr>
+        <tr><td>1 Month</td></tr>
+        <tr><td>2.50%</td></tr>
+        </table>
+        """
+        result = parse_performance(html)
+        assert result["cumulative"] == {"1_month": 2.5}
+        assert result["annualized"] == {}
 
 
 class TestContributionsParser:

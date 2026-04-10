@@ -58,11 +58,17 @@ def _store_holdings(conn, holdings: list[dict], snapped_at: date) -> int:
 
 
 def _store_performance(conn, perf: dict, snapped_at: date):
-    """Store performance return periods."""
-    periods = ["1_month", "3_month", "ytd"]
+    """Store performance return periods.
+
+    Insperity may return any subset of periods depending on account history
+    (e.g. 1_month / 3_month / ytd in the full layout, or just 1_month and
+    1_year in the limited-history layout). We store the union of period keys
+    present in either section, with NULL for whichever side lacks that period.
+    """
+    cum = perf.get("cumulative") or {}
+    ann = perf.get("annualized") or {}
+    periods = sorted(set(cum) | set(ann))
     for period in periods:
-        cum = perf["cumulative"].get(period)
-        ann = perf["annualized"].get(period)
         conn.execute(
             """INSERT INTO insperity_performance
                (snapped_at, period, cumulative, annualized)
@@ -70,7 +76,7 @@ def _store_performance(conn, perf: dict, snapped_at: date):
                ON CONFLICT(snapped_at, period)
                DO UPDATE SET cumulative=excluded.cumulative,
                             annualized=excluded.annualized""",
-            (snapped_at.isoformat(), period, cum, ann),
+            (snapped_at.isoformat(), period, cum.get(period), ann.get(period)),
         )
 
 
