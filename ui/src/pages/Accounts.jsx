@@ -3,8 +3,15 @@ import {
   getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries,
   getAccountHoldings, getAccountInvestmentTransactions, toggleExcludeFromNetWorth,
   deleteManualEntry, updateAccountNotes, renameManualEntry, getBalanceHistory,
-  getManualEntryHistory, reorderInstitutions,
+  getManualEntryHistory, reorderInstitutions, getInstitutionOrder,
 } from "../api.js";
+
+// Pseudo-keys for manual sections so they can be ordered alongside institutions.
+const SEC_INVESTED       = "__sec_investment_imported__";
+const SEC_INVESTED_OTHER = "__sec_investment_other__";
+const SEC_LIQUID         = "__sec_hsa_cash__";
+const SEC_PROPERTY       = "__sec_property_vehicles__";
+const SEC_LIABILITIES    = "__sec_liabilities__";
 import PlaidLink from "../components/PlaidLink.jsx";
 import EditableNotes from "../components/EditableNotes.jsx";
 import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
@@ -866,16 +873,23 @@ export default function Accounts() {
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [coinbaseStatus, setCoinbaseStatus] = useState(null);
   const [manualEntries, setManualEntries] = useState([]);
+  const [savedOrder, setSavedOrder] = useState([]);
   // Drag-and-drop ref (avoid setState during dragstart — see CLAUDE.md)
   const dragInstRef = useRef(null);
 
   async function load() {
     setLoadError(false);
     try {
-      const [accts, its, manual] = await Promise.all([getAccounts(), getPlaidItems(), getManualEntries()]);
+      const [accts, its, manual, order] = await Promise.all([
+        getAccounts(),
+        getPlaidItems(),
+        getManualEntries(),
+        getInstitutionOrder().catch(() => ({ names: [] })),
+      ]);
       setAccounts(accts);
       setItems(its);
       setManualEntries(manual);
+      setSavedOrder(order?.names || []);
     } catch {
       setLoadError(true);
     } finally {
@@ -916,18 +930,44 @@ export default function Accounts() {
     return acc;
   }, {});
 
-  // Order institution groups by backend display_order (999999 = unset → alphabetical fallback)
-  const orderedInstitutions = Object.entries(grouped).sort(([nameA, a], [nameB, b]) => {
-    const oA = a[0]?.institution_order ?? 999999;
-    const oB = b[0]?.institution_order ?? 999999;
-    if (oA !== oB) return oA - oB;
-    return nameA.localeCompare(nameB);
+  // ── Filtered manual entry collections (computed once) ──
+  const investedImported = manualEntries
+    .filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth))
+    .sort((a, b) => (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name));
+  const investedOther    = manualEntries.filter(e => e.category === "invested" && !e.account_number && !e.exclude_from_net_worth);
+  const liquidEntries    = manualEntries.filter(e => e.category === "liquid");
+  const propertyEntries  = manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category));
+  const liabilityEntries = manualEntries.filter(e => e.category === "other_liability");
+
+  // ── Build unified block list (institutions + manual sections, all draggable) ──
+  const blocks = [];
+  for (const [inst, accts] of Object.entries(grouped)) {
+    blocks.push({ key: inst, kind: "institution", accts });
+  }
+  if (investedImported.length > 0) blocks.push({ key: SEC_INVESTED,       kind: "sec_invested" });
+  if (investedOther.length > 0)    blocks.push({ key: SEC_INVESTED_OTHER, kind: "sec_invested_other" });
+  if (liquidEntries.length > 0)    blocks.push({ key: SEC_LIQUID,         kind: "sec_liquid" });
+  if (propertyEntries.length > 0)  blocks.push({ key: SEC_PROPERTY,       kind: "sec_property" });
+  if (liabilityEntries.length > 0) blocks.push({ key: SEC_LIABILITIES,    kind: "sec_liabilities" });
+
+  const orderMap = new Map(savedOrder.map((n, i) => [n, i]));
+  const defaultIdx = new Map(blocks.map((b, i) => [b.key, i]));
+  const orderedBlocks = [...blocks].sort((a, b) => {
+    const oA = orderMap.get(a.key);
+    const oB = orderMap.get(b.key);
+    if (oA != null && oB != null) return oA - oB;
+    if (oA != null) return -1;
+    if (oB != null) return 1;
+    if (a.kind === "institution" && b.kind !== "institution") return -1;
+    if (a.kind !== "institution" && b.kind === "institution") return 1;
+    if (a.kind === "institution" && b.kind === "institution") return a.key.localeCompare(b.key);
+    return defaultIdx.get(a.key) - defaultIdx.get(b.key);
   });
 
-  function handleInstDragStart(e, name) {
-    dragInstRef.current = name;
+  function handleInstDragStart(e, key) {
+    dragInstRef.current = key;
     e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", name);
+    e.dataTransfer.setData("text/plain", key);
     document.body.classList.add("inst-drag-active");
   }
 
@@ -936,22 +976,22 @@ export default function Accounts() {
     e.dataTransfer.dropEffect = "move";
   }
 
-  async function handleInstDrop(e, targetName) {
+  async function handleInstDrop(e, targetKey) {
     e.preventDefault();
-    const sourceName = dragInstRef.current;
+    const sourceKey = dragInstRef.current;
     dragInstRef.current = null;
     document.body.classList.remove("inst-drag-active");
-    if (!sourceName || sourceName === targetName) return;
+    if (!sourceKey || sourceKey === targetKey) return;
 
-    const names = orderedInstitutions.map(([n]) => n);
-    const fromIdx = names.indexOf(sourceName);
-    const toIdx = names.indexOf(targetName);
+    const keys = orderedBlocks.map(b => b.key);
+    const fromIdx = keys.indexOf(sourceKey);
+    const toIdx = keys.indexOf(targetKey);
     if (fromIdx < 0 || toIdx < 0) return;
-    names.splice(fromIdx, 1);
-    names.splice(toIdx, 0, sourceName);
+    keys.splice(fromIdx, 1);
+    keys.splice(toIdx, 0, sourceKey);
 
     try {
-      await reorderInstitutions(names);
+      await reorderInstitutions(keys);
       await load();
     } catch (_) { /* non-fatal */ }
   }
@@ -1000,132 +1040,125 @@ export default function Accounts() {
           <p style={{ fontSize: "13px" }}>Click "Connect Account" to link your first institution via Plaid.</p>
         </div>
       ) : (
-        orderedInstitutions.map(([institution, accts]) => {
-          const item = items.find(i => i.institution_name === institution);
+        orderedBlocks.map(block => {
+          let titleText = "";
+          let subtitleText = null;
+          let rightButton = null;
+          let bodyContent = null;
+
+          if (block.kind === "institution") {
+            const item = items.find(i => i.institution_name === block.key);
+            titleText = block.key;
+            if (item?.last_synced_at) subtitleText = `Synced ${fmtDate(item.last_synced_at)}`;
+            if (item) {
+              rightButton = (
+                <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}
+                  onClick={() => handleRemove(item.item_id)}>
+                  Disconnect
+                </button>
+              );
+            }
+            bodyContent = (
+              <div className="account-list">
+                {block.accts.map(a => <AccountRow key={a.id} account={a} onRenamed={load} />)}
+              </div>
+            );
+          } else if (block.kind === "sec_invested") {
+            titleText = "Investment Accounts (PDF Imported)";
+            subtitleText = "Click any row to expand holdings. Use \"⊘ Exclude\" on consolidated portfolio summaries to avoid double-counting in net worth.";
+            bodyContent = (
+              <div className="account-list">
+                {investedImported.map(entry => entry.account_number === "105001401K" ? (
+                  <InsperityAccountCard key={entry.id} entry={entry}
+                    onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+                    onToggleExclude={load} onRenamed={load} />
+                ) : (
+                  <ManualInvestmentCard key={entry.id} entry={entry}
+                    onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+                    onToggleExclude={load} onRenamed={load} />
+                ))}
+              </div>
+            );
+          } else if (block.kind === "sec_invested_other") {
+            titleText = "Other Investment Accounts";
+            bodyContent = (
+              <div className="account-list">
+                {investedOther.map(entry => (
+                  <ManualInvestmentCard key={entry.id} entry={entry}
+                    onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
+                    onToggleExclude={load} onRenamed={load} />
+                ))}
+              </div>
+            );
+          } else if (block.kind === "sec_liquid") {
+            titleText = "HSA / Cash Accounts";
+            bodyContent = (
+              <div className="account-list">
+                {liquidEntries.map(entry => (
+                  <ManualSimpleRow key={entry.id} entry={entry} badge="liquid" badgeClass="badge-depository"
+                    onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+                    onRenamed={load} />
+                ))}
+              </div>
+            );
+          } else if (block.kind === "sec_property") {
+            titleText = "Property & Vehicles";
+            bodyContent = (
+              <div className="account-list">
+                {propertyEntries.map(entry => (
+                  <ManualSimpleRow key={entry.id} entry={entry}
+                    badge={{ home_value: "Home", car_value: "Vehicle", real_estate: "Real Estate", vehicles: "Vehicle" }[entry.category]}
+                    badgeClass="badge-investment"
+                    onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+                    onRenamed={load} />
+                ))}
+              </div>
+            );
+          } else if (block.kind === "sec_liabilities") {
+            titleText = "Liabilities";
+            bodyContent = (
+              <div className="account-list">
+                {liabilityEntries.map(entry => (
+                  <ManualSimpleRow key={entry.id} entry={entry} badge="Liability" badgeClass="badge-credit" negative
+                    onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
+                    onRenamed={load} />
+                ))}
+              </div>
+            );
+          }
+
           return (
             <div
               className="card inst-drop-target"
-              key={institution}
+              key={block.key}
               onDragOver={handleInstDragOver}
-              onDrop={(e) => handleInstDrop(e, institution)}
+              onDrop={(e) => handleInstDrop(e, block.key)}
             >
               <div
                 draggable
-                onDragStart={(e) => handleInstDragStart(e, institution)}
+                onDragStart={(e) => handleInstDragStart(e, block.key)}
                 onDragEnd={handleInstDragEnd}
                 title="Drag to reorder"
                 style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  display: "flex", justifyContent: "space-between", alignItems: "flex-start",
                   marginBottom: 16, cursor: "grab",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ color: "var(--text2)", fontSize: 16, userSelect: "none" }}>⋮⋮</span>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <span style={{ color: "var(--text2)", fontSize: 16, userSelect: "none", marginTop: 1 }}>⋮⋮</span>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>{institution}</div>
-                    {item?.last_synced_at && (
-                      <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>
-                        Synced {fmtDate(item.last_synced_at)}
-                      </div>
+                    <div style={{ fontWeight: 700, fontSize: 16 }}>{titleText}</div>
+                    {subtitleText && (
+                      <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>{subtitleText}</div>
                     )}
                   </div>
                 </div>
-                {item && (
-                  <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}
-                    onClick={() => handleRemove(item.item_id)}>
-                    Disconnect
-                  </button>
-                )}
+                {rightButton}
               </div>
-              <div className="account-list">
-                {accts.map(a => <AccountRow key={a.id} account={a} onRenamed={load} />)}
-              </div>
+              {bodyContent}
             </div>
           );
         })
-      )}
-
-      {/* ── PDF-Imported Investment Accounts ── */}
-      {manualEntries.filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth)).length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>
-            Investment Accounts (PDF Imported)
-          </div>
-          <div style={{ fontSize: 12, color: "var(--text2)", marginBottom: 16 }}>
-            Click any row to expand holdings. Use "⊘ Exclude" on consolidated portfolio summaries to avoid double-counting in net worth.
-          </div>
-          <div className="account-list">
-            {[...manualEntries.filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth))]
-              .sort((a, b) => (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name))
-              .map(entry => entry.account_number === "105001401K" ? (
-                <InsperityAccountCard key={entry.id} entry={entry}
-                  onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
-                  onToggleExclude={load} onRenamed={load} />
-              ) : (
-                <ManualInvestmentCard key={entry.id} entry={entry}
-                  onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
-                  onToggleExclude={load} onRenamed={load} />
-              ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Manually-entered Investment Accounts (no account number — e.g. Insperity) ── */}
-      {manualEntries.filter(e => e.category === "invested" && !e.account_number && !e.exclude_from_net_worth).length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Other Investment Accounts</div>
-          <div className="account-list">
-            {manualEntries.filter(e => e.category === "invested" && !e.account_number && !e.exclude_from_net_worth).map(entry => (
-              <ManualInvestmentCard key={entry.id} entry={entry}
-                onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
-                onToggleExclude={load} onRenamed={load} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── HSA / Cash Accounts ── */}
-      {manualEntries.filter(e => e.category === "liquid").length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>HSA / Cash Accounts</div>
-          <div className="account-list">
-            {manualEntries.filter(e => e.category === "liquid").map(entry => (
-              <ManualSimpleRow key={entry.id} entry={entry} badge="liquid" badgeClass="badge-depository"
-                onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
-                onRenamed={load} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Property & Vehicles ── */}
-      {manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)).length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Property & Vehicles</div>
-          <div className="account-list">
-            {manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)).map(entry => (
-              <ManualSimpleRow key={entry.id} entry={entry}
-                badge={{ home_value: "Home", car_value: "Vehicle", real_estate: "Real Estate", vehicles: "Vehicle" }[entry.category]}
-                badgeClass="badge-investment"
-                onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
-                onRenamed={load} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Liabilities ── */}
-      {manualEntries.filter(e => e.category === "other_liability").length > 0 && (
-        <div className="card">
-          <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>Liabilities</div>
-          <div className="account-list">
-            {manualEntries.filter(e => e.category === "other_liability").map(entry => (
-              <ManualSimpleRow key={entry.id} entry={entry} badge="Liability" badgeClass="badge-credit" negative
-                onDelete={async () => { await deleteManualEntry(entry.id); await load(); }}
-                onRenamed={load} />
-            ))}
-          </div>
-        </div>
       )}
     </div>
   );

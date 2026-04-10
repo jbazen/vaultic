@@ -3,8 +3,16 @@ import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries,
   getPlaidItems, removePlaidItem, syncCoinbase, getPortfolioPerformance,
-  getMarketRates, i360SyncLog, reorderInstitutions,
+  getMarketRates, i360SyncLog, reorderInstitutions, getInstitutionOrder,
 } from "../api.js";
+
+// Pseudo-keys for manual sections so they can live in the same drag/drop
+// ordering table as real Plaid/I360 institutions.
+const SEC_INVESTED       = "__sec_investment_imported__";
+const SEC_INVESTED_OTHER = "__sec_investment_other__";
+const SEC_LIQUID         = "__sec_hsa_cash__";
+const SEC_LIABILITIES    = "__sec_liabilities__";
+const SEC_OTHER_ASSETS   = "__sec_other_assets__";
 import NetWorthChart from "../components/NetWorthChart.jsx";
 import PlaidLink from "../components/PlaidLink.jsx";
 import AllocationBar from "../components/AllocationBar.jsx";
@@ -59,6 +67,7 @@ export default function Dashboard() {
   const [i360Open, setI360Open] = useState(false);
   const [insperityOpen, setInsperityOpen] = useState(false);
   const [i360LastSync, setI360LastSync] = useState(null);
+  const [savedOrder, setSavedOrder] = useState([]);
   const mountedRef = useRef(true);
   // Drag-and-drop refs (avoid setState during dragstart — see CLAUDE.md)
   const dragInstRef = useRef(null);
@@ -66,7 +75,7 @@ export default function Dashboard() {
   async function load() {
     setLoadError(false);
     try {
-      const [nwData, hist, accts, manual, items, perf, rates, i360Log] = await Promise.all([
+      const [nwData, hist, accts, manual, items, perf, rates, i360Log, order] = await Promise.all([
         getNetWorthLatest(),
         getNetWorthHistory(1825),
         getAccounts(),
@@ -75,6 +84,7 @@ export default function Dashboard() {
         getPortfolioPerformance(1825),
         getMarketRates().catch(() => ({ rates: [] })),
         i360SyncLog(1).catch(() => []),
+        getInstitutionOrder().catch(() => ({ names: [] })),
       ]);
       if (!mountedRef.current) return;
       setNw(nwData);
@@ -85,6 +95,7 @@ export default function Dashboard() {
       setPortfolioPerf(perf);
       setMarketRates(rates?.rates ?? []);
       setI360LastSync(i360Log?.[0]?.synced_at || null);
+      setSavedOrder(order?.names || []);
     } catch (e) {
       if (!mountedRef.current) return;
       setLoadError(true);
@@ -125,22 +136,46 @@ export default function Dashboard() {
     return acc;
   }, {});
 
-  // Ordered institution list: backend supplies institution_order via JOIN.
-  // Unordered groups (999999) fall back to I360-first then alphabetical.
-  const orderedInstitutions = Object.entries(grouped).sort(([nameA, a], [nameB, b]) => {
-    const oA = a[0]?.institution_order ?? 999999;
-    const oB = b[0]?.institution_order ?? 999999;
-    if (oA !== oB) return oA - oB;
-    const i360A = a.some(x => x.source === "investor360") ? 0 : 1;
-    const i360B = b.some(x => x.source === "investor360") ? 0 : 1;
-    if (i360A !== i360B) return i360A - i360B;
-    return nameA.localeCompare(nameB);
+  // Build the unified block list — institutions AND manual sections, all
+  // draggable in one shared order. Each block has a stable string key that
+  // is stored in institution_display_order on reorder.
+  const blocks = [];
+  for (const [inst, accts] of Object.entries(grouped)) {
+    blocks.push({ key: inst, kind: "institution", accts });
+  }
+  if (manualInvested.length > 0)      blocks.push({ key: SEC_INVESTED,       kind: "sec_invested" });
+  if (manualInvestedOther.length > 0) blocks.push({ key: SEC_INVESTED_OTHER, kind: "sec_invested_other" });
+  if (manualLiquid.length > 0)        blocks.push({ key: SEC_LIQUID,         kind: "sec_liquid" });
+  if (liabilities.length > 0)         blocks.push({ key: SEC_LIABILITIES,    kind: "sec_liabilities" });
+  if (otherAssets.length > 0)         blocks.push({ key: SEC_OTHER_ASSETS,   kind: "sec_other_assets" });
+
+  // Sort by saved order (positions from getInstitutionOrder). Blocks not in
+  // the saved order fall to the end with a sensible default: institutions
+  // first (I360 priority), then manual sections in the natural array order.
+  const orderMap = new Map(savedOrder.map((n, i) => [n, i]));
+  const defaultIdx = new Map(blocks.map((b, i) => [b.key, i]));
+  const orderedBlocks = [...blocks].sort((a, b) => {
+    const oA = orderMap.get(a.key);
+    const oB = orderMap.get(b.key);
+    if (oA != null && oB != null) return oA - oB;
+    if (oA != null) return -1;
+    if (oB != null) return 1;
+    // Both unsaved — institutions before sections, then I360 priority within
+    if (a.kind === "institution" && b.kind !== "institution") return -1;
+    if (a.kind !== "institution" && b.kind === "institution") return 1;
+    if (a.kind === "institution" && b.kind === "institution") {
+      const i360A = a.accts.some(x => x.source === "investor360") ? 0 : 1;
+      const i360B = b.accts.some(x => x.source === "investor360") ? 0 : 1;
+      if (i360A !== i360B) return i360A - i360B;
+      return a.key.localeCompare(b.key);
+    }
+    return defaultIdx.get(a.key) - defaultIdx.get(b.key);
   });
 
-  function handleInstDragStart(e, name) {
-    dragInstRef.current = name;
+  function handleInstDragStart(e, key) {
+    dragInstRef.current = key;
     e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", name);
+    e.dataTransfer.setData("text/plain", key);
     document.body.classList.add("inst-drag-active");
   }
 
@@ -149,22 +184,22 @@ export default function Dashboard() {
     e.dataTransfer.dropEffect = "move";
   }
 
-  async function handleInstDrop(e, targetName) {
+  async function handleInstDrop(e, targetKey) {
     e.preventDefault();
-    const sourceName = dragInstRef.current;
+    const sourceKey = dragInstRef.current;
     dragInstRef.current = null;
     document.body.classList.remove("inst-drag-active");
-    if (!sourceName || sourceName === targetName) return;
+    if (!sourceKey || sourceKey === targetKey) return;
 
-    const names = orderedInstitutions.map(([n]) => n);
-    const fromIdx = names.indexOf(sourceName);
-    const toIdx = names.indexOf(targetName);
+    const keys = orderedBlocks.map(b => b.key);
+    const fromIdx = keys.indexOf(sourceKey);
+    const toIdx = keys.indexOf(targetKey);
     if (fromIdx < 0 || toIdx < 0) return;
-    names.splice(fromIdx, 1);
-    names.splice(toIdx, 0, sourceName);
+    keys.splice(fromIdx, 1);
+    keys.splice(toIdx, 0, sourceKey);
 
     try {
-      await reorderInstitutions(names);
+      await reorderInstitutions(keys);
       await load();
     } catch (_) { /* non-fatal — leave order as-is */ }
   }
@@ -360,29 +395,111 @@ export default function Dashboard() {
       {/* ── Parker Financial Portfolio Summary ── */}
       <I360SummarySection />
 
-      {/* ── Accounts: 2-column grid, each institution/section its own card ── */}
+      {/* ── Accounts: 2-column grid; every block (institution + manual section) draggable ── */}
       <div className="account-grid">
-        {/* One card per Plaid/Coinbase institution */}
-        {accounts.length === 0 ? (
+        {accounts.length === 0 && blocks.length === 0 ? (
           <div className="card" style={{ margin: 0, gridColumn: "1 / -1", textAlign: "center", padding: "24px 0", color: "var(--text2)" }}>
             No accounts connected. Click <strong>+ Connect Account</strong> above.
           </div>
         ) : (
-          orderedInstitutions.map(([institution, accts]) => {
-            const item = plaidItems.find(i => i.institution_name === institution);
-            const isI360 = accts.some(x => x.source === "investor360");
-            const syncedAt = item?.last_synced_at || (isI360 ? i360LastSync : null);
+          orderedBlocks.map(block => {
+            // ── Header content varies by block kind ──
+            let titleText = "";
+            let rightButton = null;
+            let bodyContent = null;
+
+            if (block.kind === "institution") {
+              const item = plaidItems.find(i => i.institution_name === block.key);
+              const isI360 = block.accts.some(x => x.source === "investor360");
+              const syncedAt = item?.last_synced_at || (isI360 ? i360LastSync : null);
+              titleText = block.key;
+              if (item) {
+                rightButton = (
+                  <button className="btn btn-danger" style={{ fontSize: 11, padding: "3px 10px" }}
+                    onClick={() => handleRemoveItem(item.item_id)}>
+                    Disconnect
+                  </button>
+                );
+              }
+              bodyContent = (
+                <>
+                  {syncedAt && (
+                    <div style={{ fontSize: 11, color: "var(--text2)", marginTop: -6, marginBottom: 8 }}>
+                      synced {fmtDate(syncedAt)}
+                    </div>
+                  )}
+                  <div className="account-list">
+                    {block.accts.map(a => <AccountRow key={a.id} account={a} onRenamed={load} />)}
+                  </div>
+                </>
+              );
+            } else if (block.kind === "sec_invested") {
+              titleText = "Investment Accounts (Imported)";
+              bodyContent = (
+                <>
+                  {allHoldingsTotal > 0 && (
+                    <div style={{ marginBottom: 14 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
+                        Portfolio Allocation
+                      </div>
+                      <AllocationBar allocation={allocationByClass} total={allHoldingsTotal} />
+                    </div>
+                  )}
+                  <div className="account-list">
+                    {manualInvested.map(e => <ManualAccountRow key={e.id} entry={e} onRenamed={load} />)}
+                  </div>
+                </>
+              );
+            } else if (block.kind === "sec_invested_other") {
+              titleText = "Other Investment Accounts";
+              bodyContent = (
+                <div className="account-list">
+                  {manualInvestedOther.map(e => <ManualAccountRow key={e.id} entry={e} onRenamed={load} />)}
+                </div>
+              );
+            } else if (block.kind === "sec_liquid") {
+              titleText = "HSA / Cash Accounts (Imported)";
+              bodyContent = (
+                <div className="account-list">
+                  {manualLiquid.map(e => (
+                    <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                      badge="liquid" badgeClass="badge-depository" />
+                  ))}
+                </div>
+              );
+            } else if (block.kind === "sec_liabilities") {
+              titleText = "Liabilities";
+              bodyContent = (
+                <div className="account-list">
+                  {liabilities.map(e => (
+                    <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                      badge="liability" badgeClass="badge-credit" negative />
+                  ))}
+                </div>
+              );
+            } else if (block.kind === "sec_other_assets") {
+              titleText = "Other Assets";
+              bodyContent = (
+                <div className="account-list">
+                  {otherAssets.map(e => (
+                    <ManualAccountRow key={e.id} entry={e} onRenamed={load}
+                      badge="asset" badgeClass="badge-depository" />
+                  ))}
+                </div>
+              );
+            }
+
             return (
               <div
                 className="card inst-drop-target"
-                key={institution}
+                key={block.key}
                 style={{ margin: 0 }}
                 onDragOver={handleInstDragOver}
-                onDrop={(e) => handleInstDrop(e, institution)}
+                onDrop={(e) => handleInstDrop(e, block.key)}
               >
                 <div
                   draggable
-                  onDragStart={(e) => handleInstDragStart(e, institution)}
+                  onDragStart={(e) => handleInstDragStart(e, block.key)}
                   onDragEnd={handleInstDragEnd}
                   title="Drag to reorder"
                   style={{
@@ -392,93 +509,14 @@ export default function Dashboard() {
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ color: "var(--text2)", fontSize: 14, userSelect: "none" }}>⋮⋮</span>
-                    <span style={{ fontWeight: 700, fontSize: 15 }}>{institution}</span>
-                    {syncedAt && (
-                      <span style={{ fontSize: 11, color: "var(--text2)", marginLeft: 6 }}>
-                        synced {fmtDate(syncedAt)}
-                      </span>
-                    )}
+                    <span style={{ fontWeight: 700, fontSize: 15 }}>{titleText}</span>
                   </div>
-                  {item && (
-                    <button className="btn btn-danger" style={{ fontSize: 11, padding: "3px 10px" }}
-                      onClick={() => handleRemoveItem(item.item_id)}>
-                      Disconnect
-                    </button>
-                  )}
+                  {rightButton}
                 </div>
-                <div className="account-list">
-                  {accts.map(a => <AccountRow key={a.id} account={a} onRenamed={load} />)}
-                </div>
+                {bodyContent}
               </div>
             );
           })
-        )}
-
-        {/* Investment Accounts (PDF imported) */}
-        {manualInvested.length > 0 && (
-          <div className="card" style={{ margin: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Investment Accounts (Imported)</div>
-            {allHoldingsTotal > 0 && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 8 }}>
-                  Portfolio Allocation
-                </div>
-                <AllocationBar allocation={allocationByClass} total={allHoldingsTotal} />
-              </div>
-            )}
-            <div className="account-list">
-              {manualInvested.map(e => <ManualAccountRow key={e.id} entry={e} onRenamed={load} />)}
-            </div>
-          </div>
-        )}
-
-        {/* Other Investment Accounts (manual, no account number — e.g. Insperity) */}
-        {manualInvestedOther.length > 0 && (
-          <div className="card" style={{ margin: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Other Investment Accounts</div>
-            <div className="account-list">
-              {manualInvestedOther.map(e => <ManualAccountRow key={e.id} entry={e} onRenamed={load} />)}
-            </div>
-          </div>
-        )}
-
-        {/* HSA / Cash Accounts */}
-        {manualLiquid.length > 0 && (
-          <div className="card" style={{ margin: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>HSA / Cash Accounts (Imported)</div>
-            <div className="account-list">
-              {manualLiquid.map(e => (
-                <ManualAccountRow key={e.id} entry={e} onRenamed={load}
-                  badge="liquid" badgeClass="badge-depository" />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Liabilities (Mortgage, Loans) */}
-        {liabilities.length > 0 && (
-          <div className="card" style={{ margin: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Liabilities</div>
-            <div className="account-list">
-              {liabilities.map(e => (
-                <ManualAccountRow key={e.id} entry={e} onRenamed={load}
-                  badge="liability" badgeClass="badge-credit" negative />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Other Assets */}
-        {otherAssets.length > 0 && (
-          <div className="card" style={{ margin: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Other Assets</div>
-            <div className="account-list">
-              {otherAssets.map(e => (
-                <ManualAccountRow key={e.id} entry={e} onRenamed={load}
-                  badge="asset" badgeClass="badge-depository" />
-              ))}
-            </div>
-          </div>
         )}
       </div>
 
