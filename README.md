@@ -503,6 +503,18 @@ Cached market quotes and Tavily news articles for the personalized ticker feed. 
 | `i360_activity_summary` | Period activity: beginning/ending balance, contributions, gains, fees |
 | `i360_market_summary` | Market index quotes (S&P, Dow, Nasdaq, 10Y Treasury) |
 
+### `institution_display_order`
+User-controlled ordering of institution groups on the Dashboard and Accounts pages. Composite primary key `(page, institution_name)` — each page has its own independent ordering, so reordering on the Dashboard does not affect the Accounts page and vice versa. Also stores pseudo-keys for manual sections (e.g. `__sec_investment_imported__`, `__sec_property_vehicles__`) alongside real Plaid/I360 institution names in the same table.
+
+| Column | Type | Notes |
+|---|---|---|
+| page | TEXT | `dashboard` or `accounts` |
+| institution_name | TEXT | Real institution name or `__sec_*__` pseudo-key |
+| display_order | INTEGER | 0-based position |
+| updated_at | DATETIME | |
+
+Primary key: `(page, institution_name)`. Rewriting one page's order with `PATCH /api/accounts/institutions/reorder` only deletes and re-inserts rows for that page.
+
 ---
 
 ## API Reference
@@ -541,6 +553,11 @@ All endpoints except `/api/auth/login`, `/api/auth/verify-2fa`, and `/api/health
 | GET | `/{id}/transactions?limit=50&offset=0` | Transactions for one account |
 | GET | `/transactions/recent?limit=50` | Recent transactions across all accounts |
 | PATCH | `/{id}/rename` | Set display name |
+| PATCH | `/{id}/notes` | Save custom note (max 200 chars) |
+| GET | `/institutions/order?page=dashboard\|accounts` | Saved institution order for a page |
+| PATCH | `/institutions/reorder` | Replace a page's institution order. Body: `{page, names}` |
+
+Route ordering matters for the reorder endpoints — specific paths like `/institutions/order` and `/institutions/reorder` are defined before the parameterized `/{account_id}/...` routes so FastAPI doesn't match "institutions" as an integer account_id and return 422.
 
 ### Net Worth — `/api/net-worth`
 | Method | Path | Description |
@@ -1007,34 +1024,36 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend unit tests — 458+ tests across 22 files:**
+**Backend unit tests — 548 tests:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable
 - `test_users.py` — Create, delete, change password, admin endpoints
-- `test_accounts.py` — Accounts, net worth (investable field, monthly aggregation), manual entries (all 10 categories)
+- `test_accounts.py` — Accounts, net worth, manual entries, notes roundtrip, institution reorder (9 tests covering auth guards, per-page isolation, invalid-page rejection, replacement-on-rewrite)
 - `test_account_numbers.py` — Account number migration, unique indexes, snapshot/holdings history migration
 - `test_sage.py` — Chat endpoint, tool dispatch, rate limiting (429)
-- `test_budget.py` — Budget CRUD (18 tests): auth guards, route-order regression, group/item CRUD, reorder, amounts, auto-assign, carryforward, CSV import
+- `test_budget.py` — Budget CRUD: auth guards, route-order regression, group/item CRUD, reorder, amounts, auto-assign, carryforward, CSV import
 - `test_transactions.py` — Balance history endpoints, transaction insertion
 - `test_splits.py` — Transaction splitting
-- `test_tax.py` — Tax endpoints (33+ tests): returns, projections, W-4 wizard, estimated payments, AZ state tax
-- `test_pdf.py` — PDF ingestion (23 tests): `_salvage_json` recovery, duplicate prevention, Tier 1/2/3 matching, is_historical, force_holdings, `_normalize_acct`
-- `test_pdf_nfs.py` — NFS deterministic parser (31 tests): holding extraction, section parsing, cash sweeps, negative amounts
+- `test_tax.py` — Tax endpoints: returns, projections, W-4 wizard, estimated payments, AZ state tax
+- `test_pdf.py` — PDF ingestion: `_salvage_json` recovery, duplicate prevention, Tier 1/2/3 matching, is_historical, force_holdings, `_normalize_acct`
+- `test_pdf_nfs.py` — NFS deterministic parser: holding extraction, section parsing, cash sweeps, negative amounts
 - `test_investor360.py` — I360 sync, account mapping
-- `test_crypto_gains.py` — FIFO lot matching (22 tests): trade sync, gains calculation, lot inventory
-- `test_calendar.py` — Calendar events CRUD, seeding (30 tests)
-- `test_auth_refresh.py` — Refresh tokens, mobile sessions (15 tests)
+- `test_crypto_gains.py` — FIFO lot matching: trade sync, gains calculation, lot inventory
+- `test_calendar.py` — Calendar events CRUD, seeding, recurring series
+- `test_auth_refresh.py` — Refresh tokens, mobile sessions
 - `test_plaid.py` — Plaid link, token exchange
-- `test_funds.py` — Sinking fund CRUD (16 tests)
-- `test_sheet.py` — Google Sheet CSV parser (17 tests): `_parse_dollar`, `_month_sort_key`, endpoint structure/values/auth/error handling
+- `test_funds.py` — Sinking fund CRUD
+- `test_sheet.py` — Google Sheet CSV parser
 - `test_ticker_feed.py` — Ticker quotes, news feed
 - `test_rate_limit.py` — Sliding window rate limit behavior
+- `test_insperity.py` — Insperity 401K integration including the layout-agnostic performance parser (full horizontal, limited-history single-column, and partial-section variants via HTML fixture at `tests/fixtures/insperity_investment_return_limited.html`)
 
-**Playwright E2E — 26 tests across 4 files:**
+**Playwright E2E — 32 tests:**
 - `tests/e2e/auth.spec.js` — Login, wrong password, 2FA step, logout
 - `tests/e2e/dashboard.spec.js` — Net worth display, accounts, manual entries, navigation
 - `tests/e2e/sage.spec.js` — Sage button, chat panel, response, session persistence, Hey Sage toggle
-- `tests/e2e/calendar.spec.js` — Calendar views, event modal, seeding (8 tests)
+- `tests/e2e/calendar.spec.js` — Calendar views, event modal, seeding
+- `tests/e2e/accounts.spec.js` — Insperity account detail card (holdings, performance, contributions, allocation, transactions tabs)
 
 All E2E tests use mocked API routes (catch-all + specific overrides) — no live backend required.
 

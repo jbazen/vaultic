@@ -965,6 +965,9 @@ export default function Accounts() {
   });
 
   function handleInstDragStart(e, key) {
+    // Never call setState during dragstart — React re-renders mutate the DOM,
+    // which the browser interprets as the drag source disappearing and cancels
+    // the operation. Use a ref + a body class instead (see CLAUDE.md).
     dragInstRef.current = key;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", key);
