@@ -19,6 +19,7 @@ import { useNavigate } from "react-router-dom";
 import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, saveTransactionSplits, getBudget, isAuthed, deviceAuth, budgetDeleteTransaction } from "../api.js";
 
 import { fmtDate as fmtDateFull, fmtAmount } from "../utils/format.js";
+import { formatBudgetItemOption } from "../components/budget/budgetUtils.jsx";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -327,17 +328,11 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                       fontSize: 15, marginBottom: 10,
                     }}>
                     <option value="">— Pick a category —</option>
-                    {allItems.map(item => {
-                      const rem = item.remaining ?? 0;
-                      const remStr = rem >= 0
-                        ? `$${Number(rem).toFixed(2)}`
-                        : `-$${Math.abs(Number(rem)).toFixed(2)}`;
-                      return (
-                        <option key={item.id} value={item.id}>
-                          {item.groupName} › {item.name} ({remStr})
-                        </option>
-                      );
-                    })}
+                    {allItems.map(item => (
+                      <option key={item.id} value={item.id}>
+                        {formatBudgetItemOption(item, { withGroup: item.groupName })}
+                      </option>
+                    ))}
                   </select>
 
                   {/* Amount input + remove button */}

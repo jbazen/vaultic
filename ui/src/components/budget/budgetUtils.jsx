@@ -48,6 +48,27 @@ export function currentMonth() {
 export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+/**
+ * Format a budget item as a single-line dropdown option label.
+ * Shows "Name ($N.NN)" — or "Group › Name ($N.NN)" when withGroup is set
+ * (used by flat lists that don't have an enclosing optgroup).
+ * Negative remaining renders as "(-$N.NN)". Falls back to "(— )" if missing.
+ */
+export function formatBudgetItemOption(item, { withGroup } = {}) {
+  const rem = item?.remaining;
+  let remStr;
+  if (rem == null) {
+    remStr = "(— )";
+  } else {
+    const n = Number(rem);
+    remStr = n >= 0
+      ? `($${n.toFixed(2)})`
+      : `(-$${Math.abs(n).toFixed(2)})`;
+  }
+  const prefix = withGroup ? `${withGroup} › ` : "";
+  return `${prefix}${item.name} ${remStr}`;
+}
+
 // ── Drag handle — 6-dot grip icon shown on hover to the left of names ─────────
 export function DragHandle({ onMouseDown }) {
   return (

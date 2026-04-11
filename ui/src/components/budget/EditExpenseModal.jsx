@@ -4,6 +4,7 @@
 import { useState, useEffect } from "react";
 import { getTransaction, saveTransactionSplits, unassignTransaction } from "../../api.js";
 import { fmt } from "../../utils/format.js";
+import { formatBudgetItemOption } from "./budgetUtils.jsx";
 
 export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved }) {
   const [txn, setTxn]             = useState(null);
@@ -311,7 +312,7 @@ export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved })
                     {allGroups.map(g => (
                       <optgroup key={g.id} label={g.name}>
                         {(g.items || []).map(item => (
-                          <option key={item.id} value={item.id}>{item.name}</option>
+                          <option key={item.id} value={item.id}>{formatBudgetItemOption(item)}</option>
                         ))}
                       </optgroup>
                     ))}
@@ -358,7 +359,7 @@ export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved })
                   {allGroups.map(g => (
                     <optgroup key={g.id} label={g.name}>
                       {(g.items || []).filter(item => !usedIds.has(item.id)).map(item => (
-                        <option key={item.id} value={item.id}>{item.name}</option>
+                        <option key={item.id} value={item.id}>{formatBudgetItemOption(item)}</option>
                       ))}
                     </optgroup>
                   ))}

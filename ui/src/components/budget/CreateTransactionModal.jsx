@@ -7,6 +7,7 @@
  */
 import { useState, useEffect } from "react";
 import { createManualTransaction } from "../../api.js";
+import { formatBudgetItemOption } from "./budgetUtils.jsx";
 
 export default function CreateTransactionModal({ month, allGroups, onClose, onSaved }) {
   const [amount, setAmount]           = useState("");
@@ -210,7 +211,7 @@ export default function CreateTransactionModal({ month, allGroups, onClose, onSa
             {allGroups.map(g => (
               <optgroup key={g.id} label={g.name}>
                 {(g.items || []).map(item => (
-                  <option key={item.id} value={item.id}>{item.name}</option>
+                  <option key={item.id} value={item.id}>{formatBudgetItemOption(item)}</option>
                 ))}
               </optgroup>
             ))}

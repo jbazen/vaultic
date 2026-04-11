@@ -9,6 +9,7 @@ import {
   budgetDeleteTransaction, budgetRestoreTransaction, getDeletedTransactions,
 } from "../../api.js";
 import { fmt } from "../../utils/format.js";
+import { formatBudgetItemOption } from "./budgetUtils.jsx";
 
 export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
   const [tab, setTab] = useState("pending"); // pending | new | tracked | deleted
@@ -339,7 +340,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                   return (
                     <optgroup key={g.id} label={g.name}>
                       {g.items.map(i => (
-                        <option key={i.id} value={i.id}>{i.name}</option>
+                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i)}</option>
                       ))}
                     </optgroup>
                   );
@@ -362,7 +363,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                   return (
                     <optgroup key={g.id} label={g.name}>
                       {g.items.map(i => (
-                        <option key={i.id} value={i.id}>{i.name}</option>
+                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i)}</option>
                       ))}
                     </optgroup>
                   );
