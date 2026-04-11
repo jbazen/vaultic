@@ -754,6 +754,16 @@
   padding: 1px 2px;
 }
 
+/* Budget item picker dropdowns — monospace font so padEnd/padStart in
+ * formatBudgetItemOption() visually aligns the remaining amount into a
+ * right-justified column. */
+.budget-item-select,
+.budget-item-select option,
+.budget-item-select optgroup {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+               "Liberation Mono", "Courier New", monospace;
+}
+
 /* Institution drag-and-drop visual feedback (Dashboard + Accounts) */
 body.inst-drag-active .inst-drop-target {
   outline: 2px dashed transparent;

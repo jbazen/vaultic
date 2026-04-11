@@ -9,7 +9,7 @@ import {
   budgetDeleteTransaction, budgetRestoreTransaction, getDeletedTransactions,
 } from "../../api.js";
 import { fmt } from "../../utils/format.js";
-import { formatBudgetItemOption } from "./budgetUtils.jsx";
+import { formatBudgetItemOption, computeBudgetItemColumnWidths } from "./budgetUtils.jsx";
 
 export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) {
   const [tab, setTab] = useState("pending"); // pending | new | tracked | deleted
@@ -125,6 +125,10 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
       </button>
     );
   }
+
+  // Column widths for the dropdown options — computed once so the Correct
+  // and Assign dropdowns on every row share the same right-justified column.
+  const itemColWidths = computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
 
   return (
     <div>
@@ -327,7 +331,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
 
             {/* Correct dropdown (Pending tab) — approve with a different item */}
             {tab === "pending" && (
-              <select key={"p-" + t.transaction_id} defaultValue=""
+              <select key={"p-" + t.transaction_id} className="budget-item-select" defaultValue=""
                 onChange={e => e.target.value && handleApprove(t.transaction_id, parseInt(e.target.value))}
                 style={{
                   marginTop: 6, width: "100%",
@@ -340,7 +344,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                   return (
                     <optgroup key={g.id} label={g.name}>
                       {g.items.map(i => (
-                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i)}</option>
+                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i, itemColWidths)}</option>
                       ))}
                     </optgroup>
                   );
@@ -350,7 +354,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
 
             {/* Assign dropdown (New tab) */}
             {tab === "new" && (
-              <select key={t.transaction_id} defaultValue=""
+              <select key={t.transaction_id} className="budget-item-select" defaultValue=""
                 onChange={e => handleAssign(t.transaction_id, e.target.value)}
                 style={{
                   marginTop: 6, width: "100%",
@@ -363,7 +367,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                   return (
                     <optgroup key={g.id} label={g.name}>
                       {g.items.map(i => (
-                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i)}</option>
+                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i, itemColWidths)}</option>
                       ))}
                     </optgroup>
                   );

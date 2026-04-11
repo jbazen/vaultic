@@ -19,7 +19,7 @@ import { useNavigate } from "react-router-dom";
 import { getAllPendingReview, getAllUnassignedTransactions, approveTransaction, assignTransaction, saveTransactionSplits, getBudget, isAuthed, deviceAuth, budgetDeleteTransaction } from "../api.js";
 
 import { fmtDate as fmtDateFull, fmtAmount } from "../utils/format.js";
-import { formatBudgetItemOption } from "../components/budget/budgetUtils.jsx";
+import { formatBudgetItemOption, computeBudgetItemColumnWidths } from "../components/budget/budgetUtils.jsx";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -257,6 +257,8 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
 
   const label = txn.merchant_name || txn.name || "Transaction";
   const amt   = fmtAmount(txn.amount);
+  // Column widths for category picker — include groupName prefix in name width
+  const itemColWidths = computeBudgetItemColumnWidths(allItems, { withGroup: true });
 
   return (
     <div role="dialog" aria-modal="true" style={{
@@ -318,6 +320,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                     CATEGORY
                   </div>
                   <select
+                    className="budget-item-select"
                     value={row.item_id}
                     onChange={e => setRow(idx, "item_id", e.target.value)}
                     style={{
@@ -330,7 +333,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                     <option value="">— Pick a category —</option>
                     {allItems.map(item => (
                       <option key={item.id} value={item.id}>
-                        {formatBudgetItemOption(item, { withGroup: item.groupName })}
+                        {formatBudgetItemOption(item, { withGroup: item.groupName, ...itemColWidths })}
                       </option>
                     ))}
                   </select>

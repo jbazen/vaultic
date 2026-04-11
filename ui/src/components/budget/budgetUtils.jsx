@@ -49,24 +49,55 @@ export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /**
- * Format a budget item as a single-line dropdown option label.
- * Shows "Name ($N.NN)" — or "Group › Name ($N.NN)" when withGroup is set
- * (used by flat lists that don't have an enclosing optgroup).
- * Negative remaining renders as "(-$N.NN)". Falls back to "(— )" if missing.
+ * Format a budget item's remaining amount as a plain dollar string
+ * (no parens). Returns "—" when remaining is null/undefined.
  */
-export function formatBudgetItemOption(item, { withGroup } = {}) {
+function _itemAmountString(item) {
   const rem = item?.remaining;
-  let remStr;
-  if (rem == null) {
-    remStr = "(— )";
-  } else {
-    const n = Number(rem);
-    remStr = n >= 0
-      ? `($${n.toFixed(2)})`
-      : `(-$${Math.abs(n).toFixed(2)})`;
+  if (rem == null) return "—";
+  const n = Number(rem);
+  return n >= 0 ? `$${n.toFixed(2)}` : `-$${Math.abs(n).toFixed(2)}`;
+}
+
+/**
+ * Compute the maximum name/amount character widths across a list of items,
+ * so every option in a dropdown can be padded to the same width and the
+ * amounts visually align into a right-justified column (when the <select>
+ * uses a monospace font — add className="budget-item-select").
+ */
+export function computeBudgetItemColumnWidths(items, { withGroup } = {}) {
+  let nameWidth = 0;
+  let amountWidth = 0;
+  for (const item of items || []) {
+    const groupPrefix = withGroup
+      ? `${item.groupName || ""} › `
+      : "";
+    const fullName = groupPrefix + (item.name || "");
+    if (fullName.length > nameWidth) nameWidth = fullName.length;
+    const amountStr = _itemAmountString(item);
+    if (amountStr.length > amountWidth) amountWidth = amountStr.length;
   }
-  const prefix = withGroup ? `${withGroup} › ` : "";
-  return `${prefix}${item.name} ${remStr}`;
+  return { nameWidth, amountWidth };
+}
+
+/**
+ * Format a budget item as a single-line dropdown option label.
+ * Pads name on the right and amount on the left with non-breaking spaces
+ * so amounts right-justify into a column. The containing <select> must
+ * use a monospace font for the alignment to render correctly — apply
+ * className="budget-item-select".
+ */
+export function formatBudgetItemOption(
+  item,
+  { withGroup, nameWidth = 0, amountWidth = 0 } = {}
+) {
+  const groupPrefix = withGroup ? `${withGroup} › ` : "";
+  const fullName = groupPrefix + item.name;
+  const amountStr = _itemAmountString(item);
+  const paddedName = fullName.padEnd(nameWidth, "\u00a0");
+  const paddedAmount = amountStr.padStart(amountWidth, "\u00a0");
+  // Two non-breaking spaces of gap between name column and amount column
+  return `${paddedName}\u00a0\u00a0${paddedAmount}`;
 }
 
 // ── Drag handle — 6-dot grip icon shown on hover to the left of names ─────────

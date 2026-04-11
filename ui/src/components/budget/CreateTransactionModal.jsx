@@ -7,7 +7,7 @@
  */
 import { useState, useEffect } from "react";
 import { createManualTransaction } from "../../api.js";
-import { formatBudgetItemOption } from "./budgetUtils.jsx";
+import { formatBudgetItemOption, computeBudgetItemColumnWidths } from "./budgetUtils.jsx";
 
 export default function CreateTransactionModal({ month, allGroups, onClose, onSaved }) {
   const [amount, setAmount]           = useState("");
@@ -198,7 +198,11 @@ export default function CreateTransactionModal({ month, allGroups, onClose, onSa
           }}>
             Budget Assignment
           </label>
+          {(() => {
+            const widths = computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
+            return (
           <select
+            className="budget-item-select"
             value={itemId}
             onChange={e => setItemId(e.target.value)}
             style={{
@@ -211,11 +215,13 @@ export default function CreateTransactionModal({ month, allGroups, onClose, onSa
             {allGroups.map(g => (
               <optgroup key={g.id} label={g.name}>
                 {(g.items || []).map(item => (
-                  <option key={item.id} value={item.id}>{formatBudgetItemOption(item)}</option>
+                  <option key={item.id} value={item.id}>{formatBudgetItemOption(item, widths)}</option>
                 ))}
               </optgroup>
             ))}
           </select>
+            );
+          })()}
         </div>
 
         {/* Check # */}
