@@ -21,6 +21,12 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
   const [loading, setLoading] = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
   const [autoResult, setAutoResult] = useState(null); // {assigned, skipped} after run
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   async function loadAll() {
     setLoading(true);
@@ -128,7 +134,9 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
 
   // Column widths for the dropdown options — computed once so the Correct
   // and Assign dropdowns on every row share the same right-justified column.
-  const itemColWidths = computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
+  // On mobile, skip padding since native pickers ignore monospace CSS.
+  const isMobile = windowWidth <= 480;
+  const itemColWidths = isMobile ? {} : computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
 
   return (
     <div>
@@ -331,7 +339,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
 
             {/* Correct dropdown (Pending tab) — approve with a different item */}
             {tab === "pending" && (
-              <select key={"p-" + t.transaction_id} className="budget-item-select" defaultValue=""
+              <select key={"p-" + t.transaction_id} className={isMobile ? "" : "budget-item-select"} defaultValue=""
                 onChange={e => e.target.value && handleApprove(t.transaction_id, parseInt(e.target.value))}
                 style={{
                   marginTop: 6, width: "100%",
@@ -344,7 +352,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                   return (
                     <optgroup key={g.id} label={g.name}>
                       {g.items.map(i => (
-                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i, itemColWidths)}</option>
+                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i, { ...itemColWidths, mobile: isMobile })}</option>
                       ))}
                     </optgroup>
                   );
@@ -354,7 +362,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
 
             {/* Assign dropdown (New tab) */}
             {tab === "new" && (
-              <select key={t.transaction_id} className="budget-item-select" defaultValue=""
+              <select key={t.transaction_id} className={isMobile ? "" : "budget-item-select"} defaultValue=""
                 onChange={e => handleAssign(t.transaction_id, e.target.value)}
                 style={{
                   marginTop: 6, width: "100%",
@@ -367,7 +375,7 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
                   return (
                     <optgroup key={g.id} label={g.name}>
                       {g.items.map(i => (
-                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i, itemColWidths)}</option>
+                        <option key={i.id} value={i.id}>{formatBudgetItemOption(i, { ...itemColWidths, mobile: isMobile })}</option>
                       ))}
                     </optgroup>
                   );

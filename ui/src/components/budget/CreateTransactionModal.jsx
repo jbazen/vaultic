@@ -199,10 +199,11 @@ export default function CreateTransactionModal({ month, allGroups, onClose, onSa
             Budget Assignment
           </label>
           {(() => {
-            const widths = computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
+            const mob = windowWidth <= 480;
+            const widths = mob ? {} : computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
             return (
           <select
-            className="budget-item-select"
+            className={mob ? "" : "budget-item-select"}
             value={itemId}
             onChange={e => setItemId(e.target.value)}
             style={{
@@ -215,7 +216,7 @@ export default function CreateTransactionModal({ month, allGroups, onClose, onSa
             {allGroups.map(g => (
               <optgroup key={g.id} label={g.name}>
                 {(g.items || []).map(item => (
-                  <option key={item.id} value={item.id}>{formatBudgetItemOption(item, widths)}</option>
+                  <option key={item.id} value={item.id}>{formatBudgetItemOption(item, { ...widths, mobile: mob })}</option>
                 ))}
               </optgroup>
             ))}

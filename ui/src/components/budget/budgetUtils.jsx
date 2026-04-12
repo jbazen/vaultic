@@ -82,21 +82,28 @@ export function computeBudgetItemColumnWidths(items, { withGroup } = {}) {
 
 /**
  * Format a budget item as a single-line dropdown option label.
- * Pads name on the right and amount on the left with non-breaking spaces
- * so amounts right-justify into a column. The containing <select> must
- * use a monospace font for the alignment to render correctly — apply
- * className="budget-item-select".
+ *
+ * Desktop (mobile=false): pads name and amount with non-breaking spaces so
+ * amounts right-justify into a column. Requires a monospace font on the
+ * <select> (className="budget-item-select") for the alignment to render.
+ *
+ * Mobile (mobile=true): compact "Name $N.NN" with no padding. Native
+ * iOS/Android pickers ignore CSS font-family (they always use SF Pro /
+ * Roboto), so monospace padding breaks and long strings wrap to a second
+ * line. The compact format keeps everything on one line.
  */
 export function formatBudgetItemOption(
   item,
-  { withGroup, nameWidth = 0, amountWidth = 0 } = {}
+  { withGroup, nameWidth = 0, amountWidth = 0, mobile = false } = {}
 ) {
   const groupPrefix = withGroup ? `${withGroup} › ` : "";
   const fullName = groupPrefix + item.name;
   const amountStr = _itemAmountString(item);
+  if (mobile) {
+    return `${fullName} ${amountStr}`;
+  }
   const paddedName = fullName.padEnd(nameWidth, "\u00a0");
   const paddedAmount = amountStr.padStart(amountWidth, "\u00a0");
-  // Two non-breaking spaces of gap between name column and amount column
   return `${paddedName}\u00a0\u00a0${paddedAmount}`;
 }
 

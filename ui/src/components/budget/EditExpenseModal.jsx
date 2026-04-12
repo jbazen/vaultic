@@ -79,7 +79,9 @@ export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved })
   // Column widths for budget item dropdown options — computed once, shared
   // between the split-item selects and the Add-a-Split select so the
   // right-justified remaining amounts line up across both dropdowns.
-  const itemColWidths = computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
+  // On mobile, skip padding since native pickers ignore monospace CSS.
+  const isMobile = windowWidth <= 480;
+  const itemColWidths = isMobile ? {} : computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
   const canSave = txn && amountValid && splits.length > 0
     && splits.every(s => s.item_id != null && parseFloat(s.amount) > 0)
     && totalMatch;
@@ -304,7 +306,7 @@ export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved })
                       minWidth:0 lets the select compress on narrow mobile screens so the
                       amount input to its right doesn't get clipped. */}
                   <select
-                    className="budget-item-select"
+                    className={isMobile ? "" : "budget-item-select"}
                     value={split.item_id ?? ""}
                     onChange={e => updateSplit(idx, "item_id", e.target.value ? parseInt(e.target.value) : null)}
                     style={{
@@ -317,7 +319,7 @@ export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved })
                     {allGroups.map(g => (
                       <optgroup key={g.id} label={g.name}>
                         {(g.items || []).map(item => (
-                          <option key={item.id} value={item.id}>{formatBudgetItemOption(item, itemColWidths)}</option>
+                          <option key={item.id} value={item.id}>{formatBudgetItemOption(item, { ...itemColWidths, mobile: isMobile })}</option>
                         ))}
                       </optgroup>
                     ))}
@@ -351,7 +353,7 @@ export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved })
               if (!hasMore) return null;
               return (
                 <select
-                  className="budget-item-select"
+                  className={isMobile ? "" : "budget-item-select"}
                   value=""
                   onChange={e => { if (e.target.value) addSplit(e.target.value); }}
                   style={{
@@ -365,7 +367,7 @@ export default function EditExpenseModal({ txnId, allGroups, onClose, onSaved })
                   {allGroups.map(g => (
                     <optgroup key={g.id} label={g.name}>
                       {(g.items || []).filter(item => !usedIds.has(item.id)).map(item => (
-                        <option key={item.id} value={item.id}>{formatBudgetItemOption(item, itemColWidths)}</option>
+                        <option key={item.id} value={item.id}>{formatBudgetItemOption(item, { ...itemColWidths, mobile: isMobile })}</option>
                       ))}
                     </optgroup>
                   ))}

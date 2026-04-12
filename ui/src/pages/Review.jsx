@@ -186,6 +186,12 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
   const [saving,  setSaving]  = useState(false);
   const [error,   setError]   = useState(null);
   const [loadingBudget, setLoadingBudget] = useState(true);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // Flat list of active items across all groups for the <select> options
   const [allItems, setAllItems] = useState([]);
@@ -257,8 +263,10 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
 
   const label = txn.merchant_name || txn.name || "Transaction";
   const amt   = fmtAmount(txn.amount);
-  // Column widths for category picker — include groupName prefix in name width
-  const itemColWidths = computeBudgetItemColumnWidths(allItems, { withGroup: true });
+  // Column widths for category picker — include groupName prefix in name width.
+  // On mobile, skip padding since native pickers ignore monospace CSS.
+  const isMobile = windowWidth <= 480;
+  const itemColWidths = isMobile ? {} : computeBudgetItemColumnWidths(allItems, { withGroup: true });
 
   return (
     <div role="dialog" aria-modal="true" style={{
@@ -320,7 +328,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                     CATEGORY
                   </div>
                   <select
-                    className="budget-item-select"
+                    className={isMobile ? "" : "budget-item-select"}
                     value={row.item_id}
                     onChange={e => setRow(idx, "item_id", e.target.value)}
                     style={{
@@ -333,7 +341,7 @@ function ReviewSplitModal({ txn, onSave, onCancel }) {
                     <option value="">— Pick a category —</option>
                     {allItems.map(item => (
                       <option key={item.id} value={item.id}>
-                        {formatBudgetItemOption(item, { withGroup: item.groupName, ...itemColWidths })}
+                        {formatBudgetItemOption(item, { withGroup: item.groupName, ...itemColWidths, mobile: isMobile })}
                       </option>
                     ))}
                   </select>
