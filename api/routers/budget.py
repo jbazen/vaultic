@@ -141,12 +141,19 @@ class SplitsBody(BaseModel):
 
 
 class ManualTransactionBody(BaseModel):
-    """Request body for POST /manual-transaction."""
+    """Request body for POST /manual-transaction.
+
+    Exactly one of {item_id, splits} may be provided (both may also be
+    omitted — the transaction is created unassigned and shows up in the
+    New queue). If splits is supplied, the sum of split amounts must equal
+    `amount` within a 1-cent tolerance.
+    """
     amount: float
     date: str            # YYYY-MM-DD
     merchant_name: str
     is_income: bool = False
-    item_id: int | None = None      # budget item to assign to (optional)
+    item_id: int | None = None           # single-item assignment (optional)
+    splits: List[SplitItem] | None = None  # multi-item split (optional)
     check_number: str | None = None
     notes: str | None = None
 
@@ -391,6 +398,26 @@ async def create_manual_transaction(
     if not body.merchant_name or not body.merchant_name.strip():
         raise HTTPException(status_code=422, detail="Merchant name is required")
 
+    # Mutually exclusive: item_id (single assignment) OR splits (multi-item).
+    # Both may be omitted (creates an unassigned transaction that lands in New).
+    if body.item_id is not None and body.splits:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either item_id or splits, not both",
+        )
+    if body.splits:
+        if len(body.splits) == 0:
+            raise HTTPException(status_code=422, detail="splits cannot be empty")
+        for s in body.splits:
+            if s.amount <= 0:
+                raise HTTPException(status_code=422, detail="Each split amount must be greater than 0")
+        split_total = sum(s.amount for s in body.splits)
+        if abs(split_total - body.amount) > 0.01:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Split total ${split_total:.2f} must equal transaction amount ${body.amount:.2f}",
+            )
+
     transaction_id = f"manual_{uuid.uuid4().hex}"
     # Plaid convention: positive = outflow (expense), negative = inflow (income/refund)
     amount = -body.amount if body.is_income else body.amount
@@ -410,11 +437,21 @@ async def create_manual_transaction(
             VALUES (?, ?, ?, ?, ?, ?, 0, ?)
         """, (transaction_id, manual_account_id, amount, body.date, body.merchant_name.strip(), body.merchant_name.strip(), manual_account_number))
 
-        # Assign to budget item if specified.
+        # Assign to budget item(s). Three paths:
+        #   - splits: write one row per split to transaction_splits
+        #   - item_id: single-item assignment in transaction_assignments
+        #   - neither: unassigned (appears in New queue)
         # Status='manual' (not 'pending_review') because the user created this
         # transaction with explicit knowledge of its category — it counts toward
         # spending immediately without needing approval.
-        if body.item_id is not None:
+        if body.splits:
+            for s in body.splits:
+                conn.execute(
+                    "INSERT INTO transaction_splits (transaction_id, item_id, amount) "
+                    "VALUES (?, ?, ?)",
+                    (transaction_id, s.item_id, s.amount),
+                )
+        elif body.item_id is not None:
             conn.execute(
                 "INSERT INTO transaction_assignments (transaction_id, item_id, status)"
                 " VALUES (?, ?, 'manual')",

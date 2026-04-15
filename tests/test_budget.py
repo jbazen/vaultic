@@ -565,6 +565,90 @@ class TestManualTransaction:
         }, headers=auth_headers)
         assert res.status_code == 422
 
+    def test_create_with_splits(self, client, auth_headers):
+        """Splits write one row per leg to transaction_splits; both items show spending."""
+        g = _create_group(client, auth_headers, "Split Group")
+        a = _create_item(client, auth_headers, g["id"], "Split Item A")
+        b = _create_item(client, auth_headers, g["id"], "Split Item B")
+        client.put(f"/api/budget/items/{a['id']}/amount",
+                   json={"month": "2031-08", "planned": 200.0}, headers=auth_headers)
+        client.put(f"/api/budget/items/{b['id']}/amount",
+                   json={"month": "2031-08", "planned": 200.0}, headers=auth_headers)
+
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 100.0,
+            "date": "2031-08-05",
+            "merchant_name": "Target",
+            "splits": [
+                {"item_id": a["id"], "amount": 60.0},
+                {"item_id": b["id"], "amount": 40.0},
+            ],
+        }, headers=auth_headers)
+        assert res.status_code == 200
+        tid = res.json()["transaction_id"]
+
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            rows = conn.execute(
+                "SELECT item_id, amount FROM transaction_splits WHERE transaction_id = ? ORDER BY item_id",
+                (tid,),
+            ).fetchall()
+        assert len(rows) == 2
+        assert {r["item_id"]: r["amount"] for r in rows} == {a["id"]: 60.0, b["id"]: 40.0}
+
+        # Both items should show their share as spent
+        budget = client.get("/api/budget/2031-08", headers=auth_headers).json()
+        grp = next(g for g in budget["groups"] if g["name"] == "Split Group")
+        item_a = next(i for i in grp["items"] if i["name"] == "Split Item A")
+        item_b = next(i for i in grp["items"] if i["name"] == "Split Item B")
+        assert item_a["spent"] == 60.0
+        assert item_b["spent"] == 40.0
+
+    def test_split_sum_must_match_amount(self, client, auth_headers):
+        """Backend rejects splits whose total differs from transaction amount."""
+        g = _create_group(client, auth_headers, "Split Mismatch Group")
+        item = _create_item(client, auth_headers, g["id"], "Item")
+
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 100.0,
+            "date": "2031-08-05",
+            "merchant_name": "Test",
+            "splits": [{"item_id": item["id"], "amount": 50.0}],
+        }, headers=auth_headers)
+        assert res.status_code == 422
+        assert "must equal" in res.json()["detail"].lower()
+
+    def test_mixed_item_id_and_splits_rejected(self, client, auth_headers):
+        """Cannot supply both item_id and splits — exactly one or neither."""
+        g = _create_group(client, auth_headers, "Mixed Group")
+        item = _create_item(client, auth_headers, g["id"], "Item")
+
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 50.0,
+            "date": "2031-08-05",
+            "merchant_name": "Test",
+            "item_id": item["id"],
+            "splits": [{"item_id": item["id"], "amount": 50.0}],
+        }, headers=auth_headers)
+        assert res.status_code == 422
+
+    def test_split_amount_must_be_positive(self, client, auth_headers):
+        """Zero or negative split legs are rejected even if the total balances."""
+        g = _create_group(client, auth_headers, "Zero Split Group")
+        a = _create_item(client, auth_headers, g["id"], "A")
+        b = _create_item(client, auth_headers, g["id"], "B")
+
+        res = client.post("/api/budget/manual-transaction", json={
+            "amount": 100.0,
+            "date": "2031-08-05",
+            "merchant_name": "Test",
+            "splits": [
+                {"item_id": a["id"], "amount": 0.0},
+                {"item_id": b["id"], "amount": 100.0},
+            ],
+        }, headers=auth_headers)
+        assert res.status_code == 422
+
 
 class TestArchiveVisibility:
     """Verify is_archived flag controls group/item visibility correctly."""

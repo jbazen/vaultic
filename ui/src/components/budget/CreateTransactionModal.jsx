@@ -2,11 +2,22 @@
  * CreateTransactionModal — Modal for manually creating a new transaction.
  *
  * Fields: amount, date, merchant/description, expense/income toggle,
- * budget item dropdown (grouped by budget groups), check #, notes.
- * Modeled after EditExpenseModal for consistent look and feel.
+ * split assignment rows (one or more items each with its own amount),
+ * check #, notes. Mirrors EditExpenseModal's split UX so the two modals
+ * feel identical — the user creates or edits with the same interactions.
+ *
+ * Splits behavior:
+ *   - Always at least one split row. The first row is pre-filled with
+ *     initialItemId (when opened from a budget item detail) and the
+ *     current transaction amount.
+ *   - "+ Add a Split" dropdown filters out items already assigned.
+ *   - Split total indicator only appears when more than one row exists.
+ *   - Save is disabled until splits sum to the transaction amount and
+ *     every row has both a budget item and a positive amount.
  */
 import { useState, useEffect } from "react";
 import { createManualTransaction } from "../../api.js";
+import { fmt } from "../../utils/format.js";
 import { formatBudgetItemOption, computeBudgetItemColumnWidths } from "./budgetUtils.jsx";
 
 export default function CreateTransactionModal({ month, allGroups, initialItemId, onClose, onSaved }) {
@@ -14,9 +25,12 @@ export default function CreateTransactionModal({ month, allGroups, initialItemId
   const [txnDate, setTxnDate]         = useState("");
   const [merchant, setMerchant]       = useState("");
   const [txnType, setTxnType]         = useState("expense");
-  // Pre-seed the item dropdown when opened from a budget item detail view.
-  // Stored as a string so the <select value={itemId}> comparison works.
-  const [itemId, setItemId]           = useState(initialItemId != null ? String(initialItemId) : "");
+  // Split assignment rows. Each row: { item_id: number|null, amount: string }.
+  // First row is pre-seeded with initialItemId (when present) so opening
+  // from a specific budget item's detail lands with that item selected.
+  const [splits, setSplits] = useState([
+    { item_id: initialItemId != null ? Number(initialItemId) : null, amount: "" },
+  ]);
   const [checkNumber, setCheckNumber] = useState("");
   const [notes, setNotes]             = useState("");
   const [saving, setSaving]           = useState(false);
@@ -47,22 +61,75 @@ export default function CreateTransactionModal({ month, allGroups, initialItemId
   const amountColor = isIncome ? "var(--green)" : "var(--red)";
   const accentBg    = isIncome ? "var(--green)" : "var(--accent)";
   const parsedAmt   = parseFloat(amount) || 0;
-  const canSave     = parsedAmt > 0 && merchant.trim().length > 0 && txnDate;
+
+  // Split total computed from the row amount strings.
+  const splitTotal = splits.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const totalMatch = parsedAmt > 0 && Math.abs(splitTotal - parsedAmt) < 0.02;
+  const allSplitsValid = splits.every(
+    r => r.item_id != null && parseFloat(r.amount) > 0,
+  );
+  // If the user hasn't picked any item on the only row, treat the txn as
+  // "unassigned" so creating a new transaction before choosing a category
+  // still works the way the old single-dropdown flow did.
+  const isUnassigned = splits.length === 1 && splits[0].item_id == null;
+  const canSave = parsedAmt > 0
+    && merchant.trim().length > 0
+    && txnDate
+    && (isUnassigned || (allSplitsValid && totalMatch));
+
+  // ── Split row handlers ────────────────────────────────────────────────
+  function addSplit(itemId) {
+    // Pre-fill the new row with whatever remainder isn't yet allocated
+    // so balancing is usually a single click.
+    const allocated = splits.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const remainder = Math.max(0, parsedAmt - allocated);
+    setSplits(prev => [
+      ...prev,
+      { item_id: parseInt(itemId), amount: remainder > 0 ? remainder.toFixed(2) : "" },
+    ]);
+  }
+  function removeSplit(idx) {
+    setSplits(prev => prev.filter((_, i) => i !== idx));
+  }
+  function updateSplit(idx, field, value) {
+    setSplits(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
+  }
+
+  // When the user types in the main amount field and there's only one split
+  // row, sync the split's amount to match so they don't have to type it twice.
+  // Only do this when the user hasn't explicitly typed a different split amount.
+  useEffect(() => {
+    if (splits.length === 1 && !splits[0].amount && amount) {
+      setSplits([{ ...splits[0], amount }]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amount]);
 
   async function handleSave() {
     if (!canSave) return;
     setSaving(true);
     setError(null);
     try {
-      await createManualTransaction({
+      // Build payload: either a single-item assignment (unassigned or one row
+      // with an item selected) or a multi-row split array. The backend accepts
+      // either shape but rejects both at once.
+      const payload = {
         amount: parsedAmt,
         date: txnDate,
         merchant_name: merchant.trim(),
         is_income: isIncome,
-        item_id: itemId ? parseInt(itemId) : null,
         check_number: checkNumber || null,
         notes: notes || null,
-      });
+      };
+      if (splits.length === 1) {
+        payload.item_id = splits[0].item_id;  // may be null → unassigned
+      } else {
+        payload.splits = splits.map(r => ({
+          item_id: r.item_id,
+          amount: parseFloat(parseFloat(r.amount).toFixed(2)),
+        }));
+      }
+      await createManualTransaction(payload);
       onSaved?.();
       onClose();
     } catch (e) {
@@ -191,41 +258,121 @@ export default function CreateTransactionModal({ month, allGroups, initialItemId
           />
         </div>
 
-        {/* Budget item assignment dropdown */}
-        <div style={{ marginBottom: 14 }}>
-          <label style={{
-            fontSize: 11, fontWeight: 700, color: "var(--text2)",
-            textTransform: "uppercase", letterSpacing: "0.6px",
-            display: "block", marginBottom: 6,
-          }}>
-            Budget Assignment
-          </label>
-          {(() => {
-            const mob = windowWidth <= 480;
-            const widths = mob ? {} : computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
-            return (
-          <select
-            className={mob ? "" : "budget-item-select"}
-            value={itemId}
-            onChange={e => setItemId(e.target.value)}
-            style={{
-              width: "100%", background: "var(--bg3)",
-              border: "1px solid var(--border)", borderRadius: 6,
-              color: "var(--text)", fontSize: 13, padding: "8px 10px",
-            }}
-          >
-            <option value="">Unassigned (goes to New queue)</option>
-            {allGroups.map(g => (
-              <optgroup key={g.id} label={g.name}>
-                {(g.items || []).map(item => (
-                  <option key={item.id} value={item.id}>{formatBudgetItemOption(item, { ...widths, mobile: mob })}</option>
-                ))}
-              </optgroup>
+        {/* ── Split assignment rows ── */}
+        {(() => {
+          const isMobile = windowWidth <= 480;
+          const itemColWidths = isMobile ? {} : computeBudgetItemColumnWidths(allGroups.flatMap(g => g.items || []));
+          const usedIds = new Set(splits.map(s => s.item_id).filter(Boolean));
+          const hasMore = allGroups.some(g => (g.items || []).some(item => !usedIds.has(item.id)));
+          return (
+          <div style={{ marginBottom: 14 }}>
+            <label style={{
+              fontSize: 11, fontWeight: 700, color: "var(--text2)",
+              textTransform: "uppercase", letterSpacing: "0.6px",
+              display: "block", marginBottom: 10,
+            }}>
+              Budget Assignment
+            </label>
+
+            {splits.map((split, idx) => (
+              <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                {/* Red − remove button — only when more than one split */}
+                {splits.length > 1 ? (
+                  <button
+                    onClick={() => removeSplit(idx)}
+                    title="Remove this split"
+                    aria-label="Remove this split"
+                    style={{
+                      width: 22, height: 22, borderRadius: "50%",
+                      background: "var(--red)", border: "none", color: "#fff",
+                      cursor: "pointer", fontSize: 16, lineHeight: 1, flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}
+                  >−</button>
+                ) : (
+                  <div style={{ width: 22, flexShrink: 0 }} />
+                )}
+
+                <select
+                  className={isMobile ? "" : "budget-item-select"}
+                  value={split.item_id ?? ""}
+                  onChange={e => updateSplit(idx, "item_id", e.target.value ? parseInt(e.target.value) : null)}
+                  style={{
+                    flex: 1, minWidth: 0, background: "var(--bg3)",
+                    border: `1px solid ${split.item_id ? "var(--border)" : "var(--accent)"}`,
+                    borderRadius: 6, color: "var(--text)", fontSize: 13, padding: "7px 8px",
+                  }}
+                >
+                  <option value="">{splits.length === 1 ? "Unassigned (goes to New queue)" : "Select budget item…"}</option>
+                  {allGroups.map(g => (
+                    <optgroup key={g.id} label={g.name}>
+                      {(g.items || []).map(item => (
+                        <option key={item.id} value={item.id}>{formatBudgetItemOption(item, { ...itemColWidths, mobile: isMobile })}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+
+                {/* Per-row amount only shown when splitting. Single-row mode
+                    uses the main transaction amount without a separate input. */}
+                {splits.length > 1 && (
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={split.amount}
+                    onChange={e => updateSplit(idx, "amount", e.target.value.replace(/[^0-9.]/g, ""))}
+                    onBlur={e => {
+                      const n = parseFloat(e.target.value);
+                      if (!isNaN(n)) updateSplit(idx, "amount", n.toFixed(2));
+                    }}
+                    style={{
+                      width: 96, flexShrink: 0, background: "var(--bg3)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6, color: "var(--text)", fontSize: 13,
+                      padding: "7px 8px", textAlign: "right",
+                    }}
+                  />
+                )}
+              </div>
             ))}
-          </select>
-            );
-          })()}
-        </div>
+
+            {/* Add a Split — only when there are still items left to assign */}
+            {hasMore && (
+              <select
+                className={isMobile ? "" : "budget-item-select"}
+                value=""
+                onChange={e => { if (e.target.value) addSplit(e.target.value); }}
+                style={{
+                  background: "var(--bg3)", border: "1px solid var(--border)",
+                  borderRadius: 6, color: "var(--accent)", fontSize: 13,
+                  padding: "6px 10px", cursor: "pointer", marginBottom: 8,
+                  fontWeight: 600,
+                }}
+              >
+                <option value="">+ Add a Split…</option>
+                {allGroups.map(g => (
+                  <optgroup key={g.id} label={g.name}>
+                    {(g.items || []).filter(item => !usedIds.has(item.id)).map(item => (
+                      <option key={item.id} value={item.id}>{formatBudgetItemOption(item, { ...itemColWidths, mobile: isMobile })}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            )}
+
+            {/* Split total indicator — only visible when splitting */}
+            {splits.length > 1 && (
+              <div style={{
+                fontSize: 12, marginTop: 4, textAlign: "right",
+                color: totalMatch ? "var(--text2)" : "var(--red)",
+              }}>
+                Split total: {fmt(splitTotal)} / {fmt(parsedAmt)}
+                {!totalMatch && " — must equal transaction amount"}
+              </div>
+            )}
+          </div>
+          );
+        })()}
 
         {/* Check # */}
         <div style={{ marginBottom: 10 }}>
