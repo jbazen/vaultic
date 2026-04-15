@@ -28,7 +28,6 @@ import SummaryPanel from "../components/budget/SummaryPanel.jsx";
 import TransactionsPanel from "../components/budget/TransactionsPanel.jsx";
 import GroupSection from "../components/budget/GroupSection.jsx";
 import ItemDetailModal from "../components/budget/ItemDetailModal.jsx";
-import CreateTransactionModal from "../components/budget/CreateTransactionModal.jsx";
 
 // ── Main Budget page ──────────────────────────────────────────────────────────
 export default function Budget() {
@@ -52,7 +51,6 @@ export default function Budget() {
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupType, setNewGroupType] = useState("expense");
   const [activeItem, setActiveItem] = useState(null); // item clicked for detail modal
-  const [showCreateTxn, setShowCreateTxn] = useState(false);
 
   // ── Drag-and-drop state ──────────────────────────────────────────────────
   // Groups and items use separate drag state so they don't interfere.
@@ -201,18 +199,6 @@ export default function Budget() {
         <button className="btn btn-secondary" style={{ padding: "6px 16px", fontSize: 18, lineHeight: 1 }}
           onClick={() => setMonth(nextMonth)} aria-label="Next month">
           ›
-        </button>
-
-        <button
-          onClick={() => setShowCreateTxn(true)}
-          style={{
-            padding: "6px 14px", borderRadius: 6, border: "none",
-            background: "var(--accent)", color: "#fff",
-            fontSize: 12, fontWeight: 600, cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          + New Transaction
         </button>
       </div>
 
@@ -451,16 +437,6 @@ export default function Budget() {
           allGroups={visibleGroups}
           onClose={() => setActiveItem(null)}
           onUpdate={load}
-        />
-      )}
-
-      {/* Create manual transaction modal */}
-      {showCreateTxn && (
-        <CreateTransactionModal
-          month={month}
-          allGroups={visibleGroups}
-          onClose={() => setShowCreateTxn(false)}
-          onSaved={load}
         />
       )}
     </div>

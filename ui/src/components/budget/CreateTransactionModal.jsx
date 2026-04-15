@@ -9,12 +9,14 @@ import { useState, useEffect } from "react";
 import { createManualTransaction } from "../../api.js";
 import { formatBudgetItemOption, computeBudgetItemColumnWidths } from "./budgetUtils.jsx";
 
-export default function CreateTransactionModal({ month, allGroups, onClose, onSaved }) {
+export default function CreateTransactionModal({ month, allGroups, initialItemId, onClose, onSaved }) {
   const [amount, setAmount]           = useState("");
   const [txnDate, setTxnDate]         = useState("");
   const [merchant, setMerchant]       = useState("");
   const [txnType, setTxnType]         = useState("expense");
-  const [itemId, setItemId]           = useState("");
+  // Pre-seed the item dropdown when opened from a budget item detail view.
+  // Stored as a string so the <select value={itemId}> comparison works.
+  const [itemId, setItemId]           = useState(initialItemId != null ? String(initialItemId) : "");
   const [checkNumber, setCheckNumber] = useState("");
   const [notes, setNotes]             = useState("");
   const [saving, setSaving]           = useState(false);

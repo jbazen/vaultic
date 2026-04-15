@@ -5,6 +5,7 @@ import { useState, useEffect } from "react";
 import { getItemDetail, updateBudgetItem } from "../../api.js";
 import { fmt } from "../../utils/format.js";
 import EditExpenseModal from "./EditExpenseModal.jsx";
+import CreateTransactionModal from "./CreateTransactionModal.jsx";
 
 export default function ItemDetailModal({ itemId, itemName, month, allGroups, onClose, onUpdate }) {
   const [detail, setDetail] = useState(null);
@@ -12,6 +13,7 @@ export default function ItemDetailModal({ itemId, itemName, month, allGroups, on
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(itemName);
   const [editTxn, setEditTxn] = useState(null);
+  const [showCreateTxn, setShowCreateTxn] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -85,14 +87,19 @@ export default function ItemDetailModal({ itemId, itemName, month, allGroups, on
       display: "flex", alignItems: "flex-start", justifyContent: "flex-end",
       padding: "20px 20px 0 0",
     }}>
-      {/* Panel — stop clicks from closing when clicking inside */}
+      {/* Panel — stop clicks from closing when clicking inside.
+          position:relative so the FAB below can anchor to the panel's
+          bottom-right. Scrolling is delegated to an inner wrapper so the
+          FAB stays pinned while transaction lists scroll. */}
       <div role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{
-        width: 360, maxHeight: "calc(100vh - 40px)", overflowY: "auto",
+        position: "relative",
+        width: 360, maxHeight: "calc(100vh - 40px)",
         background: "var(--bg2)", borderRadius: 12,
         border: "1px solid var(--border)",
         boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
         display: "flex", flexDirection: "column",
       }}>
+        <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
         {/* Header */}
         <div style={{ padding: "16px 16px 0", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -221,8 +228,9 @@ export default function ItemDetailModal({ itemId, itemName, month, allGroups, on
               </div>
             )}
 
-            {/* Available summary at bottom */}
-            <div style={{ marginTop: 12, textAlign: "right", fontSize: 12, color: "var(--text2)" }}>
+            {/* Available summary at bottom. Extra bottom padding so the
+                FAB below doesn't visually overlap the last transaction row. */}
+            <div style={{ marginTop: 12, textAlign: "right", fontSize: 12, color: "var(--text2)", paddingBottom: 56 }}>
               <span style={{ fontWeight: 700, color: remainColor }}>
                 {isOver ? "-" : ""}{fmt(Math.abs(detail.remaining))}
               </span>
@@ -230,6 +238,29 @@ export default function ItemDetailModal({ itemId, itemName, month, allGroups, on
             </div>
           </div>
         )}
+        </div>
+
+        {/* Floating action button — opens CreateTransactionModal pre-filled
+            with this budget item. Anchored to the panel's bottom-right
+            (not the scrolling inner wrapper) so it stays visible while
+            the transaction list scrolls. */}
+        <button
+          onClick={() => setShowCreateTxn(true)}
+          aria-label="Add transaction"
+          title="Add transaction"
+          style={{
+            position: "absolute", bottom: 16, right: 16,
+            width: 48, height: 48, borderRadius: "50%",
+            background: "var(--accent)", color: "#fff",
+            border: "none", fontSize: 28, fontWeight: 300,
+            lineHeight: 1, cursor: "pointer",
+            boxShadow: "0 4px 14px rgba(0,0,0,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 2,
+          }}
+        >
+          +
+        </button>
       </div>
 
         {/* Edit Expense modal — nested inside ItemDetailModal so it inherits context */}
@@ -241,6 +272,24 @@ export default function ItemDetailModal({ itemId, itemName, month, allGroups, on
             onSaved={() => {
               setEditTxn(null);
               // Reload item detail to reflect the updated assignment
+              getItemDetail(itemId, month).then(setDetail);
+              onUpdate?.();
+            }}
+          />
+        )}
+
+        {/* Create Transaction modal — opened from the FAB, pre-filled with
+            this item so the user doesn't have to reselect it. */}
+        {showCreateTxn && (
+          <CreateTransactionModal
+            month={month}
+            allGroups={allGroups || []}
+            initialItemId={itemId}
+            onClose={() => setShowCreateTxn(false)}
+            onSaved={() => {
+              setShowCreateTxn(false);
+              // Reload item detail + parent budget so the new transaction
+              // shows up in the list and spent/remaining totals update.
               getItemDetail(itemId, month).then(setDetail);
               onUpdate?.();
             }}
