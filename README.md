@@ -1024,14 +1024,14 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend unit tests — 548 tests:**
+**Backend unit tests — 552 tests:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable
 - `test_users.py` — Create, delete, change password, admin endpoints
 - `test_accounts.py` — Accounts, net worth, manual entries, notes roundtrip, institution reorder (9 tests covering auth guards, per-page isolation, invalid-page rejection, replacement-on-rewrite)
 - `test_account_numbers.py` — Account number migration, unique indexes, snapshot/holdings history migration
 - `test_sage.py` — Chat endpoint, tool dispatch, rate limiting (429)
-- `test_budget.py` — Budget CRUD: auth guards, route-order regression, group/item CRUD, reorder, amounts, auto-assign, carryforward, CSV import
+- `test_budget.py` — Budget CRUD: auth guards, route-order regression, group/item CRUD, reorder, amounts, auto-assign, carryforward, CSV import, manual transaction creation with split support (single-item, multi-split, sum validation, mixed-input rejection)
 - `test_transactions.py` — Balance history endpoints, transaction insertion
 - `test_splits.py` — Transaction splitting
 - `test_tax.py` — Tax endpoints: returns, projections, W-4 wizard, estimated payments, AZ state tax

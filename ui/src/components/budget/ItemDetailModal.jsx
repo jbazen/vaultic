@@ -1,5 +1,13 @@
 /**
- * ItemDetailModal — Modal showing a budget item's assigned transactions with inline rename and edit access.
+ * ItemDetailModal — Slide-out panel showing a budget item's spending detail.
+ *
+ * Displays: mini bar chart of monthly history, planned/spent/remaining
+ * summary, and a scrollable list of assigned transactions (click any to
+ * open EditExpenseModal). A floating action button (blue + circle,
+ * bottom-right) opens CreateTransactionModal pre-filled with this item.
+ *
+ * The panel's inner content scrolls while the FAB stays pinned — the
+ * scroll is on an inner wrapper, not the panel shell itself.
  */
 import { useState, useEffect } from "react";
 import { getItemDetail, updateBudgetItem } from "../../api.js";
