@@ -135,19 +135,23 @@ jobs:
             sudo cp deploy/vaultic-nginx.conf /etc/nginx/sites-available/vaultic
             sudo nginx -t && sudo systemctl reload nginx
 
-            # Health check — retry up to 5 times with 3s intervals (Litestream + uvicorn startup)
+            # Health check — initial 5s wait then retry up to 10 times with 3s intervals
+            # (Litestream + uvicorn occasionally need ~20s to be ready to serve HTTP).
+            # Issue #43: previously gave only 15s total which auto-rolled back healthy
+            # services that just hadn't bound the port yet.
+            sleep 5
             HEALTHY=0
-            for i in 1 2 3 4 5; do
-              sleep 3
+            for i in 1 2 3 4 5 6 7 8 9 10; do
               if curl -sf http://127.0.0.1:8000/api/health > /dev/null 2>&1; then
                 HEALTHY=1
                 break
               fi
               echo "Health check attempt $i failed, retrying..."
+              sleep 3
             done
 
             if [ "$HEALTHY" -ne 1 ]; then
-              echo "Health check failed after 5 attempts!"
+              echo "Health check failed after 10 attempts!"
               echo "--- Last 40 lines of service log ---"
               sudo journalctl -u vaultic-api.service -n 40 --no-pager || true
               echo "--- Service status ---"
