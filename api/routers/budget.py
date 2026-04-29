@@ -159,9 +159,13 @@ class ManualTransactionBody(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# GET /pending-review — all pending_review transactions across all months
-# Used by the mobile Review Queue screen (/review) so the user sees every
-# transaction that needs action regardless of which month it belongs to.
+# GET /pending-review — current-month pending_review transactions
+# Used by the mobile Review Queue screen (/review).
+#
+# Filtered to the CURRENT month so the mobile queue mirrors what the desktop
+# Budget Pending tab shows when the user is sitting on the current month —
+# anything older that was never approved stays in the DB but no longer
+# clutters the mobile review experience (issue #42).
 #
 # ROUTE ORDER NOTE: This route and /pending-review/{month} MUST be defined
 # BEFORE /{month} below, otherwise FastAPI matches "pending-review" as a
@@ -171,10 +175,13 @@ class ManualTransactionBody(BaseModel):
 
 @router.get("/pending-review")
 async def get_all_pending_review(_user: str = Depends(get_current_user)):
-    """Return ALL pending_review transactions across every month.
+    """Return current-month pending_review transactions.
 
     Powers the mobile Review Queue page where the user approves transactions
-    one by one.  Sorted newest-first so the most recent sync appears at top.
+    one by one.  Restricted to the current calendar month so the mobile queue
+    matches what the desktop Pending tab shows on the current month — old
+    pending_review rows from prior months remain in the DB but are filtered
+    out of this view (per issue #42).  Sorted newest-first.
     """
     with get_db() as conn:
         rows = conn.execute("""
@@ -190,7 +197,8 @@ async def get_all_pending_review(_user: str = Depends(get_current_user)):
             JOIN budget_items bi ON bi.id = ta.item_id
             JOIN budget_groups bg ON bg.id = bi.group_id
             LEFT JOIN accounts a ON a.account_number = t.account_number
-            WHERE t.pending = 0
+            WHERE strftime('%Y-%m', t.date) = strftime('%Y-%m', 'now', 'localtime')
+              AND t.pending = 0
               AND ta.status = 'pending_review'
               AND (t.budget_deleted IS NULL OR t.budget_deleted = 0)
             ORDER BY t.date DESC

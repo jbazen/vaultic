@@ -901,3 +901,108 @@ class TestArchiveRecreate:
         res = client.patch(f"/api/budget/groups/{b['id']}",
                            json={"name": "GrpX"}, headers=auth_headers)
         assert res.status_code == 409
+
+
+# ── Mobile review queue scope (issue #42) ─────────────────────────────────────
+
+class TestMobileReviewQueueScope:
+    """The mobile review queue (GET /pending-review with no month) must be
+    scoped to the CURRENT month so it mirrors what the desktop Pending tab
+    shows on the current month. Old pending_review rows from prior months
+    stay in the DB but must NOT appear in the mobile queue.
+    """
+
+    def _seed_pending_review(self, client, auth_headers, txn_id, date_str, item_id):
+        """Insert a transaction + a pending_review assignment row."""
+        from tests.conftest import _test_get_db
+        acct_id = _seed_test_account(client, auth_headers)
+        with _test_get_db() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO transactions
+                    (transaction_id, account_id, amount, date, merchant_name, pending)
+                VALUES (?, ?, 25.00, ?, 'Test Merchant', 0)
+            """, (txn_id, acct_id, date_str))
+            conn.execute("""
+                INSERT OR IGNORE INTO transaction_assignments
+                    (transaction_id, item_id, status, confidence)
+                VALUES (?, ?, 'pending_review', 0.85)
+            """, (txn_id, item_id))
+
+    def test_mobile_queue_excludes_prior_month_rows(self, client, auth_headers):
+        """A pending_review row from a prior month must NOT appear in the
+        mobile review queue. This is the core regression for issue #42 —
+        old February transactions piling up on the wife's phone."""
+        from datetime import date
+        g = _create_group(client, auth_headers, "Mobile Queue Group")
+        item = _create_item(client, auth_headers, g["id"], "Mobile Queue Item")
+
+        # Use a date well in the past — guaranteed to not be the current month
+        # regardless of when the test runs.
+        old_date = "2024-02-15"
+        self._seed_pending_review(
+            client, auth_headers, "old-pending-001", old_date, item["id"]
+        )
+
+        res = client.get("/api/budget/pending-review", headers=auth_headers)
+        assert res.status_code == 200
+        ids = [t["transaction_id"] for t in res.json()]
+        assert "old-pending-001" not in ids, (
+            "Mobile review queue leaked a prior-month pending_review row — "
+            "this is the issue #42 regression."
+        )
+
+    def test_mobile_queue_includes_current_month_rows(self, client, auth_headers):
+        """A pending_review row from the current month MUST appear in the
+        mobile review queue."""
+        from datetime import date
+        g = _create_group(client, auth_headers, "Current Mo Group")
+        item = _create_item(client, auth_headers, g["id"], "Current Mo Item")
+
+        today = date.today()
+        current_date = f"{today.year:04d}-{today.month:02d}-{min(today.day, 28):02d}"
+        self._seed_pending_review(
+            client, auth_headers, "current-pending-001", current_date, item["id"]
+        )
+
+        res = client.get("/api/budget/pending-review", headers=auth_headers)
+        assert res.status_code == 200
+        ids = [t["transaction_id"] for t in res.json()]
+        assert "current-pending-001" in ids
+
+    def test_mobile_and_desktop_current_month_match(self, client, auth_headers):
+        """The mobile (no-month) endpoint and the desktop (current-month)
+        endpoint must return the same set of transaction_ids — that is the
+        whole point of the issue #42 fix."""
+        from datetime import date
+        g = _create_group(client, auth_headers, "Match Group")
+        item = _create_item(client, auth_headers, g["id"], "Match Item")
+
+        today = date.today()
+        current_month = f"{today.year:04d}-{today.month:02d}"
+        d1 = f"{current_month}-{min(today.day, 28):02d}"
+        d2 = f"{current_month}-01"
+
+        self._seed_pending_review(client, auth_headers, "match-001", d1, item["id"])
+        self._seed_pending_review(client, auth_headers, "match-002", d2, item["id"])
+        # Also seed a prior-month row that must NOT appear in either response
+        self._seed_pending_review(
+            client, auth_headers, "match-old", "2024-02-10", item["id"]
+        )
+
+        mobile = client.get("/api/budget/pending-review", headers=auth_headers)
+        desktop = client.get(
+            f"/api/budget/pending-review/{current_month}", headers=auth_headers
+        )
+        assert mobile.status_code == 200
+        assert desktop.status_code == 200
+
+        mobile_ids = sorted(t["transaction_id"] for t in mobile.json())
+        desktop_ids = sorted(t["transaction_id"] for t in desktop.json())
+        assert mobile_ids == desktop_ids
+        assert "match-old" not in mobile_ids
+        assert "match-old" not in desktop_ids
+
+    def test_mobile_queue_requires_auth(self, client):
+        """The mobile review queue endpoint requires a valid JWT."""
+        res = client.get("/api/budget/pending-review")
+        assert res.status_code == 401
