@@ -1048,7 +1048,7 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 - `test_rate_limit.py` — Sliding window rate limit behavior
 - `test_insperity.py` — Insperity 401K integration including the layout-agnostic performance parser (full horizontal, limited-history single-column, and partial-section variants via HTML fixture at `tests/fixtures/insperity_investment_return_limited.html`)
 
-**Playwright E2E — 32 tests:**
+**Playwright E2E — 33 tests:**
 - `tests/e2e/auth.spec.js` — Login, wrong password, 2FA step, logout
 - `tests/e2e/dashboard.spec.js` — Net worth display, accounts, manual entries, navigation
 - `tests/e2e/sage.spec.js` — Sage button, chat panel, response, session persistence, Hey Sage toggle
