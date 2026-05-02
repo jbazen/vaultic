@@ -1024,7 +1024,7 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 
 ### What is covered
 
-**Backend unit tests — 556 tests:**
+**Backend unit tests — 562 tests:**
 - `test_auth.py` — Login, JWT, 401 handling, `/me`, `/health`
 - `test_2fa.py` — TOTP setup, confirm, verify on login, disable
 - `test_users.py` — Create, delete, change password, admin endpoints
