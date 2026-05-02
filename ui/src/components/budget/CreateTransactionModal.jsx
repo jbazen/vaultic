@@ -64,14 +64,20 @@ export default function CreateTransactionModal({ month, allGroups, initialItemId
 
   // Split total computed from the row amount strings.
   const splitTotal = splits.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-  const totalMatch = parsedAmt > 0 && Math.abs(splitTotal - parsedAmt) < 0.02;
-  const allSplitsValid = splits.every(
-    r => r.item_id != null && parseFloat(r.amount) > 0,
-  );
+  // Single-row mode hides the per-row amount input and the backend takes
+  // `payload.amount` as the assignment amount, so splits[0].amount is unused.
+  // Only validate per-row amounts when the user has actually split.
+  const isSingleRow = splits.length === 1;
+  const allSplitsValid = isSingleRow
+    ? splits[0].item_id != null
+    : splits.every(r => r.item_id != null && parseFloat(r.amount) > 0);
+  const totalMatch = isSingleRow
+    ? parsedAmt > 0
+    : parsedAmt > 0 && Math.abs(splitTotal - parsedAmt) < 0.02;
   // If the user hasn't picked any item on the only row, treat the txn as
   // "unassigned" so creating a new transaction before choosing a category
   // still works the way the old single-dropdown flow did.
-  const isUnassigned = splits.length === 1 && splits[0].item_id == null;
+  const isUnassigned = isSingleRow && splits[0].item_id == null;
   const canSave = parsedAmt > 0
     && merchant.trim().length > 0
     && txnDate
@@ -79,14 +85,22 @@ export default function CreateTransactionModal({ month, allGroups, initialItemId
 
   // ── Split row handlers ────────────────────────────────────────────────
   function addSplit(itemId) {
-    // Pre-fill the new row with whatever remainder isn't yet allocated
-    // so balancing is usually a single click.
-    const allocated = splits.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-    const remainder = Math.max(0, parsedAmt - allocated);
-    setSplits(prev => [
-      ...prev,
-      { item_id: parseInt(itemId), amount: remainder > 0 ? remainder.toFixed(2) : "" },
-    ]);
+    setSplits(prev => {
+      // Single-row mode hides the per-row amount input, so prev[0].amount
+      // is usually empty when expanding to multi. Backfill it from the main
+      // amount so the new multi-row state starts balanced.
+      const seeded = prev.map((r, i) =>
+        i === 0 && !r.amount && parsedAmt > 0
+          ? { ...r, amount: parsedAmt.toFixed(2) }
+          : r,
+      );
+      const allocated = seeded.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+      const remainder = Math.max(0, parsedAmt - allocated);
+      return [
+        ...seeded,
+        { item_id: parseInt(itemId), amount: remainder > 0 ? remainder.toFixed(2) : "" },
+      ];
+    });
   }
   function removeSplit(idx) {
     setSplits(prev => prev.filter((_, i) => i !== idx));
@@ -94,16 +108,6 @@ export default function CreateTransactionModal({ month, allGroups, initialItemId
   function updateSplit(idx, field, value) {
     setSplits(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
   }
-
-  // When the user types in the main amount field and there's only one split
-  // row, sync the split's amount to match so they don't have to type it twice.
-  // Only do this when the user hasn't explicitly typed a different split amount.
-  useEffect(() => {
-    if (splits.length === 1 && !splits[0].amount && amount) {
-      setSplits([{ ...splits[0], amount }]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amount]);
 
   async function handleSave() {
     if (!canSave) return;
