@@ -1006,3 +1006,132 @@ class TestMobileReviewQueueScope:
         """The mobile review queue endpoint requires a valid JWT."""
         res = client.get("/api/budget/pending-review")
         assert res.status_code == 401
+
+
+# ── Issue #45: case-insensitive unarchive + orphaned assignment relink ────────
+
+class TestArchiveUnarchiveCaseInsensitive:
+    """Re-creating a group/item with different capitalization than the archived
+    row must still unarchive (and reuse the same id), not create a duplicate
+    that strands existing transaction_assignments."""
+
+    def test_create_group_case_insensitive_unarchive(self, client, auth_headers):
+        g = _create_group(client, auth_headers, "CaseTestGroup")
+        client.delete(f"/api/budget/groups/{g['id']}", headers=auth_headers)
+        # Different capitalization — must still match the archived row
+        res = client.post("/api/budget/groups",
+                          json={"name": "casetestgroup", "type": "expense"},
+                          headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["id"] == g["id"]
+
+    def test_create_item_case_insensitive_unarchive(self, client, auth_headers):
+        g = _create_group(client, auth_headers, "CaseItemGrp")
+        item = _create_item(client, auth_headers, g["id"], "House Repairs")
+        client.delete(f"/api/budget/items/{item['id']}", headers=auth_headers)
+        res = client.post(f"/api/budget/groups/{g['id']}/items",
+                          json={"name": "HOUSE REPAIRS"},
+                          headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["id"] == item["id"]
+
+
+class TestRelinkOrphanedAssignments:
+    """Issue #45 startup migration: assignments that point at archived items
+    must be re-pointed at any active item with the same name."""
+
+    def _seed_orphaned_assignment(self, group_name, item_name, txn_id):
+        """Insert a transaction + assignment pointing at an archived item."""
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO budget_groups (name, type, display_order, is_archived) "
+                "VALUES (?, 'expense', 99, 1)",
+                (f"__archived_{group_name}",),
+            )
+            archived_gid = cur.lastrowid
+            cur = conn.execute(
+                "INSERT INTO budget_items (group_id, name, display_order, is_archived) "
+                "VALUES (?, ?, 0, 1)",
+                (archived_gid, item_name),
+            )
+            archived_iid = cur.lastrowid
+            conn.execute(
+                "INSERT OR IGNORE INTO transactions "
+                "(transaction_id, account_number, amount, date, name, pending) "
+                "VALUES (?, 'acct_test_45', 811.0, '2026-05-01', 'Quick Restore LLC', 0)",
+                (txn_id,),
+            )
+            conn.execute(
+                "INSERT INTO transaction_assignments (transaction_id, item_id, status) "
+                "VALUES (?, ?, 'manual')",
+                (txn_id, archived_iid),
+            )
+            return archived_gid, archived_iid
+
+    def test_migration_relinks_to_active_same_name(self, client, auth_headers):
+        from api.database import _migrate_relink_orphaned_assignments
+        from tests.conftest import _test_get_db
+        active_group = _create_group(client, auth_headers, "RelinkActiveGrp")
+        active_item = _create_item(client, auth_headers, active_group["id"], "Repairs45A")
+        _, archived_iid = self._seed_orphaned_assignment(
+            "RelinkArchivedGrp", "Repairs45A", "txn_relink_test_1",
+        )
+        with _test_get_db() as conn:
+            _migrate_relink_orphaned_assignments(conn)
+            row = conn.execute(
+                "SELECT item_id FROM transaction_assignments WHERE transaction_id = ?",
+                ("txn_relink_test_1",),
+            ).fetchone()
+            assert row["item_id"] == active_item["id"]
+            assert row["item_id"] != archived_iid
+
+    def test_migration_relinks_case_insensitive(self, client, auth_headers):
+        from api.database import _migrate_relink_orphaned_assignments
+        from tests.conftest import _test_get_db
+        active_group = _create_group(client, auth_headers, "RelinkCaseGrp")
+        active_item = _create_item(client, auth_headers, active_group["id"], "House Repairs")
+        self._seed_orphaned_assignment(
+            "RelinkCaseArchived", "HOUSE REPAIRS", "txn_relink_test_2",
+        )
+        with _test_get_db() as conn:
+            _migrate_relink_orphaned_assignments(conn)
+            row = conn.execute(
+                "SELECT item_id FROM transaction_assignments WHERE transaction_id = ?",
+                ("txn_relink_test_2",),
+            ).fetchone()
+            assert row["item_id"] == active_item["id"]
+
+    def test_migration_leaves_unmatched_orphans_alone(self, client, auth_headers):
+        """When no active item matches the archived item's name, the assignment
+        keeps its archived link — we don't guess at a different name."""
+        from api.database import _migrate_relink_orphaned_assignments
+        from tests.conftest import _test_get_db
+        _, archived_iid = self._seed_orphaned_assignment(
+            "NoMatchArchived", "ZZZNoActiveMatchZZZ", "txn_relink_test_3",
+        )
+        with _test_get_db() as conn:
+            _migrate_relink_orphaned_assignments(conn)
+            row = conn.execute(
+                "SELECT item_id FROM transaction_assignments WHERE transaction_id = ?",
+                ("txn_relink_test_3",),
+            ).fetchone()
+            assert row["item_id"] == archived_iid
+
+    def test_migration_is_idempotent(self, client, auth_headers):
+        from api.database import _migrate_relink_orphaned_assignments
+        from tests.conftest import _test_get_db
+        active_group = _create_group(client, auth_headers, "IdempotentGrp")
+        active_item = _create_item(client, auth_headers, active_group["id"], "Repairs45B")
+        self._seed_orphaned_assignment(
+            "IdempotentArchived", "Repairs45B", "txn_relink_test_4",
+        )
+        with _test_get_db() as conn:
+            _migrate_relink_orphaned_assignments(conn)
+            _migrate_relink_orphaned_assignments(conn)
+            _migrate_relink_orphaned_assignments(conn)
+            row = conn.execute(
+                "SELECT item_id FROM transaction_assignments WHERE transaction_id = ?",
+                ("txn_relink_test_4",),
+            ).fetchone()
+            assert row["item_id"] == active_item["id"]

@@ -726,16 +726,24 @@ async def create_group(body: GroupCreate, _user: str = Depends(get_current_user)
         raise HTTPException(status_code=400, detail="name is required")
 
     with get_db() as conn:
-        # If an archived group with this name exists, unarchive it
+        # If an archived group with this name exists, unarchive it.
+        # Case-insensitive match — SQLite's default binary collation otherwise
+        # treats "Other" / "other" / "OTHER" as different and silently lets
+        # the user create a duplicate id, stranding any transactions that
+        # were assigned to items in the original group (issue #45).
         archived = conn.execute(
-            "SELECT id, type, display_order FROM budget_groups WHERE name = ? AND is_archived = 1",
+            "SELECT id, name, type, display_order FROM budget_groups "
+            "WHERE LOWER(name) = LOWER(?) AND is_archived = 1",
             (name,)
         ).fetchone()
         if archived:
+            # Don't rewrite the name — a UNIQUE-collision with another active
+            # row in different case would IntegrityError. Keep the stored
+            # capitalization; the user sees the resurrected group either way.
             conn.execute("UPDATE budget_groups SET is_archived = 0 WHERE id = ?", (archived["id"],))
             return {
                 "id": archived["id"],
-                "name": name,
+                "name": archived["name"],
                 "type": archived["type"],
                 "display_order": archived["display_order"],
                 "total_planned": 0.0,
@@ -893,14 +901,18 @@ async def create_item(group_id: int, body: ItemCreate, _user: str = Depends(get_
         if not group:
             raise HTTPException(status_code=404, detail="Group not found")
 
-        # If an archived item with this name exists in the group, unarchive it
+        # If an archived item with this name exists in the group, unarchive it.
+        # Case-insensitive match — see issue #45; binary-collation matching
+        # silently misses "Other" vs "other" and orphans assignments.
         archived = conn.execute(
-            "SELECT id FROM budget_items WHERE group_id = ? AND name = ? AND is_archived = 1",
+            "SELECT id, name FROM budget_items "
+            "WHERE group_id = ? AND LOWER(name) = LOWER(?) AND is_archived = 1",
             (group_id, name)
         ).fetchone()
         if archived:
+            # Don't rewrite the name — same UNIQUE-collision risk as create_group.
             conn.execute("UPDATE budget_items SET is_archived = 0 WHERE id = ?", (archived["id"],))
-            return {"id": archived["id"], "name": name, "planned": 0.0, "spent": 0.0, "remaining": 0.0}
+            return {"id": archived["id"], "name": archived["name"], "planned": 0.0, "spent": 0.0, "remaining": 0.0}
 
         max_row = conn.execute(
             "SELECT COALESCE(MAX(display_order), 0) AS m FROM budget_items WHERE group_id = ?",

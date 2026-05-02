@@ -1396,6 +1396,63 @@ def _migrate_manual_entry_account_numbers(conn):
     )
 
 
+def _migrate_relink_orphaned_assignments(conn):
+    """Relink transaction_assignments stranded by archived/deleted budget items.
+
+    Two failure modes leave assignments orphaned:
+      1. Soft delete — the item gets is_archived=1 but the assignment still
+         points at it. The Budget view filters archived items, so the spend
+         vanishes from view even though the row is intact.
+      2. Hard delete on rename — PATCH /items and PATCH /groups execute
+         DELETE ... WHERE is_archived=1 to clear UNIQUE-name collisions.
+         FK cascade then SET NULLs every assignment.item_id pointing into
+         the deleted rows.
+
+    Either way: when the user re-creates a same-name item later, the new id
+    differs and the assignments stay stranded. This migration scans for
+    assignments whose item_id is NULL or points at an archived item, and
+    re-points them at an active item with the same name (case-insensitive).
+    Idempotent — finds zero work to do once everything is linked correctly.
+    """
+    # Build a name → id map of every active item. Lower-cased to make the
+    # match case-insensitive (the user's wife re-created "Other" vs the
+    # original archived "Other"; binary collation kept them apart).
+    active = {
+        row["lname"]: row["id"]
+        for row in conn.execute(
+            "SELECT id, LOWER(name) AS lname FROM budget_items WHERE is_archived = 0"
+        ).fetchall()
+    }
+    if not active:
+        return
+
+    # NULL item_id assignments — try to recover by joining to the original
+    # transaction's category/merchant; not enough signal to relink reliably,
+    # so we skip these. They surface as unassigned in the queue, which is
+    # the user-facing recovery path.
+
+    # Archived-item assignments — find the archived item's name, look up an
+    # active item with the same name, re-point. Only do same-name matches;
+    # cross-name "best guess" relinking would create surprises.
+    archived_rows = conn.execute("""
+        SELECT ta.id AS ta_id, ta.item_id AS old_id, LOWER(bi.name) AS lname
+        FROM transaction_assignments ta
+        JOIN budget_items bi ON bi.id = ta.item_id
+        WHERE bi.is_archived = 1
+    """).fetchall()
+    relinked = 0
+    for row in archived_rows:
+        new_id = active.get(row["lname"])
+        if new_id and new_id != row["old_id"]:
+            conn.execute(
+                "UPDATE transaction_assignments SET item_id = ? WHERE id = ?",
+                (new_id, row["ta_id"]),
+            )
+            relinked += 1
+    if relinked:
+        logger.info("Relinked %d orphaned transaction_assignments to active items", relinked)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1464,6 +1521,11 @@ def init_db():
             _migrate_manual_entry_account_numbers(conn)
         except Exception as exc:
             logger.warning("Manual entry account_number migration failed: %s", exc)
+        # Re-link transaction_assignments orphaned by archived/deleted budget items
+        try:
+            _migrate_relink_orphaned_assignments(conn)
+        except Exception as exc:
+            logger.warning("Orphaned assignment relink migration failed: %s", exc)
         # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 
