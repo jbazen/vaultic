@@ -36,6 +36,7 @@ from api.insperity_client import (
 
 VAULTIC_URL = os.environ.get("VAULTIC_URL", "https://vaulticsage.com")
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".insperity_token")
+REFRESH_TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".insperity_refresh_token")
 
 
 def get_token() -> str:
@@ -60,11 +61,58 @@ def get_token() -> str:
         print(f"Login failed: {resp.status_code} {resp.text}")
         sys.exit(1)
 
-    token = resp.json()["access_token"]
+    payload = resp.json()
+    if payload.get("requires_2fa"):
+        print("Account has 2FA enabled — interactive login from this script is "
+              "not supported. Grab the JWT from browser localStorage "
+              "('vaultic_token') and write it to .insperity_token, or grab the "
+              "refresh token ('vaultic_refresh_token') and write it to "
+              ".insperity_refresh_token (the script will silently refresh).")
+        sys.exit(1)
+
+    token = payload["token"]
     with open(TOKEN_FILE, "w") as f:
         f.write(token)
     print(f"Token saved to {TOKEN_FILE}")
     return token
+
+
+def try_refresh() -> str | None:
+    """Use the cached refresh token to mint a new access token.
+
+    Refresh-token rotation: the supplied token is revoked server-side and a new
+    one is issued. We save both. Returns the new access token, or None if no
+    refresh token is cached or refresh fails (token revoked / expired).
+    """
+    if not os.path.exists(REFRESH_TOKEN_FILE):
+        return None
+    import httpx
+
+    with open(REFRESH_TOKEN_FILE) as f:
+        refresh = f.read().strip()
+    if not refresh:
+        return None
+
+    resp = httpx.post(
+        f"{VAULTIC_URL}/api/auth/refresh",
+        json={"refresh_token": refresh},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        print(f"  Refresh failed ({resp.status_code}); cached refresh token "
+              "may have been rotated by your browser session.")
+        return None
+
+    payload = resp.json()
+    new_access = payload["token"]
+    new_refresh = payload["refresh_token"]
+
+    with open(TOKEN_FILE, "w") as f:
+        f.write(new_access)
+    with open(REFRESH_TOKEN_FILE, "w") as f:
+        f.write(new_refresh)
+    print("  Refreshed access token via cached refresh token.")
+    return new_access
 
 
 async def scrape_all(cookies: dict) -> dict:
@@ -105,22 +153,34 @@ async def scrape_all(cookies: dict) -> dict:
 
 
 def post_to_server(data: dict, token: str) -> dict:
-    """POST parsed data to Vaultic sync-local endpoint."""
+    """POST parsed data to Vaultic sync-local endpoint.
+
+    On 401, try one silent refresh via the cached refresh token before giving
+    up — this keeps headless syncs running unattended for ~90 days.
+    """
     import httpx
 
-    resp = httpx.post(
-        f"{VAULTIC_URL}/api/insperity/sync-local",
-        json=data,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
+    def _post(bearer: str):
+        return httpx.post(
+            f"{VAULTIC_URL}/api/insperity/sync-local",
+            json=data,
+            headers={"Authorization": f"Bearer {bearer}"},
+            timeout=30,
+        )
+
+    resp = _post(token)
 
     if resp.status_code == 401:
-        # Token expired — delete and retry
-        if os.path.exists(TOKEN_FILE):
-            os.remove(TOKEN_FILE)
-        print("Token expired. Run again to re-authenticate.")
-        sys.exit(1)
+        print("Access token expired; attempting refresh...")
+        new_token = try_refresh()
+        if new_token:
+            resp = _post(new_token)
+        else:
+            if os.path.exists(TOKEN_FILE):
+                os.remove(TOKEN_FILE)
+            print("Token expired and no usable refresh token. Run again to "
+                  "re-authenticate.")
+            sys.exit(1)
 
     if resp.status_code != 200:
         print(f"Server error: {resp.status_code} {resp.text}")

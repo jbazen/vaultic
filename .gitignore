@@ -36,6 +36,8 @@ Thumbs.db
 
 # Insperity sync token (contains Vaultic JWT)
 .insperity_token
+.insperity_refresh_token
+.insperity_curl.txt
 
 # EveryDollar JSON imports (raw API responses — not for version control)
 imports/
