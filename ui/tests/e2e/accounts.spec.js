@@ -125,3 +125,28 @@ test.describe("Insperity Account Detail", () => {
     await expect(page.getByText("Employer Match")).toBeVisible();
   });
 });
+
+test.describe("Plaid Reconnect", () => {
+  test("stale institution shows Reconnect button and login-expired warning", async ({ page }) => {
+    await mockAllAPIs(page);
+    // A Chase account exists (from helpers), and its Plaid item is long-stale.
+    // Date is far in the past so it's stale regardless of when CI runs.
+    await page.route("**/api/plaid/items", r =>
+      r.fulfill({ json: [{
+        id: 1, item_id: "item-chase-stale", institution_name: "Chase",
+        last_synced_at: "2020-01-01 08:00:06", created_at: "2019-12-01 05:13:31",
+      }] }));
+
+    await page.goto("/");
+    await page.getByPlaceholder(/username/i).fill("testuser");
+    await page.getByPlaceholder(/password/i).fill("testpassword");
+    await page.getByRole("button", { name: /sign in|login|log in/i }).click();
+    await page.waitForSelector("text=Net Worth", { timeout: 8000 });
+
+    await page.getByRole("button", { name: /finance/i }).click();
+    await page.getByRole("link", { name: /accounts/i }).click();
+
+    await expect(page.getByRole("button", { name: /reconnect/i })).toBeVisible();
+    await expect(page.getByText(/login expired, click Reconnect/i)).toBeVisible();
+  });
+});

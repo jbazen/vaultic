@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from api.dependencies import get_current_user
 from api.database import get_db
-from api.encryption import encrypt
+from api.encryption import encrypt, decrypt
 from api import sync, security_log, rate_limit
 from api.plaid_client import get_plaid_client
 
@@ -49,6 +49,45 @@ async def create_link_token(_user: str = Depends(get_current_user)):
     except plaid.ApiException as e:
         logger.error(f"Plaid link_token error: {e}")
         raise HTTPException(status_code=502, detail="Failed to create Plaid link token")
+
+
+class UpdateLinkTokenRequest(BaseModel):
+    item_id: str
+
+
+@router.post("/link-token/update")
+async def create_update_link_token(body: UpdateLinkTokenRequest, _user: str = Depends(get_current_user)):
+    """Create a Plaid Link token in *update mode* to repair an item whose login
+    expired (ITEM_LOGIN_REQUIRED).
+
+    Passing the item's existing access_token (and omitting products) tells Plaid
+    to re-authenticate the SAME item in place: it keeps its item_id and resumes
+    syncing on the next cron. This is what lets the user re-enter credentials
+    without creating a duplicate institution (a fresh link would mint a new
+    item_id and a second copy of the accounts).
+    """
+    with get_db() as conn:
+        item = conn.execute(
+            "SELECT access_token_enc FROM plaid_items WHERE item_id = ?", (body.item_id,)
+        ).fetchone()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    try:
+        client = _get_client()
+        req = LinkTokenCreateRequest(
+            user=LinkTokenCreateRequestUser(client_user_id="vaultic-user"),
+            client_name="Vaultic",
+            country_codes=[CountryCode("US")],
+            language="en",
+            # Update mode: pass the existing token, omit `products`. Plaid repairs
+            # this item rather than creating a new one.
+            access_token=decrypt(item["access_token_enc"]),
+        )
+        resp = client.link_token_create(req)
+        return {"link_token": resp.link_token}
+    except plaid.ApiException as e:
+        logger.error(f"Plaid update link_token error: {e}")
+        raise HTTPException(status_code=502, detail="Failed to create Plaid update link token")
 
 
 class ExchangeRequest(BaseModel):

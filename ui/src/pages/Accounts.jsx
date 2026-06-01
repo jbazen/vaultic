@@ -12,7 +12,19 @@ const SEC_INVESTED_OTHER = "__sec_investment_other__";
 const SEC_LIQUID         = "__sec_hsa_cash__";
 const SEC_PROPERTY       = "__sec_property_vehicles__";
 const SEC_LIABILITIES    = "__sec_liabilities__";
+
+// A Plaid item that hasn't synced in over 2 days has almost certainly dropped
+// its login (the cron runs 4×/day) — surface it so the user can reconnect.
+const STALE_SYNC_MS = 2 * 24 * 60 * 60 * 1000;
+function isSyncStale(lastSyncedAt) {
+  if (!lastSyncedAt) return true;
+  const t = new Date(String(lastSyncedAt).replace(" ", "T")).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t > STALE_SYNC_MS;
+}
+
 import PlaidLink from "../components/PlaidLink.jsx";
+import PlaidReconnect from "../components/PlaidReconnect.jsx";
 import EditableNotes from "../components/EditableNotes.jsx";
 import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
 import I360AccountCard from "../components/accounts/I360AccountCard.jsx";
@@ -1046,19 +1058,29 @@ export default function Accounts() {
         orderedBlocks.map(block => {
           let titleText = "";
           let subtitleText = null;
+          let subtitleWarn = false;
           let rightButton = null;
           let bodyContent = null;
 
           if (block.kind === "institution") {
             const item = items.find(i => i.institution_name === block.key);
             titleText = block.key;
-            if (item?.last_synced_at) subtitleText = `Synced ${fmtDate(item.last_synced_at)}`;
+            const stale = item ? isSyncStale(item.last_synced_at) : false;
+            if (item?.last_synced_at) {
+              subtitleText = stale
+                ? `⚠ Last synced ${fmtDate(item.last_synced_at)} — login expired, click Reconnect`
+                : `Synced ${fmtDate(item.last_synced_at)}`;
+              subtitleWarn = stale;
+            }
             if (item) {
               rightButton = (
-                <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}
-                  onClick={() => handleRemove(item.item_id)}>
-                  Disconnect
-                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <PlaidReconnect itemId={item.item_id} onSuccess={load} />
+                  <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}
+                    onClick={() => handleRemove(item.item_id)}>
+                    Disconnect
+                  </button>
+                </div>
               );
             }
             bodyContent = (
@@ -1152,7 +1174,7 @@ export default function Accounts() {
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 16 }}>{titleText}</div>
                     {subtitleText && (
-                      <div style={{ fontSize: 12, color: "var(--text2)", marginTop: 2 }}>{subtitleText}</div>
+                      <div style={{ fontSize: 12, color: subtitleWarn ? "var(--red)" : "var(--text2)", marginTop: 2 }}>{subtitleText}</div>
                     )}
                   </div>
                 </div>

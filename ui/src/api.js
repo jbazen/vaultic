@@ -246,6 +246,16 @@ export async function createLinkToken() {
   return res.json();
 }
 
+// Update-mode link token: repairs an existing item whose login expired
+// (ITEM_LOGIN_REQUIRED) without creating a duplicate institution.
+export async function createUpdateLinkToken(itemId) {
+  const res = await apiFetch("/api/plaid/link-token/update", {
+    method: "POST",
+    body: JSON.stringify({ item_id: itemId }),
+  });
+  return res.json();
+}
+
 export async function exchangeToken(public_token, institution_id, institution_name) {
   const res = await apiFetch("/api/plaid/exchange", {
     method: "POST",

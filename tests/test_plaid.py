@@ -90,6 +90,90 @@ class TestPlaidLinkToken:
         assert res.status_code == 502
 
 
+class TestPlaidUpdateLinkToken:
+    """Update-mode (Reconnect) link token — repairs an item whose login expired."""
+
+    def _insert_item(self, item_id="item-reconnect-test"):
+        from tests.conftest import _test_get_db
+        from api.encryption import encrypt
+        with _test_get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO plaid_items (item_id, institution_name, access_token_enc) "
+                "VALUES (?, ?, ?)",
+                (item_id, "Voya Financial", encrypt("access-sandbox-xyz")),
+            )
+            conn.commit()
+        return item_id
+
+    def _cleanup_item(self, item_id):
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            conn.execute("DELETE FROM plaid_items WHERE item_id = ?", (item_id,))
+            conn.commit()
+
+    def test_update_link_token_requires_auth(self, client):
+        res = client.post("/api/plaid/link-token/update", json={"item_id": "x"})
+        assert res.status_code == 401
+
+    def test_update_link_token_404_for_unknown_item(self, client, auth_headers):
+        res = client.post("/api/plaid/link-token/update",
+                          headers=auth_headers, json={"item_id": "does-not-exist"})
+        assert res.status_code == 404
+
+    def test_update_link_token_returns_token(self, client, auth_headers):
+        item_id = self._insert_item()
+        try:
+            with patch("api.routers.plaid._get_client") as mock_get_client:
+                mock_api = MagicMock()
+                mock_get_client.return_value = mock_api
+                mock_api.link_token_create.return_value = _make_mock_link_token_response()
+                res = client.post("/api/plaid/link-token/update",
+                                  headers=auth_headers, json={"item_id": item_id})
+            assert res.status_code == 200
+            assert "link_token" in res.json()
+        finally:
+            self._cleanup_item(item_id)
+
+    def test_update_link_token_passes_access_token_and_no_products(self, client, auth_headers):
+        """Update mode must send the existing access_token and omit `products`."""
+        item_id = self._insert_item("item-reconnect-test-2")
+        captured = {}
+
+        def capture_request(req):
+            captured["req"] = req
+            return _make_mock_link_token_response()
+
+        try:
+            with patch("api.routers.plaid._get_client") as mock_get_client:
+                mock_api = MagicMock()
+                mock_get_client.return_value = mock_api
+                mock_api.link_token_create.side_effect = capture_request
+                client.post("/api/plaid/link-token/update",
+                            headers=auth_headers, json={"item_id": item_id})
+            req = captured.get("req")
+            assert req is not None
+            as_dict = req.to_dict()
+            assert as_dict.get("access_token") == "access-sandbox-xyz"
+            # `products` must be unset in update mode (Plaid rejects it otherwise)
+            assert "products" not in as_dict or not as_dict["products"]
+        finally:
+            self._cleanup_item(item_id)
+
+    def test_update_link_token_plaid_error_returns_502(self, client, auth_headers):
+        item_id = self._insert_item("item-reconnect-test-3")
+        try:
+            import plaid
+            with patch("api.routers.plaid._get_client") as mock_get_client:
+                mock_api = MagicMock()
+                mock_get_client.return_value = mock_api
+                mock_api.link_token_create.side_effect = plaid.ApiException(status=400, reason="Bad Request")
+                res = client.post("/api/plaid/link-token/update",
+                                  headers=auth_headers, json={"item_id": item_id})
+            assert res.status_code == 502
+        finally:
+            self._cleanup_item(item_id)
+
+
 class TestPlaidItems:
     def test_list_items_requires_auth(self, client):
         res = client.get("/api/plaid/items")
