@@ -38,10 +38,24 @@ export default function PlaidReconnect({ itemId, onSuccess }) {
     onSuccess?.();
   }, [onSuccess]);
 
+  const onExit = useCallback((err, metadata) => {
+    setLinkToken(null);
+    if (err) {
+      // Surface Plaid's real reason instead of a blank "something went wrong".
+      console.error("Plaid Link (reconnect) exit error:", err, metadata);
+      const code = err.error_code || "UNKNOWN";
+      const msg = err.display_message || err.error_message || "see browser console for detail";
+      setError(`Plaid: ${code} — ${msg}`);
+    }
+  }, []);
+
   const { open, ready } = usePlaidLink({
     token: linkToken,
     onSuccess: onPlaidSuccess,
-    onExit: () => setLinkToken(null),
+    onExit,
+    onEvent: (eventName, metadata) => {
+      if (eventName === "ERROR") console.error("Plaid Link (reconnect) ERROR event:", metadata);
+    },
   });
 
   // Auto-open once we have a link token

@@ -34,10 +34,23 @@ export default function PlaidLink({ onSuccess }) {
     }
   }, [onSuccess]);
 
+  const onExit = useCallback((err, metadata) => {
+    setLinkToken(null);
+    if (err) {
+      console.error("Plaid Link exit error:", err, metadata);
+      const code = err.error_code || "UNKNOWN";
+      const msg = err.display_message || err.error_message || "see browser console for detail";
+      setError(`Plaid: ${code} — ${msg}`);
+    }
+  }, []);
+
   const { open, ready } = usePlaidLink({
     token: linkToken,
     onSuccess: onPlaidSuccess,
-    onExit: () => setLinkToken(null),
+    onExit,
+    onEvent: (eventName, metadata) => {
+      if (eventName === "ERROR") console.error("Plaid Link ERROR event:", metadata);
+    },
   });
 
   // Auto-open once we have a link token
