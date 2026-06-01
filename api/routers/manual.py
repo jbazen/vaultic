@@ -5,7 +5,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from api.dependencies import get_current_user
-from api.database import get_db
+from api.database import get_db, _rekey_manual_snapshots
 from api import sync
 
 router = APIRouter(prefix="/api/manual", tags=["manual"])
@@ -72,21 +72,51 @@ async def add_entry(body: ManualEntryRequest, _user: str = Depends(get_current_u
 
     with get_db() as conn:
         existing = None
+        # Tier 1 — exact account_number match. Most reliable when it's stable.
         if acct_num:
             existing = conn.execute(
-                "SELECT id FROM manual_entries WHERE account_number = ?", (acct_num,)
+                "SELECT id, name, account_number FROM manual_entries WHERE account_number = ?", (acct_num,)
             ).fetchone()
+        # Singleton categories: one entry per category regardless of account_number.
         if not existing and body.category in SINGLETON_CATEGORIES:
             existing = conn.execute(
-                "SELECT id FROM manual_entries WHERE category = ? ORDER BY entered_at DESC LIMIT 1",
+                "SELECT id, name, account_number FROM manual_entries WHERE category = ? ORDER BY entered_at DESC LIMIT 1",
                 (body.category,)
             ).fetchone()
+        # Tier 2 — unambiguous (name, category) fallback. The same real-world
+        # account re-entered with a different account_number string (placeholder
+        # -> real number, leading zero, reformatting) must UPDATE the existing
+        # entry, not spawn a duplicate. Only fires when exactly one same-name
+        # (case-insensitive), same-category entry exists.
+        if not existing:
+            candidates = conn.execute(
+                "SELECT id, name, account_number FROM manual_entries "
+                "WHERE LOWER(name) = LOWER(?) AND category = ?",
+                (body.name, body.category)
+            ).fetchall()
+            if len(candidates) == 1:
+                existing = candidates[0]
+
         if existing:
+            old_acct = existing["account_number"]
+            # The account_number entered now is canonical (newest wins), but never
+            # overwrite a real stored number with nothing.
+            canon_acct = acct_num or old_acct
             conn.execute("""
                 UPDATE manual_entries
-                SET name = ?, category = ?, value = ?, notes = ?, entered_at = ?
+                SET name = ?, category = ?, value = ?, notes = ?, entered_at = ?, account_number = ?
                 WHERE id = ?
-            """, (body.name, body.category, body.value, body.notes, entered_at, existing["id"]))
+            """, (body.name, body.category, body.value, body.notes, entered_at, canon_acct, existing["id"]))
+            # Re-key prior snapshots so balance history stays attached after the
+            # account_number/name correction.
+            if canon_acct and old_acct and old_acct != canon_acct:
+                _rekey_manual_snapshots(conn, old_acct, canon_acct, body.name)
+            elif existing["name"] != body.name:
+                conn.execute(
+                    "UPDATE manual_entry_snapshots SET name = ? WHERE name = ?",
+                    (body.name, existing["name"])
+                )
+            acct_num = canon_acct  # snapshot insert below keys off the canonical number
         else:
             conn.execute("""
                 INSERT INTO manual_entries (name, category, value, notes, entered_at, account_number)

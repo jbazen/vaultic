@@ -1453,6 +1453,80 @@ def _migrate_relink_orphaned_assignments(conn):
         logger.info("Relinked %d orphaned transaction_assignments to active items", relinked)
 
 
+def _rekey_manual_snapshots(conn, old_acct, new_acct, new_name):
+    """Re-point manual_entry_snapshots from old_acct onto new_acct/new_name.
+
+    Drops any old_acct snapshot that would collide with an *already-existing*
+    snapshot on the UNIQUE(name, snapped_at) key (the canonical row's snapshot
+    for that date wins). The old_acct's own rows are excluded from the collision
+    set so the history being migrated is preserved. No-op if either account
+    number is missing or unchanged.
+    """
+    if not old_acct or not new_acct or old_acct == new_acct:
+        return
+    conn.execute(
+        """DELETE FROM manual_entry_snapshots
+           WHERE account_number = ?
+             AND snapped_at IN (
+                 SELECT snapped_at FROM manual_entry_snapshots
+                 WHERE name = ? AND (account_number IS NULL OR account_number <> ?)
+             )""",
+        (old_acct, new_name, old_acct),
+    )
+    conn.execute(
+        "UPDATE manual_entry_snapshots SET account_number = ?, name = ? WHERE account_number = ?",
+        (new_acct, new_name, old_acct),
+    )
+
+
+def _migrate_merge_duplicate_manual_entries(conn):
+    """One-shot repair: merge manual_entries that are the same account split
+    into duplicate rows because the typed account_number differed between
+    months (placeholder vs real number, leading zero, reformatting).
+
+    add_entry historically matched non-singleton categories only on an exact
+    account_number string, so any change to what was typed inserted a brand-new
+    row instead of updating. This consolidates rows sharing (LOWER(name),
+    category): the most-recently-entered row is canonical and its account_number
+    wins (per owner: the number entered most recently is the correct one).
+    Older rows' snapshots are re-keyed onto the canonical account_number/name
+    and any holdings re-parented, then the stale rows are deleted.
+
+    Idempotent — finds no work once each (name, category) maps to a single row.
+    """
+    groups = conn.execute(
+        """SELECT LOWER(name) AS lname, category
+           FROM manual_entries
+           GROUP BY LOWER(name), category
+           HAVING COUNT(*) > 1"""
+    ).fetchall()
+    merged = 0
+    for g in groups:
+        rows = conn.execute(
+            """SELECT id, name, account_number FROM manual_entries
+               WHERE LOWER(name) = ? AND category = ?
+               ORDER BY entered_at DESC, id DESC""",
+            (g["lname"], g["category"]),
+        ).fetchall()
+        if len(rows) < 2:
+            continue
+        canon = rows[0]
+        for stale in rows[1:]:
+            if canon["account_number"]:
+                _rekey_manual_snapshots(
+                    conn, stale["account_number"], canon["account_number"], canon["name"]
+                )
+            # Re-parent holdings before the FK cascade delete removes them.
+            conn.execute(
+                "UPDATE manual_holdings SET manual_entry_id = ? WHERE manual_entry_id = ?",
+                (canon["id"], stale["id"]),
+            )
+            conn.execute("DELETE FROM manual_entries WHERE id = ?", (stale["id"],))
+            merged += 1
+    if merged:
+        logger.info("Merged %d duplicate manual_entries into canonical rows", merged)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1526,6 +1600,11 @@ def init_db():
             _migrate_relink_orphaned_assignments(conn)
         except Exception as exc:
             logger.warning("Orphaned assignment relink migration failed: %s", exc)
+        # Merge manual_entries duplicated by month-to-month account_number changes
+        try:
+            _migrate_merge_duplicate_manual_entries(conn)
+        except Exception as exc:
+            logger.warning("Manual entry merge migration failed: %s", exc)
         # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 
