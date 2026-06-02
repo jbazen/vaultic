@@ -4,7 +4,7 @@ Voya 401K integration — store retirement balances synced from a local script.
 Voya's portal is behind Cloudflare + IBM ISAM (IP-bound), so the scrape runs on
 the user's machine via sync_voya.py and POSTs the parsed result here. Mirrors the
 Insperity /sync-local pattern. The total balance is upserted into manual_entries
-(account_number VOYA401K, category 'invested') with a snapshot for history.
+(account_number 861956, category 'invested') with a snapshot for history.
 """
 import logging
 import time
@@ -19,7 +19,7 @@ from api.sync import _take_net_worth_snapshot
 
 logger = logging.getLogger(__name__)
 
-VOYA_ACCOUNT_NUMBER = "VOYA401K"
+VOYA_ACCOUNT_NUMBER = "861956"  # real Voya plan account number — see #53
 VOYA_ENTRY_NAME = "Voya 401(k)"
 router = APIRouter(prefix="/api/voya", tags=["voya"])
 

@@ -1572,6 +1572,73 @@ def _migrate_deactivate_voya_plaid(conn):
         )
 
 
+def _migrate_voya_real_account_number(conn):
+    """Move Voya 401k onto its real account number (861956) and stitch the
+    Plaid-era balance history into the local-sync entry so the Accounts page
+    shows ONE continuous series, queried by account_number ordered by date (#53).
+
+    Why: Voya was given a synthetic account_number 'VOYA401K' (#51). That '401K'
+    suffix collided with Insperity's '105001401K' through the LIKE '%<last4>'
+    fallback in the manual-entry history endpoint, cross-contaminating both
+    charts. Worse, the Plaid-era history was stranded in account_balances under
+    the deactivated Voya Plaid accounts (#52), in a different table than the Voya
+    card reads. Using the real plan number 861956 shares no suffix with Insperity,
+    so exact matching just works and the two are fully decoupled.
+
+    Steps (all idempotent):
+      1. Re-key the manual_entries row + its manual_entry_snapshots from
+         'VOYA401K' to '861956'.
+      2. Backfill the deactivated Voya Plaid account_balances (summed per day)
+         into manual_entry_snapshots under 861956, de-duped on UNIQUE(name,
+         snapped_at) so existing local-sync points always win.
+
+    Net-worth neutral: only the manual entry's account_number and the
+    manual_entry_snapshots history are touched. The entry's value, the active
+    accounts, and net_worth_snapshots are never modified — this adds historical
+    per-account points only.
+    """
+    OLD, NEW = "VOYA401K", "861956"
+    # 1. Re-key the current entry + its accumulated snapshot history.
+    conn.execute(
+        "UPDATE manual_entries SET account_number = ? WHERE account_number = ?",
+        (NEW, OLD),
+    )
+    conn.execute(
+        "UPDATE manual_entry_snapshots SET account_number = ? WHERE account_number = ?",
+        (NEW, OLD),
+    )
+    entry = conn.execute(
+        "SELECT name FROM manual_entries WHERE account_number = ?", (NEW,)
+    ).fetchone()
+    if not entry:
+        return  # No Voya entry yet — nothing to stitch history onto.
+    name = entry["name"]
+    # 2. Backfill the Plaid-era history, summed across the deactivated Voya
+    #    accounts so the line is the true historical TOTAL (matches how the
+    #    local-sync entry stores the aggregate balance).
+    rows = conn.execute(
+        """SELECT b.snapped_at AS snapped_at, SUM(b.current) AS total
+           FROM account_balances b
+           JOIN accounts a ON a.account_number = b.account_number
+           WHERE a.source = 'plaid' AND a.is_active = 0
+             AND a.institution_name LIKE '%Voya%'
+             AND b.current IS NOT NULL
+           GROUP BY b.snapped_at"""
+    ).fetchall()
+    inserted = 0
+    for r in rows:
+        cur = conn.execute(
+            """INSERT INTO manual_entry_snapshots
+                   (name, account_number, category, value, snapped_at)
+               VALUES (?, ?, 'invested', ?, ?)
+               ON CONFLICT(name, snapped_at) DO NOTHING""",
+            (name, NEW, r["total"], r["snapped_at"]),
+        )
+        inserted += cur.rowcount
+    if inserted:
+        logger.info("Voya: backfilled %d Plaid-era history point(s) under 861956", inserted)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1656,6 +1723,13 @@ def init_db():
             _migrate_deactivate_voya_plaid(conn)
         except Exception as exc:
             logger.warning("Voya Plaid deactivation migration failed: %s", exc)
+        # Move Voya onto its real account number (861956) and stitch the Plaid-era
+        # balance history into the local-sync entry so the Accounts page chart is
+        # continuous. Runs AFTER deactivation so the source accounts are is_active=0.
+        try:
+            _migrate_voya_real_account_number(conn)
+        except Exception as exc:
+            logger.warning("Voya real account-number migration failed: %s", exc)
         # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 

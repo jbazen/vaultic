@@ -3,7 +3,7 @@
 Covers:
   - parse_curl: cookie + session-token extraction, Windows ^ stripping, validation
   - _parse_accounts: defensive JSON parsing + SchemaUnknownError on unknown shape
-  - POST /sync-local: auth guard, manual_entries upsert (VOYA401K/invested),
+  - POST /sync-local: auth guard, manual_entries upsert (861956/invested),
     snapshot history, voya_accounts + sync-log storage
   - status / accounts / sync-log query endpoints + auth guards
 """
@@ -22,8 +22,8 @@ _COOKIE = ("MYVOYA_SSO_SESSION_ID=abc; MYVOYA_SESSION_ID=def; "
 def _cleanup():
     yield
     with _test_get_db() as conn:
-        conn.execute("DELETE FROM manual_entries WHERE account_number = 'VOYA401K'")
-        conn.execute("DELETE FROM manual_entry_snapshots WHERE account_number = 'VOYA401K'")
+        conn.execute("DELETE FROM manual_entries WHERE account_number = '861956'")
+        conn.execute("DELETE FROM manual_entry_snapshots WHERE account_number = '861956'")
         conn.execute("DELETE FROM voya_accounts")
         conn.execute("DELETE FROM voya_sync_log")
         conn.commit()
@@ -96,12 +96,12 @@ class TestSyncLocal:
         assert res.json()["accounts"] == 2
         with _test_get_db() as conn:
             entry = conn.execute(
-                "SELECT name, category, value FROM manual_entries WHERE account_number='VOYA401K'"
+                "SELECT name, category, value FROM manual_entries WHERE account_number='861956'"
             ).fetchone()
             assert entry["category"] == "invested"
             assert entry["value"] == 22903.64
             snap = conn.execute(
-                "SELECT value FROM manual_entry_snapshots WHERE account_number='VOYA401K'"
+                "SELECT value FROM manual_entry_snapshots WHERE account_number='861956'"
             ).fetchone()
             assert snap["value"] == 22903.64
             n_accts = conn.execute("SELECT COUNT(*) FROM voya_accounts").fetchone()[0]
@@ -120,7 +120,7 @@ class TestSyncLocal:
                         json={"total_balance": 250.0, "accounts": []})
         with _test_get_db() as conn:
             rows = conn.execute(
-                "SELECT value FROM manual_entries WHERE account_number='VOYA401K'"
+                "SELECT value FROM manual_entries WHERE account_number='861956'"
             ).fetchall()
         assert len(rows) == 1
         assert rows[0]["value"] == 250.0
@@ -168,6 +168,107 @@ class TestDeactivateVoyaPlaidMigration:
                     "SELECT is_active FROM accounts WHERE plaid_account_id = 'voya-jstoo'"
                 ).fetchone()
                 assert voya2["is_active"] == 0
+            finally:
+                self._cleanup(conn)
+
+
+class TestVoyaRealAccountNumberMigration:
+    """#53 — Voya moves onto its real account number (861956) and the Plaid-era
+    balance history is stitched into the local-sync entry as one continuous
+    series, queryable by account_number ordered by date. Must not touch net
+    worth and must be idempotent."""
+
+    def _seed(self, conn):
+        # Two deactivated Voya Plaid accounts (the dead item from #52), each with
+        # daily balances keyed by account_number — the migration sums them per day.
+        for uuid, acct_no in (("voya-a", "PLAID-A"), ("voya-b", "PLAID-B")):
+            conn.execute(
+                "INSERT INTO accounts (plaid_account_id, account_number, name, type, "
+                "subtype, institution_name, source, is_manual, is_active) VALUES "
+                "(?, ?, 'Voya 401k', 'investment', '401k', "
+                "'Voya Financial - Voya Services Company', 'plaid', 0, 0)",
+                (uuid, acct_no),
+            )
+        a_id = conn.execute("SELECT id FROM accounts WHERE plaid_account_id='voya-a'").fetchone()["id"]
+        b_id = conn.execute("SELECT id FROM accounts WHERE plaid_account_id='voya-b'").fetchone()["id"]
+        bals = [
+            (a_id, "PLAID-A", "2026-04-01", 10000.0), (a_id, "PLAID-A", "2026-04-17", 17898.62),
+            (b_id, "PLAID-B", "2026-04-01", 5000.0),  (b_id, "PLAID-B", "2026-04-17", 5005.02),
+        ]
+        for acct_id, acct_no, day, val in bals:
+            conn.execute(
+                "INSERT INTO account_balances (account_id, account_number, current, snapped_at) "
+                "VALUES (?, ?, ?, ?)", (acct_id, acct_no, val, day),
+            )
+        # The local-sync Voya entry + its current snapshot, still on the old key.
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Voya 401(k)', 'invested', 22903.64, '2026-06-02', 'VOYA401K')"
+        )
+        conn.execute(
+            "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+            "VALUES ('Voya 401(k)', 'VOYA401K', 'invested', 22903.64, '2026-06-02')"
+        )
+        # An Insperity entry sharing the '401K' suffix — must stay fully decoupled.
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('INSPERITY 401K PLAN', 'invested', 1391.66, '2026-04-01', '105001401K')"
+        )
+        conn.execute(
+            "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+            "VALUES ('INSPERITY 401K PLAN', '105001401K', 'invested', 1391.66, '2026-04-01')"
+        )
+        conn.commit()
+
+    def _cleanup(self, conn):
+        conn.execute("DELETE FROM account_balances WHERE account_number IN ('PLAID-A','PLAID-B')")
+        conn.execute("DELETE FROM accounts WHERE plaid_account_id IN ('voya-a','voya-b')")
+        conn.execute("DELETE FROM manual_entries WHERE account_number IN ('861956','105001401K')")
+        conn.execute("DELETE FROM manual_entry_snapshots WHERE account_number IN ('861956','105001401K')")
+        conn.commit()
+
+    def test_rekeys_backfills_and_is_net_worth_neutral(self):
+        from api.database import _migrate_voya_real_account_number
+        with _test_get_db() as conn:
+            self._cleanup(conn)
+            self._seed(conn)
+            try:
+                _migrate_voya_real_account_number(conn)
+
+                # Entry moved to the real account number; value unchanged (NW-neutral).
+                entry = conn.execute(
+                    "SELECT account_number, value FROM manual_entries WHERE name='Voya 401(k)'"
+                ).fetchone()
+                assert entry["account_number"] == "861956"
+                assert entry["value"] == 22903.64
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM manual_entries WHERE account_number='VOYA401K'"
+                ).fetchone()[0] == 0
+
+                # History: Plaid-era points summed per day + preserved local point,
+                # all under 861956, ordered by date.
+                snaps = conn.execute(
+                    "SELECT snapped_at, value FROM manual_entry_snapshots "
+                    "WHERE account_number='861956' ORDER BY snapped_at"
+                ).fetchall()
+                assert [(s["snapped_at"], s["value"]) for s in snaps] == [
+                    ("2026-04-01", 15000.0),
+                    ("2026-04-17", 22903.64),
+                    ("2026-06-02", 22903.64),   # local-sync point untouched
+                ]
+
+                # Insperity stays fully decoupled — not pulled in, not modified.
+                insp = conn.execute(
+                    "SELECT snapped_at, value FROM manual_entry_snapshots "
+                    "WHERE account_number='105001401K'"
+                ).fetchall()
+                assert [(s["snapped_at"], s["value"]) for s in insp] == [("2026-04-01", 1391.66)]
+
+                # Idempotent: a second run changes nothing.
+                _migrate_voya_real_account_number(conn)
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM manual_entry_snapshots WHERE account_number='861956'"
+                ).fetchone()[0] == 3
             finally:
                 self._cleanup(conn)
 
