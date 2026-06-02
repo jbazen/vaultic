@@ -1230,3 +1230,21 @@ export async function insperitySyncLog(limit = 20) {
   const res = await apiFetch(`/api/insperity/sync-log?limit=${limit}`);
   return res.json();
 }
+
+// --- Voya 401k full-data tabs ---
+export async function voyaHoldings() {
+  const res = await apiFetch("/api/voya/holdings");
+  return res.json();
+}
+export async function voyaTransactions(limit = 100) {
+  const res = await apiFetch(`/api/voya/transactions?limit=${limit}`);
+  return res.json();
+}
+export async function voyaPerformance() {
+  const res = await apiFetch("/api/voya/performance");
+  return res.json();
+}
+export async function voyaAllocations() {
+  const res = await apiFetch("/api/voya/allocations");
+  return res.json();
+}

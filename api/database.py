@@ -1012,6 +1012,52 @@ MIGRATIONS = [
         balance     REAL,
         UNIQUE(snapped_at, name)
     )""",
+    # Voya fund-level holdings snapshot — one row per (day, fund).
+    """CREATE TABLE IF NOT EXISTS voya_holdings (
+        id             INTEGER PRIMARY KEY,
+        snapped_at     DATE NOT NULL,
+        fund_name      TEXT NOT NULL,
+        balance        REAL,
+        units          REAL,
+        unit_price     REAL,
+        ytd_pct        REAL,
+        pct_of_account REAL,
+        UNIQUE(snapped_at, fund_name)
+    )""",
+    # Voya transaction/activity history. De-duped on the full value tuple because
+    # Voya's feed returns each row twice (grouped + ungrouped overlap).
+    """CREATE TABLE IF NOT EXISTS voya_transactions (
+        id          INTEGER PRIMARY KEY,
+        trade_date  DATE NOT NULL,
+        activity    TEXT NOT NULL,
+        fund_name   TEXT,
+        fund_id     TEXT,
+        amount      REAL,
+        units       REAL,
+        unit_price  REAL,
+        UNIQUE(trade_date, activity, fund_id, amount, units, unit_price)
+    )""",
+    # Voya performance snapshot — personal rate of return + period balances.
+    """CREATE TABLE IF NOT EXISTS voya_performance (
+        id               INTEGER PRIMARY KEY,
+        snapped_at       DATE NOT NULL,
+        personal_ror_ytd REAL,
+        total_balance    REAL,
+        as_of            TEXT,
+        balance_start    REAL,
+        balance_end      REAL,
+        growth           REAL,
+        UNIQUE(snapped_at)
+    )""",
+    # Voya asset-class allocation snapshot — one row per (day, asset class).
+    """CREATE TABLE IF NOT EXISTS voya_allocations (
+        id           INTEGER PRIMARY KEY,
+        snapped_at   DATE NOT NULL,
+        asset_class  TEXT NOT NULL,
+        pct          REAL,
+        color        TEXT,
+        UNIQUE(snapped_at, asset_class)
+    )""",
     # Migration: add image_url to news_articles for tile thumbnails
     "ALTER TABLE news_articles ADD COLUMN image_url TEXT",
     # Migration: add series_id to link recurring event instances

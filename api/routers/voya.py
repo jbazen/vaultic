@@ -30,10 +30,107 @@ class VoyaAccount(BaseModel):
     balance: float
 
 
+class VoyaHolding(BaseModel):
+    fund_name: str
+    balance: float | None = None
+    units: float | None = None
+    unit_price: float | None = None
+    ytd_pct: float | None = None
+    pct_of_account: float | None = None
+
+
+class VoyaTransaction(BaseModel):
+    trade_date: str
+    activity: str
+    fund_name: str | None = None
+    fund_id: str | None = None
+    amount: float | None = None
+    units: float | None = None
+    unit_price: float | None = None
+
+
+class VoyaPerformance(BaseModel):
+    personal_ror_ytd: float | None = None
+    total_balance: float | None = None
+    as_of: str | None = None
+    balance_start: float | None = None
+    balance_end: float | None = None
+    growth: float | None = None
+
+
+class VoyaAllocation(BaseModel):
+    asset_class: str
+    pct: float | None = None
+    color: str | None = None
+
+
 class LocalSyncRequest(BaseModel):
     """Pre-parsed Voya data from the local sync script."""
     total_balance: float
     accounts: list[VoyaAccount] = []
+    holdings: list[VoyaHolding] = []
+    transactions: list[VoyaTransaction] = []
+    performance: VoyaPerformance | None = None
+    allocations: list[VoyaAllocation] = []
+
+
+def _store_holdings(conn, holdings, today: str):
+    """Replace today's holdings snapshot with the supplied fund rows."""
+    conn.execute("DELETE FROM voya_holdings WHERE snapped_at = ?", (today,))
+    for h in holdings:
+        conn.execute(
+            """INSERT INTO voya_holdings
+                   (snapped_at, fund_name, balance, units, unit_price, ytd_pct, pct_of_account)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(snapped_at, fund_name) DO UPDATE SET
+                   balance=excluded.balance, units=excluded.units,
+                   unit_price=excluded.unit_price, ytd_pct=excluded.ytd_pct,
+                   pct_of_account=excluded.pct_of_account""",
+            (today, h.fund_name, h.balance, h.units, h.unit_price,
+             h.ytd_pct, h.pct_of_account),
+        )
+
+
+def _store_transactions(conn, txns):
+    """Append transactions; UNIQUE tuple makes re-syncs idempotent (no dupes)."""
+    for t in txns:
+        conn.execute(
+            """INSERT INTO voya_transactions
+                   (trade_date, activity, fund_name, fund_id, amount, units, unit_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(trade_date, activity, fund_id, amount, units, unit_price)
+               DO UPDATE SET fund_name=excluded.fund_name""",
+            (t.trade_date, t.activity, t.fund_name, t.fund_id,
+             t.amount, t.units, t.unit_price),
+        )
+
+
+def _store_performance(conn, perf, today: str):
+    conn.execute(
+        """INSERT INTO voya_performance
+               (snapped_at, personal_ror_ytd, total_balance, as_of,
+                balance_start, balance_end, growth)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(snapped_at) DO UPDATE SET
+               personal_ror_ytd=excluded.personal_ror_ytd,
+               total_balance=excluded.total_balance, as_of=excluded.as_of,
+               balance_start=excluded.balance_start, balance_end=excluded.balance_end,
+               growth=excluded.growth""",
+        (today, perf.personal_ror_ytd, perf.total_balance, perf.as_of,
+         perf.balance_start, perf.balance_end, perf.growth),
+    )
+
+
+def _store_allocations(conn, allocations, today: str):
+    conn.execute("DELETE FROM voya_allocations WHERE snapped_at = ?", (today,))
+    for a in allocations:
+        conn.execute(
+            """INSERT INTO voya_allocations (snapped_at, asset_class, pct, color)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(snapped_at, asset_class) DO UPDATE SET
+                   pct=excluded.pct, color=excluded.color""",
+            (today, a.asset_class, a.pct, a.color),
+        )
 
 
 def _upsert_manual_entry(conn, total_balance: float, today: str):
@@ -87,6 +184,16 @@ def sync_local(req: LocalSyncRequest, user=Depends(get_current_user)):
                 (today, a.name, a.plan_id, a.balance),
             )
         _upsert_manual_entry(conn, req.total_balance, today)
+
+        # Full-data sections (holdings / transactions / performance / allocation).
+        if req.holdings:
+            _store_holdings(conn, req.holdings, today)
+        if req.transactions:
+            _store_transactions(conn, req.transactions)
+        if req.performance:
+            _store_performance(conn, req.performance, today)
+        if req.allocations:
+            _store_allocations(conn, req.allocations, today)
 
         duration_ms = int((time.time() - start_time) * 1000)
         conn.execute(
@@ -148,5 +255,56 @@ def get_sync_log(limit: int = 20, user=Depends(get_current_user)):
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM voya_sync_log ORDER BY synced_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@router.get("/holdings")
+def get_holdings(user=Depends(get_current_user)):
+    """Latest fund holdings snapshot (most recent day)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT fund_name, balance, units, unit_price, ytd_pct, pct_of_account
+               FROM voya_holdings
+               WHERE snapped_at = (SELECT MAX(snapped_at) FROM voya_holdings)
+               ORDER BY balance DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@router.get("/transactions")
+def get_transactions(limit: int = 100, user=Depends(get_current_user)):
+    """Recent transactions/activity, newest first."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be 1–500")
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT trade_date, activity, fund_name, fund_id, amount, units, unit_price
+               FROM voya_transactions
+               ORDER BY trade_date DESC, id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@router.get("/performance")
+def get_performance(user=Depends(get_current_user)):
+    """Latest performance snapshot (personal rate of return + period balances)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM voya_performance ORDER BY snapped_at DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+@router.get("/allocations")
+def get_allocations(user=Depends(get_current_user)):
+    """Latest asset-class allocation snapshot."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT asset_class, pct, color
+               FROM voya_allocations
+               WHERE snapped_at = (SELECT MAX(snapped_at) FROM voya_allocations)
+               ORDER BY pct DESC"""
         ).fetchall()
         return [dict(r) for r in rows]

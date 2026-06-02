@@ -1,0 +1,27 @@
+{
+ "dataStatus": "OK",
+ "data": [
+  {
+   "name": "Large Cap Growth",
+   "pct": 34,
+   "color": "#187C5B"
+  },
+  {
+   "name": "Small/Mid/Specialty",
+   "pct": 30,
+   "color": "#92527B"
+  },
+  {
+   "name": "Large Cap Value/Blend",
+   "pct": 25,
+   "color": "#A1383E"
+  },
+  {
+   "name": "Global/International",
+   "pct": 11,
+   "color": "#C16E15"
+  }
+ ],
+ "showRetireeToolbox": false,
+ "showRetireeJourneyToolbox": false
+}

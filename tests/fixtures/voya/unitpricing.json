@@ -1,0 +1,65 @@
+{
+ "dataStatus": "OK",
+ "data": {
+  "totalBal": 22950.32,
+  "asOfDate": "06/01/2026",
+  "fundBals": [
+   {
+    "fundId": "38",
+    "units": "22.1217",
+    "bal": 5850.34,
+    "percent": 25.49,
+    "fundName": "C975 Fidelity 500 Index Fund",
+    "fundPrice": "264.460000",
+    "fundFactSheetHref": "/static/fundonepagerscolor/C975.pdf"
+   },
+   {
+    "fundId": "35",
+    "units": "84.7136",
+    "bal": 7853.8,
+    "percent": 34.22,
+    "fundName": "3494 JPMorgan Lrg Cp Growth Fnd R6",
+    "fundPrice": "92.710000",
+    "fundFactSheetHref": "/static/fundonepagerscolor/3494.pdf"
+   },
+   {
+    "fundId": "39",
+    "units": "17.9185",
+    "bal": 652.06,
+    "percent": 2.84,
+    "fundName": "C993 Fidelity Sm Cp Ind Fund",
+    "fundPrice": "36.390000",
+    "fundFactSheetHref": "/static/fundonepagerscolor/C993.pdf"
+   },
+   {
+    "fundId": "51",
+    "units": "81.8917",
+    "bal": 3387.04,
+    "percent": 14.76,
+    "fundName": "D122 Fidelity Mid Cap Index Fd",
+    "fundPrice": "41.360000",
+    "fundFactSheetHref": "/static/fundonepagerscolor/D122.pdf"
+   },
+   {
+    "fundId": "33",
+    "units": "27.5585",
+    "bal": 2771.28,
+    "percent": 12.08,
+    "fundName": "3316 Vanguard Sm-Cap Val Index Fnd Adm",
+    "fundPrice": "100.560000",
+    "fundFactSheetHref": "/static/fundonepagerscolor/3316.pdf"
+   },
+   {
+    "fundId": "34",
+    "units": "22.3858",
+    "bal": 2435.8,
+    "percent": 10.61,
+    "fundName": "3491 American Funds New World Fund R6",
+    "fundPrice": "108.810000",
+    "fundFactSheetHref": "/static/fundonepagerscolor/3491.pdf"
+   }
+  ]
+ },
+ "showRetireeToolbox": false,
+ "showRetireeJourneyToolbox": false
+}

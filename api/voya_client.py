@@ -203,3 +203,114 @@ def _parse_accounts(data) -> dict:
 
     total = round(sum(a["balance"] for a in accounts), 2)
     return {"total_balance": total, "accounts": accounts}
+
+
+# ── Full-data parsers (holdings / transactions / performance / allocations) ─────
+# These take the raw JSON bodies captured from the my.voya.com endpoints (via the
+# browser grabber — Cloudflare blocks non-browser fetches) and normalize them into
+# the structures /api/voya/sync-local stores. Defensive: tolerate missing keys and
+# string-formatted numbers ("N/A" -> None via _to_float).
+
+def _norm_date(s):
+    """Normalize a Voya date (MM/DD/YYYY or YYYY-MM-DD...) to ISO YYYY-MM-DD."""
+    if not isinstance(s, str):
+        return None
+    s = s.strip()
+    m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", s)
+    if m:
+        mo, da, yr = m.groups()
+        return f"{yr}-{int(mo):02d}-{int(da):02d}"
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)
+    return m.group(0) if m else None
+
+
+def parse_manage_investments(data: dict) -> dict:
+    """Parse /epweb/ws/ers/manageInvestments/<plan> into holdings + performance.
+
+    Returns {total_balance, personal_ror_ytd, as_of, holdings}, where holdings is
+    [{fund_name, balance, units, unit_price, ytd_pct, pct_of_account}].
+    """
+    ov = (data or {}).get("overviewSection") or {}
+    funds = ((ov.get("investmentElection") or {}).get("myFundsList")) or []
+    holdings = []
+    for fnd in funds:
+        if not isinstance(fnd, dict) or not fnd.get("fundName"):
+            continue
+        holdings.append({
+            "fund_name": str(fnd["fundName"])[:120],
+            "balance": _to_float(fnd.get("fundBalance")),
+            "units": _to_float(fnd.get("fundNoOfUnits")),
+            "unit_price": _to_float(fnd.get("fundUnitPrice")),
+            "ytd_pct": _to_float(fnd.get("fundYTD")),
+            "pct_of_account": _to_float(fnd.get("fundPercentage")),
+        })
+    return {
+        "total_balance": _to_float(ov.get("totalBalance")),
+        "personal_ror_ytd": _to_float(ov.get("rateOfReturn")),
+        "as_of": _norm_date(ov.get("asOfLastClosingDate")),
+        "holdings": holdings,
+    }
+
+
+def fund_map_from_unitpricing(data: dict) -> dict:
+    """Build {fundId: fundName} from /unitpricing for labeling transactions."""
+    fb = ((data or {}).get("data") or {}).get("fundBals") or []
+    return {str(f.get("fundId")): f.get("fundName")
+            for f in fb if f.get("fundId") and f.get("fundName")}
+
+
+def parse_transactions(data: dict, fund_map: dict | None = None) -> list[dict]:
+    """Parse /ppthistory/transactions/completed/... into a flat, de-duped list.
+
+    Voya returns each row twice (grouped + ungrouped overlap), so we de-dup on the
+    full value tuple. fund_map maps ivId -> fund_name when available.
+    """
+    fund_map = fund_map or {}
+    out, seen = [], set()
+    for t in (data or {}).get("ungroupedTransactions") or []:
+        if not isinstance(t, dict):
+            continue
+        d = _norm_date(t.get("tradeDate"))
+        if not d:
+            continue
+        iv = t.get("ivId")
+        rec = {
+            "trade_date": d,
+            "activity": str(t.get("activityDescription") or "")[:80],
+            "fund_id": str(iv) if iv not in (None, "") else None,
+            "fund_name": fund_map.get(str(iv)),
+            "amount": _to_float(t.get("cash")),
+            "units": _to_float(t.get("unit_or_unshrs")),
+            "unit_price": _to_float(t.get("br161_shr_price")),
+        }
+        key = (rec["trade_date"], rec["activity"], rec["fund_id"],
+               rec["amount"], rec["units"], rec["unit_price"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rec)
+    return out
+
+
+def parse_balance_summary(tx_data: dict) -> dict:
+    """Pull period start/end balance + growth from the transactions payload."""
+    bal = (tx_data or {}).get("balance") or {}
+    return {
+        "balance_start": _to_float(bal.get("totalStart")),
+        "balance_end": _to_float(bal.get("totalEnd")),
+        "growth": _to_float(bal.get("totalGrowthDifference")),
+    }
+
+
+def parse_allocations(data: dict) -> list[dict]:
+    """Parse the asset-class allocation breakdown into [{asset_class, pct, color}]."""
+    out = []
+    for a in (data or {}).get("data") or []:
+        if not isinstance(a, dict) or not a.get("name"):
+            continue
+        out.append({
+            "asset_class": str(a["name"])[:80],
+            "pct": _to_float(a.get("pct")),
+            "color": a.get("color"),
+        })
+    return out

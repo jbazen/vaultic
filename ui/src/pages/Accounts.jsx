@@ -29,6 +29,7 @@ import EditableNotes from "../components/EditableNotes.jsx";
 import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
 import I360AccountCard from "../components/accounts/I360AccountCard.jsx";
 import InsperityAccountCard from "../components/accounts/InsperityAccountCard.jsx";
+import VoyaAccountCard from "../components/accounts/VoyaAccountCard.jsx";
 import { isRetirementAccount } from "../utils/accounts.js";
 import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
 import { fmt, fmtCrypto, fmtPrice, fmtPercent as fmtPct, fmtNum, fmtDate, fmtCompact, fmtAxisDate } from "../utils/format.js";
@@ -1097,6 +1098,8 @@ export default function Accounts() {
                   <InsperityAccountCard key={entry.id} entry={entry}
                     onDelete={async (id) => { await deleteManualEntry(id); await load(); }}
                     onToggleExclude={load} onRenamed={load} />
+                ) : entry.account_number === "861956" ? (
+                  <VoyaAccountCard key={entry.id} entry={entry} />
                 ) : (
                   <ManualInvestmentCard key={entry.id} entry={entry}
                     onDelete={async (id) => { await deleteManualEntry(id); await load(); }}

@@ -1,0 +1,59 @@
+{
+ "overviewSection": {
+  "totalBalance": 22950.32,
+  "rateOfReturn": "11.55",
+  "balanceGrowth": 46.0,
+  "asOfLastClosingDate": "05/31/2026",
+  "content": {
+   "title": "My Investment Overview",
+   "balanceTitle": "Total Balance",
+   "rateOfReturnTitle": "Personal Rate of Return",
+   "rateOfReturnDesc": "% (Year to Date)",
+   "investElectDesc": "Show Me",
+   "investElectBalDetTitle": "View My Balance Details",
+   "investElectBalDetURL": "DUMMY_URL",
+   "mfOptionId": "myFunds",
+   "mfOptionTitle": "My Funds",
+   "mfOptionInitialNoOfRows": "5",
+   "mfOptionExpandTitle": "Show All My Funds",
+   "mfOptionCollapseTitle": "Hide All My Funds",
+   "fiOptionId": "myFuture",
+   "fiOptionTitle": "My Investment Elections",
+   "fiOptionInitialNoOfRows": "5",
+   "fiOptionExpandTitle": "Show All Investment Elections",
+   "fiOptionCollapseTitle": "Hide All Investment Elections",
+   "mfColumnKeys": "fundName;fundBalance;fundYTD;fundUnitPrice;fundNoOfUnits",
+   "mfColumnLabels": "Fund Name;My Fund Balances;Fund Year to Date Performance;Unit/Share Price;# of Units/Shares",
+   "diversCoHeadingText": "All Sources Excluding Company Match"
+  },
+  "investmentElection": {
+   "showInvestmentDetailSection": true,
+   "hideYTDColumn": false,
+   "investElectBalDetURL": "/epweb/pweblink.do?plan=861956&s=SESSIONTOKEN&domain=voyaretirement.voya.com&act_type=&__plan__ID___=861956&page=balances&cl=INGWIN&pageId=ACCT_BAL&reqFromNewLanding=true&d=b62ff59ec0df889b91e2536f59636effc0afa489",
+   "myFundsList": [
+    {
+     "fundName": "C975 Fidelity 500 Index Fund",
+     "fundUnitPrice": "264.46",
+     "fundNoOfUnits": "22.1217",
+     "fundBalance": "5850.34",
+     "fundPercentage": "25.49",
+     "fundYTD": "11.56226000",
+     "fundFactSheetUrl": "https://my.voya.com/static/fundonepagerscolor/C975.pdf"
+    },
+    {
+     "fundName": "3494 JPMorgan Lrg Cp Growth Fnd R6",
+     "fundUnitPrice": "92.71",
+     "fundNoOfUnits": "84.71359999999999",
+     "fundBalance": "7853.799999999999",
+     "fundPercentage": "34.22",
+     "fundYTD": "7.25358600",
+     "fundFactSheetUrl": "https://my.voya.com/static/fundonepagerscolor/3494.pdf"
+    }
+   ],
+   "showFutureInvestmentSection": true
+  }
+ },
+ "investmentDisclaimerText": "<i>This information is provided by Voya for your education only; it is not intended as investment advice. All investments are subject to risk. Please consult a financial professional before making an investment or insurance decision.</i>",
+ "footerText": null,
+ "pafDisclosureText": null
+}

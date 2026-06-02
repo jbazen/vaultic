@@ -50,3 +50,9 @@ imports/
 
 # Design reference screenshots (local only)
 screenshots/
+
+# Voya capture artifacts (contain session tokens) — never commit
+voya_grab.js
+.voya_targets.json
+voya_data.json
+.voya_raw.json

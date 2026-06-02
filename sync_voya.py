@@ -31,12 +31,76 @@ from api.voya_client import (
     SessionExpiredError,
     EndpointChangedError,
     SchemaUnknownError,
+    parse_manage_investments,
+    parse_transactions,
+    parse_balance_summary,
+    parse_allocations,
+    fund_map_from_unitpricing,
 )
 
 VAULTIC_URL = os.environ.get("VAULTIC_URL", "https://vaulticsage.com")
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".voya_token")
 REFRESH_TOKEN_FILE = os.path.join(os.path.dirname(__file__), ".voya_refresh_token")
 RAW_DUMP_FILE = os.path.join(os.path.dirname(__file__), ".voya_raw.json")
+
+
+def _grab_body(grab: dict, *fragments) -> dict | None:
+    """Find a captured response body whose URL contains all `fragments`.
+
+    `grab` is the browser grabber's output: {tag: {url, status, body, ...}}.
+    Returns the parsed JSON of the first 200 match, or None.
+    """
+    for v in grab.values():
+        if not isinstance(v, dict) or v.get("status") != 200 or not v.get("body"):
+            continue
+        url = v.get("url", "")
+        if all(f in url for f in fragments):
+            try:
+                return json.loads(v["body"])
+            except (ValueError, TypeError):
+                return None
+    return None
+
+
+def build_payload_from_grabber(grab: dict) -> dict:
+    """Turn the browser grabber's raw endpoint dump into a /sync-local payload.
+
+    Voya blocks server-side fetches (Cloudflare), so the data is captured from the
+    logged-in browser tab via voya_grab.js. This parses the holdings, transactions,
+    performance, and allocation sections out of that dump.
+    """
+    mi = _grab_body(grab, "manageInvestments")
+    tx = _grab_body(grab, "transactions/completed")
+    alloc = _grab_body(grab, "/allocations")
+    unit = _grab_body(grab, "/unitpricing")
+
+    inv = parse_manage_investments(mi) if mi else {"holdings": [], "total_balance": None,
+                                                   "personal_ror_ytd": None, "as_of": None}
+    fund_map = fund_map_from_unitpricing(unit) if unit else {}
+    txns = parse_transactions(tx, fund_map) if tx else []
+    bal = parse_balance_summary(tx) if tx else {}
+    allocations = parse_allocations(alloc) if alloc else []
+
+    total = inv.get("total_balance")
+    if total is None:
+        raise ValueError("Could not find a total balance in the grabber dump "
+                         "(manageInvestments missing or unparseable).")
+
+    performance = {
+        "personal_ror_ytd": inv.get("personal_ror_ytd"),
+        "total_balance": total,
+        "as_of": inv.get("as_of"),
+        **bal,
+    }
+    plan_name = "JSTOOGOOD, LLC 401(K) P/S PLAN"
+    return {
+        "total_balance": round(total, 2),
+        "accounts": [{"name": plan_name, "plan_id": "861956", "balance": round(total, 2)}],
+        "holdings": inv.get("holdings", []),
+        "transactions": txns,
+        "performance": performance,
+        "allocations": allocations,
+    }
 
 
 def get_token() -> str:
@@ -143,9 +207,28 @@ def main():
         sys.exit(1)
 
     arg = sys.argv[1]
+    raw = None
     if os.path.isfile(arg):
-        with open(arg) as f:
-            curl_input = f.read()
+        with open(arg, encoding="utf-8") as f:
+            raw = f.read()
+        # Full-data path: a voya_data.json produced by the browser grabber.
+        try:
+            grab = json.loads(raw)
+            if isinstance(grab, dict) and any(
+                isinstance(v, dict) and "url" in v and "body" in v for v in grab.values()
+            ):
+                print("Detected browser grabber dump — building full payload...")
+                data = build_payload_from_grabber(grab)
+                print(f"  OK  ${data['total_balance']:,.2f} · {len(data['holdings'])} funds · "
+                      f"{len(data['transactions'])} txns · {len(data['allocations'])} allocations")
+                token = get_token()
+                print("Posting to Vaultic...")
+                result = post_to_server(data, token)
+                print(f"\nSync {result['status']}! Balance ${result['total_balance']:,.2f}")
+                return
+        except ValueError:
+            pass  # not JSON — fall through to cURL handling
+        curl_input = raw
     else:
         curl_input = " ".join(sys.argv[1:])
 
