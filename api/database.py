@@ -1545,6 +1545,33 @@ def _migrate_merge_duplicate_manual_entries(conn):
         logger.info("Merged %d duplicate manual_entries into canonical rows", merged)
 
 
+def _migrate_deactivate_voya_plaid(conn):
+    """Deactivate the dead Voya Plaid accounts so Voya is sourced solely from the
+    local cURL-paste sync (manual_entries VOYA401K) — not double-counted (#51).
+
+    Voya's Plaid item expired (ITEM_LOGIN_REQUIRED, 2026-04-17) and the item row
+    was removed, but its accounts were left is_active=1. The net worth snapshot
+    therefore kept counting their last-known stale balances. Once Voya is also
+    synced locally into a manual_entries row, the same money is counted twice.
+
+    Flips is_active=0 on every Plaid-sourced Voya account. NON-destructive: the
+    accounts, their account_balances history, holdings, transactions, and all
+    past net_worth_snapshots are preserved — the rows simply stop contributing
+    to future snapshots and drop out of the active accounts list. Idempotent —
+    a no-op once they are all deactivated.
+    """
+    cur = conn.execute(
+        "UPDATE accounts SET is_active = 0 "
+        "WHERE source = 'plaid' AND is_active = 1 "
+        "AND institution_name LIKE '%Voya%'"
+    )
+    if cur.rowcount:
+        logger.info(
+            "Deactivated %d dead Voya Plaid account(s); Voya now sourced from local sync",
+            cur.rowcount,
+        )
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1623,6 +1650,12 @@ def init_db():
             _migrate_merge_duplicate_manual_entries(conn)
         except Exception as exc:
             logger.warning("Manual entry merge migration failed: %s", exc)
+        # Deactivate dead Voya Plaid accounts — Voya is sourced solely from the
+        # local sync now, so the orphaned Plaid rows would double-count net worth.
+        try:
+            _migrate_deactivate_voya_plaid(conn)
+        except Exception as exc:
+            logger.warning("Voya Plaid deactivation migration failed: %s", exc)
         # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 

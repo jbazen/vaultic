@@ -126,6 +126,52 @@ class TestSyncLocal:
         assert rows[0]["value"] == 250.0
 
 
+class TestDeactivateVoyaPlaidMigration:
+    """The dead Voya Plaid accounts must be deactivated so the local sync is the
+    sole source and net worth doesn't double-count (#51)."""
+
+    def _seed(self, conn):
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, name, type, subtype, "
+            "institution_name, is_manual, is_active) VALUES "
+            "('voya-jstoo', 'JSTOOGOOD, LLC 401(K) P/S PLAN', 'investment', '401k', "
+            "'Voya Financial - Voya Services Company', 0, 1)"
+        )
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, name, type, subtype, "
+            "institution_name, is_manual, is_active) VALUES "
+            "('chase-1', 'Chase Checking', 'depository', 'checking', 'Chase', 0, 1)"
+        )
+        conn.commit()
+
+    def _cleanup(self, conn):
+        conn.execute("DELETE FROM accounts WHERE plaid_account_id IN ('voya-jstoo', 'chase-1')")
+        conn.commit()
+
+    def test_deactivates_only_voya_plaid_and_is_idempotent(self):
+        from api.database import _migrate_deactivate_voya_plaid
+        with _test_get_db() as conn:
+            self._seed(conn)
+            try:
+                _migrate_deactivate_voya_plaid(conn)
+                voya = conn.execute(
+                    "SELECT is_active FROM accounts WHERE plaid_account_id = 'voya-jstoo'"
+                ).fetchone()
+                chase = conn.execute(
+                    "SELECT is_active FROM accounts WHERE plaid_account_id = 'chase-1'"
+                ).fetchone()
+                assert voya["is_active"] == 0          # Voya deactivated
+                assert chase["is_active"] == 1          # non-Voya untouched
+                # Idempotent: second run changes nothing.
+                _migrate_deactivate_voya_plaid(conn)
+                voya2 = conn.execute(
+                    "SELECT is_active FROM accounts WHERE plaid_account_id = 'voya-jstoo'"
+                ).fetchone()
+                assert voya2["is_active"] == 0
+            finally:
+                self._cleanup(conn)
+
+
 class TestQueryEndpoints:
     def test_status_requires_auth(self, client):
         assert client.get("/api/voya/status").status_code == 401

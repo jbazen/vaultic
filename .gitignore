@@ -39,6 +39,12 @@ Thumbs.db
 .insperity_refresh_token
 .insperity_curl.txt
 
+# Voya sync token + cURL (contains Vaultic JWT + live Voya session cookies)
+.voya_token
+.voya_refresh_token
+.voya_curl.txt
+.voya_raw.json
+
 # EveryDollar JSON imports (raw API responses — not for version control)
 imports/
 
