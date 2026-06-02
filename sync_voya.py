@@ -35,7 +35,10 @@ from api.voya_client import (
     parse_transactions,
     parse_balance_summary,
     parse_allocations,
+    parse_fund_performance,
+    parse_contributions,
     fund_map_from_unitpricing,
+    fund_code,
 )
 
 VAULTIC_URL = os.environ.get("VAULTIC_URL", "https://vaulticsage.com")
@@ -73,6 +76,9 @@ def build_payload_from_grabber(grab: dict) -> dict:
     tx = _grab_body(grab, "transactions/completed")
     alloc = _grab_body(grab, "/allocations")
     unit = _grab_body(grab, "/unitpricing")
+    fperf = _grab_body(grab, "fund-performance")
+    reg = _grab_body(grab, "contributionsedge/regular")
+    summary = _grab_body(grab, "/summary")
 
     inv = parse_manage_investments(mi) if mi else {"holdings": [], "total_balance": None,
                                                    "personal_ror_ytd": None, "as_of": None}
@@ -85,6 +91,11 @@ def build_payload_from_grabber(grab: dict) -> dict:
     if total is None:
         raise ValueError("Could not find a total balance in the grabber dump "
                          "(manageInvestments missing or unparseable).")
+
+    # Per-fund multi-timeframe returns, filtered to the funds actually owned.
+    owned_codes = [c for c in (fund_code(h["fund_name"]) for h in inv.get("holdings", [])) if c]
+    fund_perf = parse_fund_performance(fperf, owned_codes) if fperf else []
+    contributions = parse_contributions(reg, summary) if reg else None
 
     performance = {
         "personal_ror_ytd": inv.get("personal_ror_ytd"),
@@ -100,6 +111,8 @@ def build_payload_from_grabber(grab: dict) -> dict:
         "transactions": txns,
         "performance": performance,
         "allocations": allocations,
+        "fund_performance": fund_perf,
+        "contributions": contributions,
     }
 
 

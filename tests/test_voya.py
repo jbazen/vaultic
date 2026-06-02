@@ -19,6 +19,7 @@ from api.voya_client import (
     parse_curl, _parse_accounts, SchemaUnknownError,
     parse_manage_investments, parse_transactions, parse_balance_summary,
     parse_allocations, fund_map_from_unitpricing,
+    parse_fund_performance, parse_contributions, fund_code,
 )
 
 _FIX = Path(__file__).parent / "fixtures" / "voya"
@@ -43,6 +44,8 @@ def _cleanup():
         conn.execute("DELETE FROM voya_transactions")
         conn.execute("DELETE FROM voya_performance")
         conn.execute("DELETE FROM voya_allocations")
+        conn.execute("DELETE FROM voya_fund_performance")
+        conn.execute("DELETE FROM voya_contributions")
         conn.commit()
 
 
@@ -343,6 +346,50 @@ class TestFullDataParsers:
         assert fund_map_from_unitpricing({}) == {}
 
 
+class TestFundPerformanceAndContributionsParsers:
+    """Parse fund-performance returns + contributions (frozen fixtures, #55)."""
+
+    def test_fund_code(self):
+        assert fund_code("C975 Fidelity 500 Index Fund") == "C975"
+        assert fund_code("3494 JPMorgan Lrg Cp Growth") == "3494"
+        assert fund_code("") is None
+        assert fund_code(None) is None
+
+    def test_parse_fund_performance_all_periods(self):
+        rows = parse_fund_performance(_fix("fund_performance.json"))
+        assert {r["fund_code"] for r in rows} == {"C975", "3494"}
+        c975 = next(r for r in rows if r["fund_code"] == "C975")
+        # Every timeframe column present and numeric.
+        for col in ("one_month", "three_month", "ytd", "one_year",
+                    "three_year", "five_year", "ten_year"):
+            assert isinstance(c975[col], float)
+
+    def test_parse_fund_performance_filters_to_owned(self):
+        rows = parse_fund_performance(_fix("fund_performance.json"), owned_codes=["C975"])
+        assert [r["fund_code"] for r in rows] == ["C975"]
+
+    def test_parse_fund_performance_dedupes(self):
+        # Two entries same code -> one row.
+        data = {"monthEndFundData": [
+            {"fundNumber": "X1", "fundName": "Fund X", "performanceReturnsElement": {"ytd": "5.0"}},
+            {"fundNumber": "X1", "fundName": "Fund X", "performanceReturnsElement": {"ytd": "5.0"}},
+        ]}
+        assert len(parse_fund_performance(data)) == 1
+
+    def test_parse_contributions(self):
+        c = parse_contributions(_fix("contributions.json"))
+        names = [s["name"] for s in c["sources"]]
+        assert "Employee PreTax" in names
+        # the 5% source is present
+        assert any(s["current"] == 5.0 for s in c["sources"])
+
+    def test_parse_contributions_with_summary(self):
+        summary = {"contributions": {"contribType": "PCT", "totalContrib": 5.0, "totalCatchup": 0.0}}
+        c = parse_contributions(_fix("contributions.json"), summary)
+        assert c["contrib_type"] == "PCT"
+        assert c["total_pct"] == 5.0
+
+
 class TestFullDataSyncAndEndpoints:
     """POST full Voya data and read it back through the tab endpoints (#54)."""
 
@@ -369,6 +416,20 @@ class TestFullDataSyncAndEndpoints:
                 {"asset_class": "Large Cap Growth", "pct": 34, "color": "#187C5B"},
                 {"asset_class": "Global/International", "pct": 11, "color": "#C16E15"},
             ],
+            "fund_performance": [
+                {"fund_code": "C975", "fund_name": "Fidelity 500 Index", "benchmark": "S&P 500",
+                 "one_month": 1.2, "three_month": 3.4, "ytd": 11.56, "one_year": 14.2,
+                 "three_year": 13.1, "five_year": 12.0, "ten_year": 11.0, "inception": 10.5},
+                {"fund_code": "3494", "fund_name": "JPMorgan LCG", "one_month": 0.9,
+                 "ytd": 7.25, "one_year": 10.0},
+            ],
+            "contributions": {
+                "contrib_type": "PCT", "total_pct": 5.0, "catchup": 0.0,
+                "sources": [
+                    {"source_id": "A", "name": "Employee PreTax", "current": 0.0, "actual": 0.0},
+                    {"source_id": "C", "name": "Employee Roth", "current": 5.0, "actual": 5.0},
+                ],
+            },
         }
 
     def test_sync_stores_all_sections(self, client, auth_headers):
@@ -402,8 +463,26 @@ class TestFullDataSyncAndEndpoints:
         a = client.get("/api/voya/allocations", headers=auth_headers).json()
         assert a[0]["pct"] == 34  # ordered by pct DESC
 
+    def test_fund_performance_endpoint(self, client, auth_headers):
+        with patch("api.routers.voya._take_net_worth_snapshot"):
+            client.post("/api/voya/sync-local", headers=auth_headers, json=self._payload())
+        fp = client.get("/api/voya/fund-performance", headers=auth_headers).json()
+        assert len(fp) == 2
+        c975 = next(r for r in fp if r["fund_code"] == "C975")
+        assert c975["ten_year"] == 11.0 and c975["benchmark"] == "S&P 500"
+
+    def test_contributions_endpoint_with_ytd(self, client, auth_headers):
+        with patch("api.routers.voya._take_net_worth_snapshot"):
+            client.post("/api/voya/sync-local", headers=auth_headers, json=self._payload())
+        c = client.get("/api/voya/contributions", headers=auth_headers).json()
+        assert c["contrib_type"] == "PCT"
+        assert any(s["name"] == "Employee Roth" and s["current_pct"] == 5.0 for s in c["sources"])
+        # YTD is summed from current-year 'Contribution' transactions in the payload.
+        assert c["ytd_contributions"] == 81.28
+
     def test_read_endpoints_require_auth(self, client):
-        for path in ("holdings", "transactions", "performance", "allocations"):
+        for path in ("holdings", "transactions", "performance", "allocations",
+                     "fund-performance", "contributions"):
             assert client.get(f"/api/voya/{path}").status_code == 401
 
     def test_transactions_limit_validation(self, client, auth_headers):

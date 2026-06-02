@@ -64,6 +64,34 @@ class VoyaAllocation(BaseModel):
     color: str | None = None
 
 
+class VoyaFundPerf(BaseModel):
+    fund_code: str
+    fund_name: str | None = None
+    benchmark: str | None = None
+    one_month: float | None = None
+    three_month: float | None = None
+    ytd: float | None = None
+    one_year: float | None = None
+    three_year: float | None = None
+    five_year: float | None = None
+    ten_year: float | None = None
+    inception: float | None = None
+
+
+class VoyaContribSource(BaseModel):
+    source_id: str | None = None
+    name: str
+    current: float | None = None
+    actual: float | None = None
+
+
+class VoyaContributions(BaseModel):
+    contrib_type: str | None = None
+    total_pct: float | None = None
+    catchup: float | None = None
+    sources: list[VoyaContribSource] = []
+
+
 class LocalSyncRequest(BaseModel):
     """Pre-parsed Voya data from the local sync script."""
     total_balance: float
@@ -72,6 +100,41 @@ class LocalSyncRequest(BaseModel):
     transactions: list[VoyaTransaction] = []
     performance: VoyaPerformance | None = None
     allocations: list[VoyaAllocation] = []
+    fund_performance: list[VoyaFundPerf] = []
+    contributions: VoyaContributions | None = None
+
+
+def _store_fund_performance(conn, rows, today: str):
+    conn.execute("DELETE FROM voya_fund_performance WHERE snapped_at = ?", (today,))
+    for r in rows:
+        conn.execute(
+            """INSERT INTO voya_fund_performance
+                   (snapped_at, fund_code, fund_name, benchmark, one_month, three_month,
+                    ytd, one_year, three_year, five_year, ten_year, inception)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(snapped_at, fund_code) DO UPDATE SET
+                   fund_name=excluded.fund_name, benchmark=excluded.benchmark,
+                   one_month=excluded.one_month, three_month=excluded.three_month,
+                   ytd=excluded.ytd, one_year=excluded.one_year,
+                   three_year=excluded.three_year, five_year=excluded.five_year,
+                   ten_year=excluded.ten_year, inception=excluded.inception""",
+            (today, r.fund_code, r.fund_name, r.benchmark, r.one_month, r.three_month,
+             r.ytd, r.one_year, r.three_year, r.five_year, r.ten_year, r.inception),
+        )
+
+
+def _store_contributions(conn, contrib, today: str):
+    conn.execute("DELETE FROM voya_contributions WHERE snapped_at = ?", (today,))
+    for s in contrib.sources:
+        conn.execute(
+            """INSERT INTO voya_contributions
+                   (snapped_at, source_id, name, current_pct, actual_pct, contrib_type)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(snapped_at, name) DO UPDATE SET
+                   source_id=excluded.source_id, current_pct=excluded.current_pct,
+                   actual_pct=excluded.actual_pct, contrib_type=excluded.contrib_type""",
+            (today, s.source_id, s.name, s.current, s.actual, contrib.contrib_type),
+        )
 
 
 def _store_holdings(conn, holdings, today: str):
@@ -194,6 +257,10 @@ def sync_local(req: LocalSyncRequest, user=Depends(get_current_user)):
             _store_performance(conn, req.performance, today)
         if req.allocations:
             _store_allocations(conn, req.allocations, today)
+        if req.fund_performance:
+            _store_fund_performance(conn, req.fund_performance, today)
+        if req.contributions:
+            _store_contributions(conn, req.contributions, today)
 
         duration_ms = int((time.time() - start_time) * 1000)
         conn.execute(
@@ -308,3 +375,43 @@ def get_allocations(user=Depends(get_current_user)):
                ORDER BY pct DESC"""
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+@router.get("/fund-performance")
+def get_fund_performance(user=Depends(get_current_user)):
+    """Latest per-fund multi-timeframe returns (1M/3M/YTD/1Y/3Y/5Y/10Y + benchmark)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT fund_code, fund_name, benchmark, one_month, three_month, ytd,
+                      one_year, three_year, five_year, ten_year, inception
+               FROM voya_fund_performance
+               WHERE snapped_at = (SELECT MAX(snapped_at) FROM voya_fund_performance)
+               ORDER BY ytd DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@router.get("/contributions")
+def get_contributions(user=Depends(get_current_user)):
+    """Latest contribution rate + sources, plus YTD contributions from activity."""
+    with get_db() as conn:
+        sources = conn.execute(
+            """SELECT source_id, name, current_pct, actual_pct, contrib_type
+               FROM voya_contributions
+               WHERE snapped_at = (SELECT MAX(snapped_at) FROM voya_contributions)
+               ORDER BY current_pct DESC"""
+        ).fetchall()
+        # YTD employee contributions = sum of 'Contribution' activity this year.
+        ytd = conn.execute(
+            """SELECT COALESCE(SUM(amount), 0) AS ytd
+               FROM voya_transactions
+               WHERE activity LIKE '%Contribution%'
+                 AND strftime('%Y', trade_date) = strftime('%Y', 'now', 'localtime')"""
+        ).fetchone()["ytd"]
+        rows = [dict(s) for s in sources]
+        return {
+            "contrib_type": rows[0]["contrib_type"] if rows else None,
+            "total_pct": sum(r["current_pct"] or 0 for r in rows) if rows else None,
+            "sources": rows,
+            "ytd_contributions": round(ytd, 2),
+        }

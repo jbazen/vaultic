@@ -1,0 +1,84 @@
+{
+ "contribution": {
+  "isEligible": true,
+  "sources": [
+   {
+    "currentContribution": 0.0,
+    "actualContribution": 0.0,
+    "limit": {
+     "dollarLimit": {
+      "max": 24500.0,
+      "min": 0.0,
+      "mod": 1.0,
+      "hceTotalPretaxMax": 99999.99
+     },
+     "percentageLimit": {
+      "max": 99.0,
+      "min": 0.0,
+      "mod": 1.0,
+      "hceTotalPretaxMax": 99.0
+     }
+    },
+    "id": "A",
+    "name": "Employee PreTax",
+    "isHceAlertEnabled": false,
+    "suppressSlider": false
+   },
+   {
+    "currentContribution": 5.0,
+    "actualContribution": 5.0,
+    "limit": {
+     "dollarLimit": {
+      "max": 24500.0,
+      "min": 0.0,
+      "mod": 1.0,
+      "hceTotalPretaxMax": 99999.99
+     },
+     "percentageLimit": {
+      "max": 99.0,
+      "min": 0.0,
+      "mod": 1.0,
+      "hceTotalPretaxMax": 99.0
+     }
+    },
+    "id": "G",
+    "name": "Roth",
+    "isHceAlertEnabled": false,
+    "suppressSlider": false
+   }
+  ],
+  "isBothPercentAmt": true,
+  "amountPerPayroll": 5769.23,
+  "employerMatch": {
+   "showMatch": false,
+   "matchPercentage": 0.0,
+   "showMatchPercentageValue": false,
+   "icon": "",
+   "header": "Consider Increasing Contributions",
+   "subHeader": "",
+   "urlText": "",
+   "url": "",
+   "actualEmployerMatch": 0.0,
+   "actualContributionPercentage": 5.0,
+   "peerComparisonContributionRate": 0.0,
+   "age": 51.0,
+   "saveMore": true,
+   "saveMoreInfo": {
+    "values": {
+     "6": 292595,
+     "7": 341360,
+     "8": 390126
+    },
+    "header": "Consider Increasing Contributions",
+    "subHeader": "Saving just <b class='save-more'>1% more</b> of your salary today could really add up by retirement.",
+    "projectionHeader1": "By saving",
+    "projectionHeader2": "You could have<sup>1</sup>:",
+    "footer": "<sup>1</sup> Estimates are for illustrative purposes and are based on the ${SALARY} annual salary you may have entered when modeling your retirement income.",
+    "btnText": "Increase My Contributions",
+    "salary": 150000
+   }
+  },
+  "contributionRefundAllowed": false,
+  "mode": "P"
+ }
+}

@@ -314,3 +314,79 @@ def parse_allocations(data: dict) -> list[dict]:
             "color": a.get("color"),
         })
     return out
+
+
+def fund_code(fund_name) -> str | None:
+    """Leading fund code from a holding name: 'C975 Fidelity 500...' -> 'C975'."""
+    if not isinstance(fund_name, str):
+        return None
+    parts = fund_name.split()
+    return parts[0] if parts else None
+
+
+_FUND_RETURN_COLS = [
+    ("one_month", "oneMonth"), ("three_month", "threeMonth"),
+    ("ytd", "yearToDate"), ("one_year", "oneYear"),
+    ("three_year", "threeYear"), ("five_year", "fiveYear"),
+    ("ten_year", "tenYear"), ("inception", "inception"),
+]
+
+
+def parse_fund_performance(data: dict, owned_codes=None) -> list[dict]:
+    """Per-fund multi-timeframe returns from the fund-performance payload.
+
+    Returns [{fund_code, fund_name, benchmark, one_month, ..., inception}].
+    Filters to `owned_codes` (the fund codes the user holds) when provided. The
+    feed lists each fund twice, so we de-dup on fund_code.
+    """
+    owned = set(owned_codes) if owned_codes else None
+    out, seen = [], set()
+    for f in (data or {}).get("monthEndFundData") or []:
+        if not isinstance(f, dict):
+            continue
+        code = f.get("fundNumber")
+        pr = f.get("performanceReturnsElement") or {}
+        if not code or code in seen or not pr:
+            continue
+        if owned is not None and code not in owned:
+            continue
+        seen.add(code)
+        # Clean Voya's fund name: strip non-ASCII (the ® arrives mangled) and drop
+        # the trailing " - <code>" so "Fidelity® 500 Index Fund - C975" -> "Fidelity 500 Index Fund".
+        name = str(f.get("fundName") or "").encode("ascii", "ignore").decode()
+        name = re.sub(r"\s*-\s*" + re.escape(str(code)) + r"\s*$", "", name).strip()
+        rec = {
+            "fund_code": str(code),
+            "fund_name": name[:120],
+            "benchmark": f.get("fundBenchmarkDesc"),
+        }
+        for col, key in _FUND_RETURN_COLS:
+            rec[col] = _to_float(pr.get(key))
+        out.append(rec)
+    return out
+
+
+def parse_contributions(reg_data: dict, summary_data: dict | None = None) -> dict:
+    """Contribution rate + sources from contributionsedge/regular (+ summary).
+
+    Returns {contrib_type, total_pct, catchup, sources:[{source_id, name,
+    current, actual}]}.
+    """
+    contrib = (reg_data or {}).get("contribution") or {}
+    sources = []
+    for s in contrib.get("sources") or []:
+        if not isinstance(s, dict) or not s.get("name"):
+            continue
+        sources.append({
+            "source_id": (str(s["id"]) if s.get("id") else None),
+            "name": str(s["name"])[:60],
+            "current": _to_float(s.get("currentContribution")),
+            "actual": _to_float(s.get("actualContribution")),
+        })
+    summ = (summary_data or {}).get("contributions") or {}
+    return {
+        "contrib_type": summ.get("contribType"),
+        "total_pct": _to_float(summ.get("totalContrib")),
+        "catchup": _to_float(summ.get("totalCatchup")),
+        "sources": sources,
+    }

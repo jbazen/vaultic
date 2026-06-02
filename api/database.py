@@ -1058,6 +1058,34 @@ MIGRATIONS = [
         color        TEXT,
         UNIQUE(snapped_at, asset_class)
     )""",
+    # Voya per-fund multi-timeframe returns (the owned funds), one row per (day, fund).
+    """CREATE TABLE IF NOT EXISTS voya_fund_performance (
+        id          INTEGER PRIMARY KEY,
+        snapped_at  DATE NOT NULL,
+        fund_code   TEXT NOT NULL,
+        fund_name   TEXT,
+        benchmark   TEXT,
+        one_month   REAL,
+        three_month REAL,
+        ytd         REAL,
+        one_year    REAL,
+        three_year  REAL,
+        five_year   REAL,
+        ten_year    REAL,
+        inception   REAL,
+        UNIQUE(snapped_at, fund_code)
+    )""",
+    # Voya contribution rate + sources snapshot — one row per (day, source).
+    """CREATE TABLE IF NOT EXISTS voya_contributions (
+        id           INTEGER PRIMARY KEY,
+        snapped_at   DATE NOT NULL,
+        source_id    TEXT,
+        name         TEXT NOT NULL,
+        current_pct  REAL,
+        actual_pct   REAL,
+        contrib_type TEXT,
+        UNIQUE(snapped_at, name)
+    )""",
     # Migration: add image_url to news_articles for tile thumbnails
     "ALTER TABLE news_articles ADD COLUMN image_url TEXT",
     # Migration: add series_id to link recurring event instances

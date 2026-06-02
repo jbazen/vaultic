@@ -21,6 +21,7 @@ import {
   insperityContributions, insperityAllocations,
 } from "../../api.js";
 import { fmt, fmtDate, fmtPercent } from "../../utils/format.js";
+import BalanceHistoryChart from "./BalanceHistoryChart.jsx";
 
 /** Inline style for tab buttons — active tab gets accent background. */
 function tabBtn(active) {
@@ -132,9 +133,18 @@ const PERIOD_LABELS = {
   "10_year": "10 Year",
 };
 
-/** Rate of return table — cumulative and annualized for each period. */
-function PerformanceTab({ performance }) {
-  if (!performance?.length) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No performance data.</div>;
+/** Balance history chart + rate-of-return table (cumulative and annualized). */
+function PerformanceTab({ performance, entryId }) {
+  return (
+    <div>
+      <BalanceHistoryChart entryId={entryId} />
+      {performance?.length ? <PerformanceTable performance={performance} />
+        : <div style={{ color: "var(--text2)", fontSize: 13 }}>No rate-of-return data.</div>}
+    </div>
+  );
+}
+
+function PerformanceTable({ performance }) {
   return (
     <table style={{ width: "100%", maxWidth: 400, fontSize: 13 }}>
       <thead>
@@ -329,7 +339,7 @@ export default function InsperityAccountCard({ entry, onDelete, onToggleExclude,
           ) : activeTab === "transactions" ? (
             <TransactionsTab transactions={transactions} />
           ) : activeTab === "performance" ? (
-            <PerformanceTab performance={performance} />
+            <PerformanceTab performance={performance} entryId={entry.id} />
           ) : activeTab === "contributions" ? (
             <ContributionsTab contributions={contributions} />
           ) : activeTab === "allocation" ? (

@@ -15,8 +15,10 @@
 import { useState } from "react";
 import {
   voyaHoldings, voyaTransactions, voyaPerformance, voyaAllocations,
+  voyaFundPerformance, voyaContributions,
 } from "../../api.js";
 import { fmt, fmtDate } from "../../utils/format.js";
+import BalanceHistoryChart from "./BalanceHistoryChart.jsx";
 
 const pct = v => (v == null ? "–" : `${v >= 0 ? "" : ""}${Number(v).toFixed(2)}%`);
 
@@ -101,29 +103,124 @@ function TransactionsTab({ transactions }) {
 
 /* ── Performance tab ───────────────────────────────────────────────────────── */
 
-function PerformanceTab({ performance }) {
-  if (!performance || performance.personal_ror_ytd == null && performance.total_balance == null) {
-    return <div style={{ color: "var(--text2)", fontSize: 13 }}>No performance data.</div>;
-  }
-  const p = performance;
-  const grid = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px", fontSize: 13, maxWidth: 460 };
-  const lbl = { color: "var(--text2)" };
-  const val = { fontWeight: 600, textAlign: "right" };
-  const sep = { gridColumn: "1 / -1", borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 2 };
+/** Colored return cell. */
+function Ret({ v }) {
+  if (v == null) return <td className="td-cell right dim">–</td>;
+  return <td className={`td-cell right ${v >= 0 ? "positive" : "negative"}`}>{pct(v)}</td>;
+}
+
+/** Per-fund multi-timeframe returns table (1M / 3M / YTD / 1Y / 3Y / 5Y / 10Y). */
+function FundReturnsTable({ fundPerf }) {
+  if (!fundPerf?.length) return null;
   return (
-    <div style={grid}>
-      <div style={lbl}>Personal Rate of Return (YTD)</div>
-      <div style={{ ...val, color: p.personal_ror_ytd >= 0 ? "var(--green)" : "var(--red)" }}>{pct(p.personal_ror_ytd)}</div>
-      <div style={lbl}>Total Balance</div>
-      <div style={val}>{fmt(p.total_balance)}</div>
-      {p.as_of && <><div style={lbl}>As of</div><div style={val}>{p.as_of}</div></>}
-      {(p.balance_start != null || p.balance_end != null) && <div style={sep} />}
-      {p.balance_start != null && <><div style={lbl}>Period Start Balance</div><div style={val}>{fmt(p.balance_start)}</div></>}
-      {p.balance_end != null && <><div style={lbl}>Period End Balance</div><div style={val}>{fmt(p.balance_end)}</div></>}
-      {p.growth != null && <>
-        <div style={lbl}>Period Growth</div>
-        <div style={{ ...val, color: p.growth >= 0 ? "var(--green)" : "var(--red)" }}>{p.growth >= 0 ? "+" : ""}{fmt(p.growth)}</div>
-      </>}
+    <div style={{ overflowX: "auto", marginTop: 4 }}>
+      <div className="sub-label" style={{ marginBottom: 6 }}>Fund returns (annualized for 1Y+)</div>
+      <table style={{ width: "100%", fontSize: 12.5 }}>
+        <thead>
+          <tr className="table-header-row">
+            <th className="th-cell" scope="col">Fund</th>
+            <th className="th-cell right" scope="col">1M</th>
+            <th className="th-cell right" scope="col">3M</th>
+            <th className="th-cell right" scope="col">YTD</th>
+            <th className="th-cell right" scope="col">1Y</th>
+            <th className="th-cell right" scope="col">3Y</th>
+            <th className="th-cell right" scope="col">5Y</th>
+            <th className="th-cell right" scope="col">10Y</th>
+          </tr>
+        </thead>
+        <tbody>
+          {fundPerf.map((f, i) => (
+            <tr key={i} className="tr-row" title={f.benchmark ? `Benchmark: ${f.benchmark}` : undefined}>
+              <td className="td-cell">{f.fund_name || f.fund_code}</td>
+              <Ret v={f.one_month} /><Ret v={f.three_month} /><Ret v={f.ytd} />
+              <Ret v={f.one_year} /><Ret v={f.three_year} /><Ret v={f.five_year} /><Ret v={f.ten_year} />
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PerformanceTab({ entry, performance, fundPerf }) {
+  const p = performance;
+  const hasSummary = p && (p.personal_ror_ytd != null || p.total_balance != null);
+  return (
+    <div>
+      {/* Balance history line chart (restored) */}
+      <BalanceHistoryChart entryId={entry.id} />
+
+      {/* Headline rate-of-return tiles */}
+      {hasSummary && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          <div className="metric-tile">
+            <div className="label">Personal Rate of Return{p.as_of ? ` · YTD` : ""}</div>
+            <div className="value" style={{ color: p.personal_ror_ytd >= 0 ? "var(--green)" : "var(--red)" }}>{pct(p.personal_ror_ytd)}</div>
+          </div>
+          {p.growth != null && (
+            <div className="metric-tile">
+              <div className="label">Period Growth{p.balance_start != null ? ` (from ${fmt(p.balance_start)})` : ""}</div>
+              <div className="value" style={{ color: p.growth >= 0 ? "var(--green)" : "var(--red)" }}>{p.growth >= 0 ? "+" : ""}{fmt(p.growth)}</div>
+            </div>
+          )}
+          {p.as_of && (
+            <div className="metric-tile">
+              <div className="label">As of</div>
+              <div className="value" style={{ fontSize: 16 }}>{p.as_of}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Per-fund multi-timeframe returns */}
+      <FundReturnsTable fundPerf={fundPerf} />
+      {!hasSummary && !fundPerf?.length && (
+        <div style={{ color: "var(--text2)", fontSize: 13 }}>No performance data.</div>
+      )}
+    </div>
+  );
+}
+
+/* ── Contributions tab ─────────────────────────────────────────────────────── */
+
+function ContributionsTab({ contributions }) {
+  const c = contributions;
+  if (!c || (!c.sources?.length && c.ytd_contributions == null)) {
+    return <div style={{ color: "var(--text2)", fontSize: 13 }}>No contributions data.</div>;
+  }
+  const unit = c.contrib_type === "PCT" ? "%" : "";
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div className="metric-tile">
+          <div className="label">Total Contribution Rate</div>
+          <div className="value">{c.total_pct != null ? `${c.total_pct}${unit}` : "–"}</div>
+        </div>
+        <div className="metric-tile">
+          <div className="label">Contributed YTD</div>
+          <div className="value">{c.ytd_contributions != null ? fmt(c.ytd_contributions) : "–"}</div>
+        </div>
+      </div>
+      {c.sources?.length > 0 && (
+        <table style={{ width: "100%", maxWidth: 460, fontSize: 13 }}>
+          <thead>
+            <tr className="table-header-row">
+              <th className="th-cell" scope="col">Source</th>
+              <th className="th-cell right" scope="col">Current</th>
+              <th className="th-cell right" scope="col">Effective</th>
+            </tr>
+          </thead>
+          <tbody>
+            {c.sources.map((s, i) => (
+              <tr key={i} className="tr-row">
+                <td className="td-cell">{s.name}</td>
+                <td className="td-cell right bold">{s.current_pct != null ? `${s.current_pct}${unit}` : "–"}</td>
+                <td className="td-cell right dim">{s.actual_pct != null ? `${s.actual_pct}${unit}` : "–"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -161,6 +258,7 @@ const TABS = [
   { key: "holdings", label: "Holdings" },
   { key: "transactions", label: "Transactions" },
   { key: "performance", label: "Performance" },
+  { key: "contributions", label: "Contributions" },
   { key: "allocation", label: "Allocation" },
 ];
 
@@ -171,6 +269,8 @@ export default function VoyaAccountCard({ entry }) {
   const [holdings, setHoldings] = useState(null);
   const [transactions, setTransactions] = useState(null);
   const [performance, setPerformance] = useState(null);
+  const [fundPerf, setFundPerf] = useState(null);
+  const [contributions, setContributions] = useState(null);
   const [allocations, setAllocations] = useState(null);
 
   async function handleToggle() {
@@ -197,7 +297,15 @@ export default function VoyaAccountCard({ entry }) {
     }
     if (tab === "performance" && performance === null) {
       setLoading(true);
-      try { setPerformance(await voyaPerformance()); }
+      try {
+        const [perf, fp] = await Promise.all([voyaPerformance(), voyaFundPerformance()]);
+        setPerformance(perf);
+        setFundPerf(fp);
+      } finally { setLoading(false); }
+    }
+    if (tab === "contributions" && contributions === null) {
+      setLoading(true);
+      try { setContributions(await voyaContributions()); }
       finally { setLoading(false); }
     }
     if (tab === "allocation" && allocations === null) {
@@ -243,7 +351,9 @@ export default function VoyaAccountCard({ entry }) {
           ) : activeTab === "transactions" ? (
             <TransactionsTab transactions={transactions} />
           ) : activeTab === "performance" ? (
-            <PerformanceTab performance={performance} />
+            <PerformanceTab entry={entry} performance={performance} fundPerf={fundPerf} />
+          ) : activeTab === "contributions" ? (
+            <ContributionsTab contributions={contributions} />
           ) : activeTab === "allocation" ? (
             <AllocationTab allocations={allocations} />
           ) : null}

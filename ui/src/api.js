@@ -1248,3 +1248,11 @@ export async function voyaAllocations() {
   const res = await apiFetch("/api/voya/allocations");
   return res.json();
 }
+export async function voyaFundPerformance() {
+  const res = await apiFetch("/api/voya/fund-performance");
+  return res.json();
+}
+export async function voyaContributions() {
+  const res = await apiFetch("/api/voya/contributions");
+  return res.json();
+}
