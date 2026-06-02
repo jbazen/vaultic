@@ -190,63 +190,90 @@ async def portfolio_performance(
       - PDF-imported manual entries (daily snapshots from manual_entry_snapshots
         when available; falls back to current manual_entries values as a constant
         baseline when historical snapshots don't exist yet)
+
+    Uses an as-of forward fill: for every snapshot date in the window, each
+    account/entry contributes its most recent value on or before that date.
+    This prevents the chart from oscillating (issue #56) — without it, the
+    per-date SUM dropped any account that lacked a balance row on a given day,
+    so days with partial data dipped and days with full data spiked.
     """
     with get_db() as conn:
-        # Current total of manual invested entries (constant baseline until
-        # enough PDF imports build up snapshot history)
+        # Current total of manual invested entries (constant baseline used only
+        # when no PDF-import snapshot history exists yet).
         manual_total = conn.execute("""
             SELECT COALESCE(SUM(value), 0) AS total
             FROM manual_entries
             WHERE category = 'invested' AND exclude_from_net_worth = 0
         """).fetchone()["total"]
 
-        # Check if real snapshot history exists for manual entries
+        # Do we have real per-day snapshot history for manual invested entries?
+        # EXISTS (not JOIN) so a snapshot matching multiple manual rows is not
+        # fanned out into duplicate entity data points.
         has_snapshots = conn.execute("""
             SELECT 1 FROM manual_entry_snapshots s
-            JOIN manual_entries m ON (
-                (m.account_number IS NOT NULL AND m.account_number != '' AND
-                 SUBSTR(m.account_number, -4) = SUBSTR(s.account_number, -4))
-                OR m.name = s.name
-            ) AND m.category = s.category
-            WHERE s.category = 'invested' AND m.exclude_from_net_worth = 0
+            WHERE s.category = 'invested'
+              AND EXISTS (
+                  SELECT 1 FROM manual_entries m
+                  WHERE m.category = s.category AND m.exclude_from_net_worth = 0
+                    AND ((m.account_number IS NOT NULL AND m.account_number != '' AND
+                          SUBSTR(m.account_number, -4) = SUBSTR(s.account_number, -4))
+                         OR m.name = s.name)
+              )
             LIMIT 1
         """).fetchone()
 
+        # Per-entity data points (one row per account/entry per snapshot date).
+        # Plaid investment accounts are always included; manual invested entries
+        # are added only when real snapshot history exists (otherwise they are a
+        # constant baseline, below). No lower date bound here so the as-of lookup
+        # can carry a value forward from before the window start.
+        src_cte = """
+            SELECT 'a:' || b.account_number AS entity, b.snapped_at AS d, b.current AS value
+            FROM account_balances b
+            JOIN accounts a ON a.account_number = b.account_number
+            WHERE a.type = 'investment' AND a.is_active = 1 AND b.current IS NOT NULL
+        """
+        baseline = 0.0
         if has_snapshots:
-            # Use real daily snapshots when available
-            rows = conn.execute("""
-                SELECT snapped_at, SUM(value) AS total_value
-                FROM (
-                    SELECT b.snapped_at, b.current AS value
-                    FROM account_balances b
-                    JOIN accounts a ON a.account_number = b.account_number
-                    WHERE a.type = 'investment' AND a.is_active = 1
-                      AND b.snapped_at >= date('now', '-' || ? || ' days')
-                    UNION ALL
-                    SELECT s.snapped_at, s.value
-                    FROM manual_entry_snapshots s
-                    JOIN manual_entries m ON (
-                        (m.account_number IS NOT NULL AND m.account_number != '' AND
-                         SUBSTR(m.account_number, -4) = SUBSTR(s.account_number, -4))
-                        OR m.name = s.name
-                    ) AND m.category = s.category
-                    WHERE s.category = 'invested' AND m.exclude_from_net_worth = 0
-                      AND s.snapped_at >= date('now', '-' || ? || ' days')
-                )
-                GROUP BY snapped_at ORDER BY snapped_at ASC
-            """, (days, days)).fetchall()
+            src_cte += """
+            UNION ALL
+            SELECT 'm:' || COALESCE(NULLIF(s.account_number, ''), s.name) AS entity,
+                   s.snapped_at AS d, s.value AS value
+            FROM manual_entry_snapshots s
+            WHERE s.category = 'invested'
+              AND EXISTS (
+                  SELECT 1 FROM manual_entries m
+                  WHERE m.category = s.category AND m.exclude_from_net_worth = 0
+                    AND ((m.account_number IS NOT NULL AND m.account_number != '' AND
+                          SUBSTR(m.account_number, -4) = SUBSTR(s.account_number, -4))
+                         OR m.name = s.name)
+              )
+            """
         else:
-            # No snapshot history yet — add manual entries as constant baseline
-            rows = conn.execute("""
-                SELECT b.snapped_at,
-                       SUM(b.current) + ? AS total_value
-                FROM account_balances b
-                JOIN accounts a ON a.account_number = b.account_number
-                WHERE a.type = 'investment' AND a.is_active = 1
-                  AND b.snapped_at >= date('now', '-' || ? || ' days')
-                GROUP BY b.snapped_at
-                ORDER BY b.snapped_at ASC
-            """, (manual_total, days)).fetchall()
+            baseline = manual_total
+
+        # As-of forward fill: for every snapshot date in the window, sum each
+        # entity's most recent value on or before that date (entities with no
+        # prior data point contribute 0). `baseline` adds the manual invested
+        # total as a flat line when no manual snapshot history exists yet.
+        rows = conn.execute(f"""
+            WITH src AS ({src_cte}),
+            dates AS (
+                SELECT DISTINCT d FROM src
+                WHERE d >= date('now', '-' || ? || ' days')
+            ),
+            entities AS (SELECT DISTINCT entity FROM src)
+            SELECT dt.d AS snapped_at,
+                   SUM(COALESCE((
+                       SELECT s.value FROM src s
+                       WHERE s.entity = e.entity AND s.d <= dt.d
+                       ORDER BY s.d DESC LIMIT 1
+                   ), 0)) + ? AS total_value
+            FROM dates dt
+            CROSS JOIN entities e
+            GROUP BY dt.d
+            ORDER BY dt.d ASC
+        """, (days, baseline)).fetchall()
 
     return [dict(row) for row in rows]
 

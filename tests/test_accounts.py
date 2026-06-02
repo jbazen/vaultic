@@ -1,3 +1,6 @@
+import pytest
+
+
 class TestAccounts:
     def test_list_accounts_unauthenticated_returns_401(self, client):
         res = client.get("/api/accounts")
@@ -491,3 +494,73 @@ class TestInstitutionReorder:
         """The page query param is required."""
         res = client.get("/api/accounts/institutions/order", headers=auth_headers)
         assert res.status_code == 422
+
+
+class TestPortfolioPerformance:
+    """Regression for issue #56 — the Portfolio Performance chart oscillated
+    (EKG zigzag) because the per-date SUM dropped any account lacking a balance
+    row on a given calendar day. The endpoint must instead forward-fill each
+    account's last-known value to every date in the series."""
+
+    def test_requires_auth(self, client):
+        res = client.get("/api/accounts/portfolio/performance")
+        assert res.status_code == 401
+
+    def test_forward_fill_no_dip_on_missing_account_day(self, client, auth_headers):
+        """Two investment accounts snapshot on different days. The day where only
+        the second account has a row must still include the first (carried
+        forward) — the buggy code dipped the line there."""
+        from api.database import get_db
+
+        # Obscure dates no other test touches, so unrelated entities contribute 0
+        # on these dates and the per-date totals are isolated to our two accounts.
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO accounts (plaid_account_id, name, type, is_active, account_number) "
+                "VALUES (NULL, 'Perf FF A', 'investment', 1, 'PERF_FF_A')"
+            )
+            conn.execute(
+                "INSERT INTO accounts (plaid_account_id, name, type, is_active, account_number) "
+                "VALUES (NULL, 'Perf FF B', 'investment', 1, 'PERF_FF_B')"
+            )
+            a_id = conn.execute(
+                "SELECT id FROM accounts WHERE account_number='PERF_FF_A'"
+            ).fetchone()["id"]
+            b_id = conn.execute(
+                "SELECT id FROM accounts WHERE account_number='PERF_FF_B'"
+            ).fetchone()["id"]
+            # A: 2023-07-15 = 100k, 2023-07-17 = 110k (NO row on 07-16)
+            # B: 2023-07-16 = 50k only
+            for acct_id, acct_no, day, val in [
+                (a_id, "PERF_FF_A", "2023-07-15", 100000.0),
+                (a_id, "PERF_FF_A", "2023-07-17", 110000.0),
+                (b_id, "PERF_FF_B", "2023-07-16", 50000.0),
+            ]:
+                conn.execute(
+                    "INSERT INTO account_balances (account_id, account_number, current, snapped_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (acct_id, acct_no, val, day),
+                )
+
+        res = client.get(
+            "/api/accounts/portfolio/performance?days=1825", headers=auth_headers
+        )
+        assert res.status_code == 200
+        by_date = {r["snapped_at"]: r["total_value"] for r in res.json()}
+
+        for d in ("2023-07-15", "2023-07-16", "2023-07-17"):
+            assert d in by_date, f"missing date {d} in series"
+
+        t1, t2, t3 = by_date["2023-07-15"], by_date["2023-07-16"], by_date["2023-07-17"]
+
+        # Deltas cancel any constant baseline / unrelated carried-forward entities,
+        # so these assertions are independent of test execution order.
+        # Day 2 adds B (+50k) while A is carried forward. The buggy per-date SUM
+        # dropped A here, making the line DIP from 100k to 50k (delta -50k).
+        assert t2 - t1 == pytest.approx(50000.0), (
+            f"expected +50k from account B; got {t2 - t1} (negative => EKG dip bug)"
+        )
+        # Day 3: A grows by 10k while B is carried forward.
+        assert t3 - t2 == pytest.approx(10000.0), f"expected +10k from A; got {t3 - t2}"
+        # No EKG dip: the line never falls just because an account misses a day.
+        assert t2 >= t1 and t3 >= t2
