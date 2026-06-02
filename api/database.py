@@ -994,6 +994,24 @@ MIGRATIONS = [
     )""",
     # Migration: add vested_balance to existing insperity_activity tables
     "ALTER TABLE insperity_activity ADD COLUMN vested_balance REAL",
+    # ── Voya 401K tables (local cURL-paste sync, mirrors Insperity) ──────
+    """CREATE TABLE IF NOT EXISTS voya_sync_log (
+        id              INTEGER PRIMARY KEY,
+        synced_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status          TEXT NOT NULL,
+        account_count   INTEGER DEFAULT 0,
+        total_balance   REAL,
+        duration_ms     INTEGER,
+        error           TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS voya_accounts (
+        id          INTEGER PRIMARY KEY,
+        snapped_at  DATE NOT NULL,
+        name        TEXT NOT NULL,
+        plan_id     TEXT,
+        balance     REAL,
+        UNIQUE(snapped_at, name)
+    )""",
     # Migration: add image_url to news_articles for tile thumbnails
     "ALTER TABLE news_articles ADD COLUMN image_url TEXT",
     # Migration: add series_id to link recurring event instances
