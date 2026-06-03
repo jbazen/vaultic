@@ -209,10 +209,12 @@ def _fetch_news(tickers: dict) -> list[dict]:
 
     for query, topic in queries:
         try:
+            # Tavily deprecated body `api_key` auth — the key must be sent as an
+            # Authorization: Bearer header. Sending it in the body returns 401.
             resp = httpx.post(
                 "https://api.tavily.com/search",
+                headers={"Authorization": f"Bearer {api_key}"},
                 json={
-                    "api_key": api_key,
                     "query": query,
                     "max_results": 5,
                     "include_answer": False,

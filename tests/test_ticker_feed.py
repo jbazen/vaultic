@@ -150,6 +150,41 @@ class TestNews:
         assert resp.json()["ok"] is True
 
 
+class TestTavilyAuth:
+    """Regression: Tavily requires Authorization: Bearer header, not body api_key (issue #57)."""
+
+    @patch.dict("os.environ", {"TAVILY_API_KEY": "tvly-test-key"})
+    @patch("api.routers.ticker_feed.httpx.post")
+    def test_fetch_news_uses_bearer_header(self, mock_post):
+        from api.routers import ticker_feed
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [
+                {"title": "T", "url": "https://x.com/a", "content": "c", "published_date": None}
+            ]
+        }
+        mock_resp.raise_for_status.return_value = None
+        mock_post.return_value = mock_resp
+
+        ticker_feed._fetch_news({"crypto": ["BTC"], "equity": ["VOO"]})
+
+        assert mock_post.called
+        _, kwargs = mock_post.call_args
+        # Key must be sent as a Bearer header...
+        assert kwargs["headers"]["Authorization"] == "Bearer tvly-test-key"
+        # ...and never in the request body (Tavily deprecated body auth → 401).
+        assert "api_key" not in kwargs["json"]
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("api.routers.ticker_feed.httpx.post")
+    def test_fetch_news_skips_without_key(self, mock_post):
+        from api.routers import ticker_feed
+
+        assert ticker_feed._fetch_news({"crypto": ["BTC"], "equity": []}) == []
+        assert not mock_post.called
+
+
 class TestSummary:
     """Combined summary endpoint."""
 
