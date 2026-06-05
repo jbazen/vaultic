@@ -367,10 +367,12 @@ def _tavily_search(query: str) -> str:
     if not api_key:
         return "Web search unavailable — TAVILY_API_KEY not configured in .env"
     try:
+        # Tavily deprecated body `api_key` auth — the key must be sent as an
+        # Authorization: Bearer header. Sending it in the body returns 401.
         resp = httpx.post(
             "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "api_key": api_key,
                 "query": query,
                 "search_depth": "basic",
                 # include_answer: Tavily generates a short answer synthesized from

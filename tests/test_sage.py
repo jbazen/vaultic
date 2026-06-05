@@ -169,3 +169,33 @@ class TestSageRateLimit:
         assert res.status_code == 429
         # Clean up
         rate_limit._sage_calls.pop("testuser", None)
+
+
+class TestSageWebSearchAuth:
+    """Regression: Tavily requires Authorization: Bearer header, not body api_key (issue #58)."""
+
+    @patch.dict("os.environ", {"TAVILY_API_KEY": "tvly-test-key"})
+    @patch("api.sage.httpx.post")
+    def test_tavily_search_uses_bearer_header(self, mock_post):
+        from api.sage import _tavily_search
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"answer": "42", "results": []}
+        mock_resp.raise_for_status.return_value = None
+        mock_post.return_value = mock_resp
+
+        _tavily_search("what is the 2026 401k limit")
+
+        assert mock_post.called
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer tvly-test-key"
+        assert "api_key" not in kwargs["json"]
+
+    @patch.dict("os.environ", {}, clear=True)
+    @patch("api.sage.httpx.post")
+    def test_tavily_search_unavailable_without_key(self, mock_post):
+        from api.sage import _tavily_search
+
+        result = _tavily_search("anything")
+        assert "unavailable" in result.lower()
+        assert not mock_post.called
