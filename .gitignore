@@ -56,3 +56,6 @@ voya_grab.js
 .voya_targets.json
 voya_data.json
 .voya_raw.json
+
+# Secret-rotation scripts (contain prod server IP + SSH key paths) — local only, public repo
+scripts/Rotate-*.ps1
