@@ -177,6 +177,23 @@ def _update_manual_entry(conn, total_balance: float | None, today: date):
         "WHERE account_number = ? AND category = 'invested'",
         (total_balance, today.isoformat(), INSPERITY_ACCOUNT_NUMBER),
     )
+    # Record a balance-history snapshot (one row per account/day), mirroring Voya
+    # so the per-account Performance chart — which reads manual_entry_snapshots
+    # via getManualEntryHistory, not insperity_holdings — stays current. (#61)
+    row = conn.execute(
+        "SELECT name FROM manual_entries "
+        "WHERE account_number = ? AND category = 'invested'",
+        (INSPERITY_ACCOUNT_NUMBER,),
+    ).fetchone()
+    name = row["name"] if row else "INSPERITY 401K PLAN"
+    conn.execute(
+        """INSERT INTO manual_entry_snapshots
+               (name, account_number, category, value, snapped_at)
+           VALUES (?, ?, 'invested', ?, ?)
+           ON CONFLICT(name, snapped_at) DO UPDATE SET
+               value=excluded.value, account_number=excluded.account_number""",
+        (name, INSPERITY_ACCOUNT_NUMBER, total_balance, today.isoformat()),
+    )
 
 
 # ── Sync endpoint ────────────────────────────────────────────────────────────

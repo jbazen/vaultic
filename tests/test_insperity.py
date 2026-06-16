@@ -599,6 +599,27 @@ class TestSyncUpdatesManualEntry:
         assert snap is not None, "net worth snapshot should exist after sync"
         assert snap["invested"] >= 1500.00
 
+    def test_sync_local_writes_manual_entry_snapshot(self, client, auth_headers):
+        """#61: sync must record a manual_entry_snapshots row so the per-account
+        Performance chart (which reads snapshots via getManualEntryHistory, not
+        insperity_holdings) updates. Regression for the missing-history bug."""
+        self._seed_manual_entry()
+        resp = client.post("/api/insperity/sync-local",
+                           headers=auth_headers, json=self.PAYLOAD)
+        assert resp.status_code == 200
+
+        from api.database import get_db
+        from datetime import date
+        today = date.today().isoformat()
+        with get_db() as conn:
+            snap = conn.execute(
+                "SELECT value FROM manual_entry_snapshots "
+                "WHERE account_number = '105001401K' AND snapped_at = ?",
+                (today,),
+            ).fetchone()
+        assert snap is not None, "sync should write a manual_entry_snapshots row"
+        assert snap["value"] == 1500.00
+
     def test_sync_local_no_balance_skips_update(self, client, auth_headers):
         """If sync has no total_balance, manual entry should not change."""
         self._seed_manual_entry()
@@ -616,3 +637,76 @@ class TestSyncUpdatesManualEntry:
                 "WHERE account_number = '105001401K'"
             ).fetchone()
         assert row["value"] == 1000.00
+
+
+class TestInsperitySnapshotBackfill:
+    """#61: backfill manual_entry_snapshots from insperity_holdings for the
+    Insperity 401K, recovering history the sync only ever wrote to holdings."""
+
+    def _seed(self):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute("DELETE FROM manual_entries WHERE account_number='105001401K'")
+            conn.execute("DELETE FROM manual_entry_snapshots WHERE account_number='105001401K'")
+            conn.execute("DELETE FROM insperity_holdings")
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, account_number, "
+                "entered_at, exclude_from_net_worth) VALUES "
+                "('INSPERITY 401K PLAN', 'invested', 4018.93, '105001401K', '2026-06-16', 0)"
+            )
+            # Two funds on one day (must be summed) + one fund on a later day.
+            conn.executemany(
+                "INSERT INTO insperity_holdings "
+                "(snapped_at, fund, balance, shares, price, ratio_pct) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    ("2026-04-08", "Fund A", 1000.00, 10, 100.0, 71.5),
+                    ("2026-04-08", "Fund B", 398.69, 4, 99.0, 28.5),
+                    ("2026-06-16", "Fund A", 4018.93, 304, 13.2, 100.0),
+                ],
+            )
+
+    def test_backfill_creates_summed_daily_snapshots(self):
+        from api.database import get_db, _migrate_backfill_insperity_snapshots
+        self._seed()
+        with get_db() as conn:
+            _migrate_backfill_insperity_snapshots(conn)
+            rows = conn.execute(
+                "SELECT snapped_at, value FROM manual_entry_snapshots "
+                "WHERE account_number='105001401K' ORDER BY snapped_at"
+            ).fetchall()
+        got = {str(r["snapped_at"]): r["value"] for r in rows}
+        assert got == {"2026-04-08": 1398.69, "2026-06-16": 4018.93}
+
+    def test_backfill_idempotent_and_preserves_existing(self):
+        from api.database import get_db, _migrate_backfill_insperity_snapshots
+        self._seed()
+        with get_db() as conn:
+            # A pre-existing snapshot with a different value must NOT be clobbered.
+            conn.execute(
+                "INSERT INTO manual_entry_snapshots "
+                "(name, account_number, category, value, snapped_at) VALUES "
+                "('INSPERITY 401K PLAN', '105001401K', 'invested', 9999.99, '2026-04-08')"
+            )
+            _migrate_backfill_insperity_snapshots(conn)
+            _migrate_backfill_insperity_snapshots(conn)  # second run must be a no-op
+            rows = conn.execute(
+                "SELECT snapped_at, value FROM manual_entry_snapshots "
+                "WHERE account_number='105001401K' ORDER BY snapped_at"
+            ).fetchall()
+        got = {str(r["snapped_at"]): r["value"] for r in rows}
+        assert got["2026-04-08"] == 9999.99  # existing point wins (DO NOTHING)
+        assert got["2026-06-16"] == 4018.93  # new point backfilled
+        assert len(rows) == 2  # no duplicates after two runs
+
+    def test_backfill_no_entry_is_noop(self):
+        from api.database import get_db, _migrate_backfill_insperity_snapshots
+        self._seed()
+        with get_db() as conn:
+            conn.execute("DELETE FROM manual_entries WHERE account_number='105001401K'")
+            _migrate_backfill_insperity_snapshots(conn)  # no entry → nothing to do
+            n = conn.execute(
+                "SELECT COUNT(*) c FROM manual_entry_snapshots "
+                "WHERE account_number='105001401K'"
+            ).fetchone()["c"]
+        assert n == 0

@@ -1713,6 +1713,57 @@ def _migrate_voya_real_account_number(conn):
         logger.info("Voya: backfilled %d Plaid-era history point(s) under 861956", inserted)
 
 
+def _migrate_backfill_insperity_snapshots(conn):
+    """Backfill manual_entry_snapshots for Insperity 401K from insperity_holdings (#61).
+
+    The Insperity sync recorded its weekly balance history only in
+    insperity_holdings (the `balance` column), never in manual_entry_snapshots —
+    unlike Voya, whose sync writes both. The per-account Performance chart reads
+    manual_entry_snapshots via getManualEntryHistory, so every weekly Insperity
+    sync was invisible there and the chart showed a single stray point. The data
+    was never lost; it lived in insperity_holdings the whole time.
+
+    This copies one summed point per day from insperity_holdings into
+    manual_entry_snapshots under the Insperity account_number, de-duped on
+    UNIQUE(name, snapped_at) so any pre-existing snapshot wins. Idempotent:
+    a no-op once every holdings day already has a snapshot.
+
+    Net-worth neutral — only per-account history points are added; the entry's
+    value, active accounts, and net_worth_snapshots are untouched.
+    """
+    ACCT = "105001401K"
+    entry = conn.execute(
+        "SELECT name FROM manual_entries WHERE account_number = ?", (ACCT,)
+    ).fetchone()
+    if not entry:
+        return  # No Insperity entry yet — nothing to backfill onto.
+    name = entry["name"]
+    rows = conn.execute(
+        """SELECT snapped_at AS snapped_at, SUM(balance) AS total
+           FROM insperity_holdings
+           WHERE balance IS NOT NULL
+           GROUP BY snapped_at"""
+    ).fetchall()
+    inserted = 0
+    for r in rows:
+        cur = conn.execute(
+            """INSERT INTO manual_entry_snapshots
+                   (name, account_number, category, value, snapped_at)
+               VALUES (?, ?, 'invested', ?, ?)
+               ON CONFLICT(name, snapped_at) DO NOTHING""",
+            # str(): insperity_holdings.snapped_at is a DATE column, so under
+            # PARSE_DECLTYPES it reads back as a date object — coerce to the
+            # "YYYY-MM-DD" text form the snapshot table stores everywhere else.
+            (name, ACCT, r["total"], str(r["snapped_at"])),
+        )
+        inserted += cur.rowcount
+    if inserted:
+        logger.info(
+            "Insperity: backfilled %d holdings day(s) into manual_entry_snapshots",
+            inserted,
+        )
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1804,6 +1855,13 @@ def init_db():
             _migrate_voya_real_account_number(conn)
         except Exception as exc:
             logger.warning("Voya real account-number migration failed: %s", exc)
+        # Backfill Insperity per-account balance history from insperity_holdings
+        # into manual_entry_snapshots — the sync only ever wrote the holdings
+        # table, so the Performance chart (which reads snapshots) looked empty.
+        try:
+            _migrate_backfill_insperity_snapshots(conn)
+        except Exception as exc:
+            logger.warning("Insperity snapshot backfill migration failed: %s", exc)
         # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 
