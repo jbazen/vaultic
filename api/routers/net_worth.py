@@ -86,7 +86,7 @@ async def history(
     if days > 90 and len(data) > 90:
         monthly = {}
         for row in data:
-            month_key = row["snapped_at"][:7]  # "YYYY-MM"
+            month_key = str(row["snapped_at"])[:7]  # "YYYY-MM" (snapped_at is a date object under PARSE_DECLTYPES)
             monthly[month_key] = row           # last day of month wins
         data = list(monthly.values())
 

@@ -172,6 +172,34 @@ class TestNetWorth:
         res_over = client.get("/api/net-worth/history?days=9999", headers=auth_headers)
         assert res_over.status_code == 422
 
+    def test_history_monthly_aggregation_over_90_snapshots(self, client, auth_headers):
+        """Regression (#60): with >90 daily snapshots and days>90, history collapses
+        to one row per month. snapped_at comes back as a datetime.date under
+        PARSE_DECLTYPES, so the month-key slice must coerce to str first — otherwise
+        'datetime.date object is not subscriptable' 500s the dashboard."""
+        from datetime import date, timedelta
+        from api.database import get_db
+
+        start = date.today() - timedelta(days=120)
+        with get_db() as conn:
+            for i in range(100):  # 100 consecutive daily snapshots spanning ~4 months
+                d = (start + timedelta(days=i)).isoformat()
+                conn.execute("""
+                    INSERT INTO net_worth_snapshots
+                        (snapped_at, total, liquid, invested, crypto, real_estate,
+                         vehicles, liabilities, other_assets)
+                    VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0)
+                    ON CONFLICT(snapped_at) DO UPDATE SET total=excluded.total
+                """, (d, 1000 + i))
+
+        res = client.get("/api/net-worth/history?days=3650", headers=auth_headers)
+        assert res.status_code == 200, res.text
+        rows = res.json()
+        # Collapsed to <= one row per distinct month, far fewer than 100 daily rows
+        assert len(rows) < 100
+        months = [r["snapped_at"][:7] for r in rows]
+        assert len(months) == len(set(months)), "expected at most one row per month"
+
 
 class TestManualEntries:
     def test_add_and_list_entry(self, client, auth_headers):
