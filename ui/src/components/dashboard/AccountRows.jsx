@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { renameAccount, renameManualEntry, updateAccountNotes } from "../../api.js";
 import EditableNotes from "../EditableNotes.jsx";
+import AccountNumberMeta from "../AccountNumberMeta.jsx";
 import { isRetirementAccount } from "../../utils/accounts.js";
 import { fmt, fmtDate } from "../../utils/format.js";
 
@@ -106,6 +107,7 @@ export function ManualAccountRow({ entry, onRenamed, badge, badgeClass, negative
         )}
         <div className="account-meta">
           <span className={`badge ${badgeClass}`}>{badge}</span>
+          <AccountNumberMeta accountNumber={entry.account_number} />
           <span style={{ marginLeft: 6 }}>
             <EditableNotes notes={entry.notes} onSave={async (v) => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }} />
           </span>

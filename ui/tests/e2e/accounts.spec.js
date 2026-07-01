@@ -126,6 +126,28 @@ test.describe("Insperity Account Detail", () => {
   });
 });
 
+test.describe("Manual entry account numbers (Accounts)", () => {
+  test("HSA cash row shows the stored account number", async ({ page }) => {
+    await mockAllAPIs(page);
+    await page.route("**/api/manual", r =>
+      r.fulfill({ json: [
+        { id: 7, name: "HSA Cash Account", category: "liquid", value: 1544.06, entered_at: "2026-03-01", account_number: "430941440" },
+      ] }));
+
+    await page.goto("/");
+    await page.getByPlaceholder(/username/i).fill("testuser");
+    await page.getByPlaceholder(/password/i).fill("testpassword");
+    await page.getByRole("button", { name: /sign in|login|log in/i }).click();
+    await page.waitForSelector("text=Net Worth", { timeout: 8000 });
+
+    await page.getByRole("button", { name: /finance/i }).click();
+    await page.getByRole("link", { name: /accounts/i }).click();
+
+    await expect(page.getByText("HSA Cash Account")).toBeVisible();
+    await expect(page.getByText("#430941440")).toBeVisible();
+  });
+});
+
 test.describe("Plaid Reconnect", () => {
   test("stale institution shows Reconnect button and login-expired warning", async ({ page }) => {
     await mockAllAPIs(page);

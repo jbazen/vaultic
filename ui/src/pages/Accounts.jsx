@@ -26,6 +26,7 @@ function isSyncStale(lastSyncedAt) {
 import PlaidLink from "../components/PlaidLink.jsx";
 import PlaidReconnect from "../components/PlaidReconnect.jsx";
 import EditableNotes from "../components/EditableNotes.jsx";
+import AccountNumberMeta from "../components/AccountNumberMeta.jsx";
 import AllocationBar, { ASSET_CLASS_COLORS, ASSET_CLASS_LABELS } from "../components/AllocationBar.jsx";
 import I360AccountCard from "../components/accounts/I360AccountCard.jsx";
 import InsperityAccountCard from "../components/accounts/InsperityAccountCard.jsx";
@@ -314,6 +315,7 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
             <span className={`badge ${isRetirementAccount(null, entry.name) ? "badge-retirement" : "badge-investment"}`}>
               {isRetirementAccount(null, entry.name) ? "retirement" : "invested"}
             </span>
+            <AccountNumberMeta accountNumber={entry.account_number} />
             {excluded && (
               <span style={{ fontSize: 11, color: "#f59e0b", background: "#f59e0b22", borderRadius: 4, padding: "2px 6px", fontWeight: 600 }}>
                 excluded
@@ -855,6 +857,7 @@ function ManualSimpleRow({ entry, badge, badgeClass, negative, onDelete, onRenam
         )}
         <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px" }}>
           <span className={`badge ${badgeClass}`} style={{ fontSize: 11 }}>{badge}</span>
+          <AccountNumberMeta accountNumber={entry.account_number} />
           <EditableNotes
             notes={entry.notes}
             onSave={async v => { await renameManualEntry(entry.id, entry.name, v); onRenamed(); }}
