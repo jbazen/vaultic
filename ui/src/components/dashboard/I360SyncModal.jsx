@@ -26,12 +26,9 @@ export default function I360SyncModal({ open, onClose, onSynced }) {
         setError(data.detail || "Sync failed");
       }
     } catch (e) {
-      const msg = e?.message || "Sync failed";
-      if (msg.includes("401") || msg.includes("403")) {
-        setError("Session expired or invalid. Please get a fresh cookie from Investor360.");
-      } else {
-        setError(msg);
-      }
+      // The backend returns 409 with a descriptive detail for a bad or
+      // near-expiry Investor360 session — surface it as-is.
+      setError(e?.message || "Sync failed");
     } finally {
       setSyncing(false);
     }

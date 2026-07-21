@@ -102,7 +102,11 @@ async function apiFetch(path, options = {}) {
     clearTimeout(timer);
   }
 
-  if (res.status === 401) {
+  // Only a 401 carrying WWW-Authenticate is a genuine Vaultic auth failure
+  // (set by get_current_user). Other 401s — a bad third-party session cookie,
+  // a wrong current-password — must surface as normal errors instead of
+  // wiping the session and forcing a re-login with 2FA. See issue #65.
+  if (res.status === 401 && res.headers.get("WWW-Authenticate")) {
     clearToken();
     clearRefreshToken();
     window.dispatchEvent(new Event("auth:logout"));

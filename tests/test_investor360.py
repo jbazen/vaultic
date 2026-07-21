@@ -192,7 +192,7 @@ class TestBookmarklet:
 
 class TestSync:
     def test_sync_invalid_session(self, client, auth_headers):
-        """Sync with a bad session cookie should return 401."""
+        """A bad upstream session cookie is 409, never 401 — see issue #65."""
         with patch("api.routers.investor360.Investor360Client") as MockClient:
             instance = MockClient.return_value
             instance.check_session = AsyncMock(side_effect=Exception("Connection refused"))
@@ -201,7 +201,7 @@ class TestSync:
                 json={"session_cookie": "bad-cookie"},
                 headers=auth_headers,
             )
-            assert resp.status_code == 401
+            assert resp.status_code == 409
 
     def test_sync_expiring_session(self, client, auth_headers):
         """Sync with < 60s remaining should abort."""
@@ -213,8 +213,53 @@ class TestSync:
                 json={"session_cookie": "expiring-cookie"},
                 headers=auth_headers,
             )
-            assert resp.status_code == 401
+            assert resp.status_code == 409
             assert "expiring" in resp.json()["detail"].lower()
+
+    def test_sync_session_expired_error_is_not_401(self, client, auth_headers):
+        """SessionExpiredError from the account-list call must not surface as 401."""
+        from api.investor360_client import SessionExpiredError
+
+        with patch("api.routers.investor360.Investor360Client") as MockClient:
+            instance = MockClient.return_value
+            instance.check_session = AsyncMock(return_value=3600)
+            instance.get_account_list = AsyncMock(
+                side_effect=SessionExpiredError("Investor360 session expired")
+            )
+            resp = client.post(
+                "/api/investor360/sync",
+                json={"session_cookie": "stale-cookie"},
+                headers=auth_headers,
+            )
+            assert resp.status_code == 409
+
+    def test_upstream_failures_never_send_www_authenticate(self, client, auth_headers):
+        """
+        Regression for #65: an authenticated caller must never get a response the
+        frontend reads as a Vaultic auth failure. apiFetch clears tokens and forces
+        a re-login (with 2FA) only on a 401 carrying WWW-Authenticate, so an
+        upstream Investor360 problem must produce neither.
+        """
+        with patch("api.routers.investor360.Investor360Client") as MockClient:
+            instance = MockClient.return_value
+            instance.check_session = AsyncMock(side_effect=Exception("Connection refused"))
+            resp = client.post(
+                "/api/investor360/sync",
+                json={"session_cookie": "bad-cookie"},
+                headers=auth_headers,
+            )
+            assert resp.status_code != 401
+            assert "WWW-Authenticate" not in resp.headers
+
+    def test_genuine_auth_failure_sends_www_authenticate(self, client):
+        """The flip side: a real auth failure must be marked so logout still fires."""
+        resp = client.post(
+            "/api/investor360/sync",
+            json={"session_cookie": "whatever"},
+            headers={"Authorization": "Bearer not-a-real-token"},
+        )
+        assert resp.status_code == 401
+        assert resp.headers.get("WWW-Authenticate") == "Bearer"
 
 
 # ── Store helpers test ─────────────────────────────────────────────────────

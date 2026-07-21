@@ -603,13 +603,19 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
     client = Investor360Client(req.session_cookie)
 
     # 1. Validate session
+    #
+    # Upstream (Investor360) session problems must NOT surface as 401 — the
+    # frontend's apiFetch treats any 401 as "the Vaultic JWT expired" and forces
+    # a full logout + 2FA. The caller here is authenticated; it's the pasted
+    # third-party session cookie that's bad. 409 says so without nuking the
+    # user's Vaultic session.
     try:
         remaining = await client.check_session()
     except Exception as exc:
-        raise HTTPException(status_code=401, detail=f"Session check failed: {exc}")
+        raise HTTPException(status_code=409, detail=f"Session check failed: {exc}")
     if remaining < 60:
         raise HTTPException(
-            status_code=401,
+            status_code=409,
             detail=f"Session expiring in {remaining}s — please re-login",
         )
 
@@ -617,7 +623,7 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
     try:
         account_list = await client.get_account_list()
     except SessionExpiredError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
     except EndpointChangedError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 

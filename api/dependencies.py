@@ -35,14 +35,27 @@ async def get_current_user(
     else:
         token = credentials.credentials
 
+    # The WWW-Authenticate header (RFC 7235) marks these as genuine Vaultic auth
+    # failures. The frontend clears tokens and forces re-login ONLY when it sees
+    # this header, so a 401 raised elsewhere (e.g. a bad third-party credential,
+    # or a wrong current-password on a change-password form) can't destroy the
+    # user's session. See issue #65.
     if not token:
         security_log.log_auth_failure(ip, request.url.path)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     username = decode_token(token)
     if not username:
         security_log.log_auth_failure(ip, request.url.path)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     security_log.log_request(ip, request.method, request.url.path, username)
     return username
