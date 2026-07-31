@@ -70,6 +70,14 @@ def _validate_month(month: str):
         raise HTTPException(status_code=422, detail="month must be in YYYY-MM format")
 
 
+def _prev_month(month: str) -> str:
+    """Return the calendar month immediately before `month` (both YYYY-MM)."""
+    year, mon = int(month[:4]), int(month[5:7])
+    if mon == 1:
+        return f"{year - 1:04d}-12"
+    return f"{year:04d}-{mon - 1:02d}"
+
+
 def _spent_for_item(conn, item_id: int, month: str) -> float:
     """Return total spending for a budget item in a given month.
 
@@ -557,45 +565,47 @@ async def get_budget(month: str, _user: str = Depends(get_current_user)):
     _validate_month(month)
 
     with get_db() as conn:
-        # ── Carryforward: if this month has no planned amounts at all, copy them
-        # from the most recent prior month that does. This means navigating to a
-        # new month always starts with last month's budget as a baseline rather
-        # than a blank slate — the zero-based approach requires every month to
-        # be planned, so seeding from the prior month saves significant re-entry.
-        has_any_planned = conn.execute(
-            "SELECT 1 FROM budget_amounts WHERE month = ? LIMIT 1", (month,)
-        ).fetchone()
-
-        if not has_any_planned:
-            # Find the most recent month before this one that has planned amounts
-            prior_month = conn.execute(
-                "SELECT month FROM budget_amounts WHERE month < ? ORDER BY month DESC LIMIT 1",
-                (month,)
+        # ── Carryforward mirror ────────────────────────────────────────────
+        # A month's planned amounts carry forward from the month immediately
+        # before it (_prev_month), never from "the newest month that has data"
+        # — so importer-seeded/averaged months are never used as a source.
+        #
+        #   • FUTURE month (month > current calendar month): a *live mirror* of
+        #     the prior month. Every view re-copies the prior month's planned
+        #     amounts, so next month stays in sync with the current month while
+        #     it is still being planned. Amounts the user set by hand
+        #     (user_set = 1, set via PUT /items/{id}/amount) are never
+        #     overwritten — only mirrored rows (user_set = 0) are refreshed.
+        #   • CURRENT month: populated once from the prior month if it has no
+        #     rows yet (e.g. it was never viewed while still in the future),
+        #     then frozen — never auto-touched again ("up until the last day of
+        #     the month"). Existing current-month data is left intact.
+        #   • PAST months: never modified.
+        #
+        # Items with no prior planned amount are not seeded here: get_budget
+        # renders every active item and defaults a missing amount to $0, so
+        # they still appear without a placeholder row.
+        current_month = date.today().strftime("%Y-%m")
+        if month > current_month:
+            conn.execute("""
+                INSERT INTO budget_amounts (item_id, month, planned, user_set)
+                SELECT item_id, ?, planned, 0
+                FROM budget_amounts
+                WHERE month = ?
+                ON CONFLICT(item_id, month) DO UPDATE SET planned = excluded.planned
+                WHERE budget_amounts.user_set = 0
+            """, (month, _prev_month(month)))
+        elif month == current_month:
+            has_any = conn.execute(
+                "SELECT 1 FROM budget_amounts WHERE month = ? LIMIT 1", (month,)
             ).fetchone()
-            if prior_month:
-                # Copy every planned amount from the prior month into this month.
-                # INSERT OR IGNORE so if the user has already set some amounts
-                # for this month (partial carryforward) we don't overwrite them.
+            if not has_any:
                 conn.execute("""
-                    INSERT OR IGNORE INTO budget_amounts (item_id, month, planned)
-                    SELECT item_id, ?, planned
+                    INSERT OR IGNORE INTO budget_amounts (item_id, month, planned, user_set)
+                    SELECT item_id, ?, planned, 0
                     FROM budget_amounts
                     WHERE month = ?
-                """, (month, prior_month["month"]))
-
-            # Ensure every active (non-archived, non-deleted) item has a
-            # budget_amounts row for this month. Items like "Other Deposits"
-            # may have spending but no planned amount in the prior month,
-            # so the copy above misses them. This guarantees they appear in
-            # the new month's budget with $0 planned rather than vanishing.
-            conn.execute("""
-                INSERT OR IGNORE INTO budget_amounts (item_id, month, planned)
-                SELECT bi.id, ?, 0
-                FROM budget_items bi
-                JOIN budget_groups bg ON bg.id = bi.group_id
-                WHERE bi.is_archived = 0 AND bi.is_archived = 0
-                  AND bg.is_archived = 0 AND bg.is_archived = 0
-            """, (month,))
+                """, (month, _prev_month(month)))
 
         # Return ALL groups and items (including archived) — the frontend decides
         # visibility based on is_archived + whether the month is current/past.
@@ -1000,11 +1010,12 @@ async def set_amount(item_id: int, body: AmountSet, _user: str = Depends(get_cur
         if not row:
             raise HTTPException(status_code=404, detail="Item not found")
 
-        # INSERT OR REPLACE handles both the first-time set and any subsequent edits
+        # Upsert the amount and mark it user_set = 1 so the future-month
+        # carryforward mirror never overwrites a value the user entered by hand.
         conn.execute("""
-            INSERT INTO budget_amounts (item_id, month, planned)
-            VALUES (?, ?, ?)
-            ON CONFLICT(item_id, month) DO UPDATE SET planned = excluded.planned
+            INSERT INTO budget_amounts (item_id, month, planned, user_set)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(item_id, month) DO UPDATE SET planned = excluded.planned, user_set = 1
         """, (item_id, body.month, body.planned))
 
     return {"item_id": item_id, "month": body.month, "planned": body.planned}

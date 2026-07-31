@@ -32,6 +32,24 @@ def _create_item(client, auth_headers, group_id, name="Test Item"):
     return res.json()
 
 
+def _future_pair():
+    """Return (prior, target): two consecutive months guaranteed to be in the
+    future regardless of the run date, so future-month carryforward is exercised."""
+    from datetime import date
+    y = date.today().year + 2
+    return f"{y}-01", f"{y}-02"
+
+
+def _planned_for(payload, item_id):
+    """Extract an item's planned amount from a get_budget response (None if the
+    item is absent from the payload entirely)."""
+    for grp in payload.get("groups", []):
+        for it in grp.get("items", []):
+            if it["id"] == item_id:
+                return it["planned"]
+    return None
+
+
 # ── Auth guard tests ───────────────────────────────────────────────────────────
 
 class TestBudgetAuth:
@@ -282,6 +300,61 @@ class TestCarryforward:
         all_items = [i for grp in groups for i in grp.get("items", [])]
         match = [i for i in all_items if i["id"] == item["id"]]
         assert match[0]["planned"] == 750.0, "carryforward overwrote existing amount"
+
+    def test_future_month_relives_after_prior_edit(self, client, auth_headers):
+        """Regression (#64): viewing a future month early must NOT lock it.
+        A later edit to the prior month is reflected on the next view."""
+        prior, target = _future_pair()
+        g = _create_group(client, auth_headers, "CF Relive")
+        item = _create_item(client, auth_headers, g["id"], "Relive Item")
+
+        # View the future month before the prior month has any amounts.
+        res = client.get(f"/api/budget/{target}", headers=auth_headers)
+        assert res.status_code == 200
+        assert _planned_for(res.json(), item["id"]) == 0.0  # nothing to carry yet
+
+        # Now plan the prior month.
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": prior, "planned": 425.0}, headers=auth_headers)
+
+        # Re-view the future month — it must now reflect the prior month.
+        res = client.get(f"/api/budget/{target}", headers=auth_headers)
+        assert _planned_for(res.json(), item["id"]) == 425.0, \
+            "future month did not re-mirror after prior-month edit"
+
+    def test_future_month_preserves_user_override(self, client, auth_headers):
+        """A hand-entered amount in a future month is never overwritten by the mirror."""
+        prior, target = _future_pair()
+        g = _create_group(client, auth_headers, "CF Override")
+        item = _create_item(client, auth_headers, g["id"], "Override Item")
+
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": prior, "planned": 100.0}, headers=auth_headers)
+        # Mirror carries 100 into the future month on view.
+        res = client.get(f"/api/budget/{target}", headers=auth_headers)
+        assert _planned_for(res.json(), item["id"]) == 100.0
+
+        # User overrides the future month by hand, then the prior month changes.
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": target, "planned": 999.0}, headers=auth_headers)
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": prior, "planned": 200.0}, headers=auth_headers)
+
+        # Re-view: the user's override must survive.
+        res = client.get(f"/api/budget/{target}", headers=auth_headers)
+        assert _planned_for(res.json(), item["id"]) == 999.0, \
+            "mirror overwrote a user-set amount"
+
+    def test_past_month_not_mirrored(self, client, auth_headers):
+        """Past months show only what's stored — no carryforward into history."""
+        g = _create_group(client, auth_headers, "CF Past")
+        item = _create_item(client, auth_headers, g["id"], "Past Item")
+        client.put(f"/api/budget/items/{item['id']}/amount",
+                   json={"month": "2000-01", "planned": 500.0}, headers=auth_headers)
+
+        res = client.get("/api/budget/2000-02", headers=auth_headers)
+        assert res.status_code == 200
+        assert _planned_for(res.json(), item["id"]) == 0.0
 
 
 # ── Auto-assign ───────────────────────────────────────────────────────────────

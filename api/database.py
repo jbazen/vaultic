@@ -233,11 +233,15 @@ MIGRATIONS = [
         created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
     # budget_amounts: planned dollar amount per (item, month). YYYY-MM month key.
+    # user_set = 1 marks an amount the user entered by hand; the future-month
+    # carryforward mirror refreshes only user_set = 0 rows and never overwrites
+    # user_set = 1 rows (see budget.get_budget).
     """CREATE TABLE IF NOT EXISTS budget_amounts (
-        id      INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id INTEGER NOT NULL REFERENCES budget_items(id) ON DELETE CASCADE,
-        month   TEXT NOT NULL,
-        planned REAL DEFAULT 0,
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id  INTEGER NOT NULL REFERENCES budget_items(id) ON DELETE CASCADE,
+        month    TEXT NOT NULL,
+        planned  REAL DEFAULT 0,
+        user_set INTEGER NOT NULL DEFAULT 0,
         UNIQUE(item_id, month)
     )""",
     # transaction_assignments: maps a Plaid transaction to a budget line item.
@@ -1100,6 +1104,11 @@ MIGRATIONS = [
         updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (page, institution_name)
     )""",
+    # Flags budget amounts the user entered by hand so the carryforward mirror
+    # (budget.get_budget) never overwrites them. Existing rows default to 0
+    # (treated as mirrored); the current/past months are never re-mirrored, so
+    # existing hand-entered amounts there are preserved without a backfill.
+    "ALTER TABLE budget_amounts ADD COLUMN user_set INTEGER NOT NULL DEFAULT 0",
 ]
 
 
