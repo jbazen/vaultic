@@ -149,26 +149,47 @@ test.describe("Manual entry account numbers (Accounts)", () => {
 });
 
 test.describe("Plaid Reconnect", () => {
-  test("stale institution shows Reconnect button and login-expired warning", async ({ page }) => {
-    await mockAllAPIs(page);
-    // A Chase account exists (from helpers), and its Plaid item is long-stale.
-    // Date is far in the past so it's stale regardless of when CI runs.
-    await page.route("**/api/plaid/items", r =>
-      r.fulfill({ json: [{
-        id: 1, item_id: "item-chase-stale", institution_name: "Chase",
-        last_synced_at: "2020-01-01 08:00:06", created_at: "2019-12-01 05:13:31",
-      }] }));
-
+  async function gotoAccounts(page) {
     await page.goto("/");
     await page.getByPlaceholder(/username/i).fill("testuser");
     await page.getByPlaceholder(/password/i).fill("testpassword");
     await page.getByRole("button", { name: /sign in|login|log in/i }).click();
     await page.waitForSelector("text=Net Worth", { timeout: 8000 });
-
     await page.getByRole("button", { name: /finance/i }).click();
     await page.getByRole("link", { name: /accounts/i }).click();
+  }
+
+  test("item with ITEM_LOGIN_REQUIRED shows the login-expired warning (issue #73)", async ({ page }) => {
+    await mockAllAPIs(page);
+    // Real Plaid disconnect: the banner is driven by error_code, not staleness.
+    await page.route("**/api/plaid/items", r =>
+      r.fulfill({ json: [{
+        id: 1, item_id: "item-chase-dead", institution_name: "Chase",
+        last_synced_at: "2026-07-30 08:00:06", error_code: "ITEM_LOGIN_REQUIRED",
+        last_error_at: "2026-07-31 08:00:06", created_at: "2019-12-01 05:13:31",
+      }] }));
+
+    await gotoAccounts(page);
 
     await expect(page.getByRole("button", { name: /reconnect/i })).toBeVisible();
-    await expect(page.getByText(/login expired, click Reconnect/i)).toBeVisible();
+    await expect(page.getByText(/login expired/i)).toBeVisible();
+  });
+
+  test("merely stale item shows a soft note, not a login-expired warning (issue #73)", async ({ page }) => {
+    await mockAllAPIs(page);
+    // Old sync but NO Plaid error → this must NOT read as "login expired".
+    await page.route("**/api/plaid/items", r =>
+      r.fulfill({ json: [{
+        id: 1, item_id: "item-chase-stale", institution_name: "Chase",
+        last_synced_at: "2020-01-01 08:00:06", error_code: null,
+        created_at: "2019-12-01 05:13:31",
+      }] }));
+
+    await gotoAccounts(page);
+
+    // Reconnect is always available, but no false "login expired" alarm.
+    await expect(page.getByRole("button", { name: /reconnect/i })).toBeVisible();
+    await expect(page.getByText(/login expired/i)).toHaveCount(0);
+    await expect(page.getByText(/hasn't synced recently/i)).toBeVisible();
   });
 });
