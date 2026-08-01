@@ -268,8 +268,11 @@ export async function exchangeToken(public_token, institution_id, institution_na
   return res.json();
 }
 
-export async function triggerSync() {
-  const res = await apiFetch("/api/plaid/sync", { method: "POST" });
+// refresh=true (default) forces Plaid to pull fresh transactions from the bank
+// (transactions/refresh — billed, async). Pass false for the follow-up poll that
+// picks up the freshly-pulled data without triggering a second charge.
+export async function triggerSync(refresh = true) {
+  const res = await apiFetch(`/api/plaid/sync?refresh=${refresh ? "true" : "false"}`, { method: "POST" });
   return res.json();
 }
 

@@ -174,6 +174,29 @@ class TestPlaidUpdateLinkToken:
             self._cleanup_item(item_id)
 
 
+class TestPlaidSyncRefresh:
+    """Manual /sync forces a Plaid transactions/refresh (issue #72); the
+    follow-up poll passes refresh=false to avoid a second on-demand charge."""
+
+    def test_sync_requires_auth(self, client):
+        res = client.post("/api/plaid/sync")
+        assert res.status_code == 401
+
+    def test_sync_defaults_to_refresh_true(self, client, auth_headers):
+        with patch("api.sync.sync_all") as mock_sync:
+            res = client.post("/api/plaid/sync", headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["refreshed"] is True
+        mock_sync.assert_called_once_with(True)
+
+    def test_sync_refresh_false_skips_refresh(self, client, auth_headers):
+        with patch("api.sync.sync_all") as mock_sync:
+            res = client.post("/api/plaid/sync?refresh=false", headers=auth_headers)
+        assert res.status_code == 200
+        assert res.json()["refreshed"] is False
+        mock_sync.assert_called_once_with(False)
+
+
 class TestPlaidItems:
     def test_list_items_requires_auth(self, client):
         res = client.get("/api/plaid/items")

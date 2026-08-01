@@ -128,15 +128,20 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
 
 
 @router.post("/sync")
-async def trigger_sync(_user: str = Depends(get_current_user)):
+async def trigger_sync(refresh: bool = True, _user: str = Depends(get_current_user)):
+    """Manual sync. refresh=True (default) forces Plaid to pull fresh transactions
+    from the bank now (transactions/refresh, issue #72). Since that pull is async,
+    the frontend re-syncs shortly after with refresh=false to pick up the new data
+    without incurring a second on-demand charge.
+    """
     limited, _ = rate_limit.check_sync(_user)
     if limited:
         security_log.log_server_event(f"SYNC_RATE_LIMITED  user={_user}")
         raise HTTPException(status_code=429, detail="Sync rate limit reached. Wait a few minutes.")
     rate_limit.record_sync(_user)
     try:
-        await asyncio.to_thread(sync.sync_all)
-        return {"status": "ok"}
+        await asyncio.to_thread(sync.sync_all, refresh)
+        return {"status": "ok", "refreshed": refresh}
     except Exception as e:
         logger.error(f"Sync error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
