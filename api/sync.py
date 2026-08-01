@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import date
 
+import plaid
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 from plaid.model.transactions_refresh_request import TransactionsRefreshRequest
@@ -227,6 +228,65 @@ def _get_plaid_client():
     return get_plaid_client()
 
 
+def _extract_plaid_error_code(exc: Exception) -> str | None:
+    """Pull Plaid's `error_code` (e.g. ITEM_LOGIN_REQUIRED) out of an exception.
+
+    plaid.ApiException carries the error as a JSON string in `.body`. Returns
+    None for non-Plaid exceptions or when the body can't be parsed.
+    """
+    if isinstance(exc, plaid.ApiException) and getattr(exc, "body", None):
+        try:
+            return json.loads(exc.body).get("error_code")
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _record_item_error(item_db_id: int, exc: Exception):
+    """Persist the real Plaid error on the item (issue #73) so the Accounts
+    banner can show an accurate 'reconnect needed' state instead of guessing
+    from sync staleness. Falls back to a generic SYNC_ERROR code for non-Plaid
+    failures. Fires a one-time push on the first transition into an error state.
+    """
+    error_code = _extract_plaid_error_code(exc) or "SYNC_ERROR"
+    try:
+        with get_db() as conn:
+            prior = conn.execute(
+                "SELECT error_code, institution_name FROM plaid_items WHERE id = ?",
+                (item_db_id,),
+            ).fetchone()
+            was_healthy = not prior or not prior["error_code"]
+            institution = prior["institution_name"] if prior else None
+            conn.execute(
+                "UPDATE plaid_items SET error_code = ?, last_error_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (error_code, item_db_id),
+            )
+    except Exception as db_err:
+        logger.warning(f"Failed to record item error for {item_db_id}: {db_err}")
+        return
+
+    # Notify only on the first transition into a login-required state — a push on
+    # every 4×/day cron run for the same dead item would be noise.
+    if was_healthy and error_code == "ITEM_LOGIN_REQUIRED":
+        try:
+            from api.push import notify_item_disconnected
+            notify_item_disconnected(institution)
+        except Exception as push_err:
+            logger.warning(f"Disconnect push failed (non-fatal): {push_err}")
+
+
+def _clear_item_error(item_db_id: int):
+    """Clear any stored error on an item after a successful sync (issue #73)."""
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE plaid_items SET error_code = NULL, last_error_at = NULL WHERE id = ?",
+                (item_db_id,),
+            )
+    except Exception as db_err:
+        logger.warning(f"Failed to clear item error for {item_db_id}: {db_err}")
+
+
 def _refresh_transactions(access_token: str):
     """Ask Plaid to pull fresh transactions from the bank right now (issue #72).
 
@@ -260,10 +320,12 @@ def sync_all(refresh: bool = False):
         try:
             access_token = decrypt(item["access_token_enc"])
             _sync_item(item["id"], item["item_id"], access_token, today, refresh=refresh)
+            _clear_item_error(item["id"])
             ok += 1
         except Exception as e:
             logger.error(f"Sync failed for item {item['item_id']}: {e}")
             security_log.log_sync_event(f"ITEM_FAILED  item={item['item_id']}  error={e}")
+            _record_item_error(item["id"], e)
             failed += 1
 
     # --- Coinbase ---

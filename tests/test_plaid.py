@@ -206,3 +206,28 @@ class TestPlaidItems:
         res = client.get("/api/plaid/items", headers=auth_headers)
         assert res.status_code == 200
         assert isinstance(res.json(), list)
+
+    def test_list_items_exposes_error_code(self, client, auth_headers):
+        """The items feed must surface error_code so the Accounts banner can key
+        off a real disconnect (issue #73) rather than sync staleness."""
+        from tests.conftest import _test_get_db
+        from api.encryption import encrypt
+        item_id = "item-error-code-test"
+        with _test_get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO plaid_items (item_id, institution_name, access_token_enc, error_code) "
+                "VALUES (?, ?, ?, ?)",
+                (item_id, "Chase", encrypt("access-sandbox-x"), "ITEM_LOGIN_REQUIRED"),
+            )
+            conn.commit()
+        try:
+            res = client.get("/api/plaid/items", headers=auth_headers)
+            assert res.status_code == 200
+            row = next((i for i in res.json() if i["item_id"] == item_id), None)
+            assert row is not None
+            assert row["error_code"] == "ITEM_LOGIN_REQUIRED"
+            assert "last_error_at" in row
+        finally:
+            with _test_get_db() as conn:
+                conn.execute("DELETE FROM plaid_items WHERE item_id = ?", (item_id,))
+                conn.commit()

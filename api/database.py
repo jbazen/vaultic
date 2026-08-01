@@ -1109,6 +1109,12 @@ MIGRATIONS = [
     # (treated as mirrored); the current/past months are never re-mirrored, so
     # existing hand-entered amounts there are preserved without a backfill.
     "ALTER TABLE budget_amounts ADD COLUMN user_set INTEGER NOT NULL DEFAULT 0",
+    # Real Plaid error state on an item (issue #73) so the Accounts "reconnect"
+    # banner keys off the actual error (e.g. ITEM_LOGIN_REQUIRED) instead of
+    # guessing from sync staleness. Set when a sync raises an item error;
+    # cleared on the next successful sync. last_error_at times the transition.
+    "ALTER TABLE plaid_items ADD COLUMN error_code TEXT",
+    "ALTER TABLE plaid_items ADD COLUMN last_error_at DATETIME",
 ]
 
 

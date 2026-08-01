@@ -283,6 +283,47 @@ def notify_pending_review(count: int) -> None:
         logger.info(f"Deactivated {len(expired_ids)} expired push subscription(s)")
 
 
+def notify_item_disconnected(institution_name: str | None) -> None:
+    """Push a one-time 'reconnect needed' alert when a Plaid item's login expires.
+
+    Called by sync._record_item_error() only on the FIRST transition into
+    ITEM_LOGIN_REQUIRED (issue #73), so the user isn't notified again on every
+    subsequent cron run for the same dead item. Links to the Accounts page where
+    the Reconnect button lives. Expired subscriptions are deactivated.
+    """
+    if not is_configured():
+        return
+
+    from api.database import get_db
+
+    where = f"{institution_name} " if institution_name else "A bank "
+    title = "Vaultic — Reconnect Needed"
+    body  = f"{where}login expired. Tap to reconnect and resume syncing."
+
+    with get_db() as conn:
+        subs = conn.execute(
+            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE is_active = 1"
+        ).fetchall()
+
+    expired_ids = []
+    for sub in subs:
+        subscription = {
+            "endpoint": sub["endpoint"],
+            "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
+        }
+        ok = send_push_notification(subscription, title, body, url="/accounts")
+        if not ok:
+            expired_ids.append(sub["id"])
+
+    if expired_ids:
+        with get_db() as conn:
+            for sid in expired_ids:
+                conn.execute(
+                    "UPDATE push_subscriptions SET is_active = 0 WHERE id = ?", (sid,)
+                )
+        logger.info(f"Deactivated {len(expired_ids)} expired push subscription(s)")
+
+
 # In-memory date stamp to avoid sending multiple stale I360 reminders per day.
 # Reset on server restart (fine — sync runs 4x/day, so at most one extra).
 _last_i360_stale_notify_date: str | None = None

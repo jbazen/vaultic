@@ -151,7 +151,8 @@ async def trigger_sync(refresh: bool = True, _user: str = Depends(get_current_us
 async def list_items(_user: str = Depends(get_current_user)):
     with get_db() as conn:
         items = conn.execute(
-            "SELECT id, item_id, institution_name, last_synced_at, created_at FROM plaid_items"
+            "SELECT id, item_id, institution_name, last_synced_at, "
+            "error_code, last_error_at, created_at FROM plaid_items"
         ).fetchall()
     return [dict(row) for row in items]
 

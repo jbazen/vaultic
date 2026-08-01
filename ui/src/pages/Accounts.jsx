@@ -1069,12 +1069,20 @@ export default function Accounts() {
           if (block.kind === "institution") {
             const item = items.find(i => i.institution_name === block.key);
             titleText = block.key;
+            // Real disconnect detection (issue #73): the "Reconnect" banner is
+            // driven by Plaid's actual error_code, not by sync staleness. A merely
+            // slow/late sync no longer falsely reads as "login expired"; it shows a
+            // softer "hasn't synced recently" note instead.
+            const loginExpired = item?.error_code === "ITEM_LOGIN_REQUIRED";
             const stale = item ? isSyncStale(item.last_synced_at) : false;
-            if (item?.last_synced_at) {
+            if (loginExpired) {
+              subtitleText = "⚠ Login expired — click Reconnect to resume syncing";
+              subtitleWarn = true;
+            } else if (item?.last_synced_at) {
               subtitleText = stale
-                ? `⚠ Last synced ${fmtDate(item.last_synced_at)} — login expired, click Reconnect`
+                ? `Synced ${fmtDate(item.last_synced_at)} — hasn't synced recently`
                 : `Synced ${fmtDate(item.last_synced_at)}`;
-              subtitleWarn = stale;
+              subtitleWarn = false;
             }
             if (item) {
               rightButton = (
