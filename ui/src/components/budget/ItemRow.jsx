@@ -38,7 +38,10 @@ export default function ItemRow({ item, month, groupType, showSpent, onUpdate, o
         </span>
       );
     }
-    if (item.planned === 0) {
+    // Only truly empty items (no plan AND no activity) show a dash. An item with
+    // spending but no planned amount still shows its overspend below — never hide
+    // real activity just because nothing was budgeted (#74).
+    if (item.planned === 0 && item.spent === 0) {
       return <span style={{ fontSize: 13, color: "var(--text2)" }}>—</span>;
     }
     return (

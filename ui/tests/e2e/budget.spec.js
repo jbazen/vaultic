@@ -95,3 +95,47 @@ test.describe("Budget — CreateTransactionModal save button", () => {
     expect(postBody.is_income).toBe(false);
   });
 });
+
+// Regression for issue #74: an expense item with $0 planned but real spending
+// used to render "—" in the default Remaining column, hiding the activity.
+const MOCK_BUDGET_UNPLANNED_SPEND = {
+  month: CURRENT_MONTH,
+  groups: [{
+    id: 2, name: "Sinking Funds", type: "expense", display_order: 0,
+    total_planned: 0, total_spent: 75, is_archived: false,
+    items: [
+      { id: 20, name: "Car Repair", planned: 0, spent: 75, remaining: -75, is_archived: false },
+      { id: 21, name: "Homeschool", planned: 0, spent: 0, remaining: 0, is_archived: false },
+    ],
+  }],
+  summary: {
+    total_income_planned: 0, total_income_received: 0,
+    total_expense_planned: 0, total_expense_spent: 75,
+    remaining_to_budget: 0,
+  },
+};
+
+test.describe("Budget — unplanned spending visibility (issue #74)", () => {
+  test.beforeEach(async ({ page }) => {
+    await loginMocked(page);
+    await page.route(`**/api/budget/${CURRENT_MONTH}`, r =>
+      r.fulfill({ json: MOCK_BUDGET_UNPLANNED_SPEND }));
+    await page.route("**/api/budget/unassigned/**", r => r.fulfill({ json: [] }));
+    await page.route("**/api/budget/pending-review/**", r => r.fulfill({ json: [] }));
+  });
+
+  test("$0-planned item with spending shows the amount, not a dash", async ({ page }) => {
+    await page.locator(".nav-group-header", { hasText: "Budget" }).click();
+    await page.getByRole("link", { name: /monthly budget/i }).click();
+    await expect(page).toHaveURL(/\/budget$/);
+
+    // Car Repair: planned 0, spent 75 → shows the overspend in the Remaining column
+    const carRepair = page.locator(".budget-item-row").filter({ hasText: "Car Repair" });
+    await expect(carRepair).toBeVisible({ timeout: 10000 });
+    await expect(carRepair.getByText("-$75.00")).toBeVisible();
+
+    // Homeschool: planned 0, spent 0 → genuinely empty, still a dash
+    const homeschool = page.locator(".budget-item-row").filter({ hasText: "Homeschool" });
+    await expect(homeschool.getByText("—")).toBeVisible();
+  });
+});
