@@ -179,23 +179,24 @@ test.describe("Budget — transaction notes (issue #75)", () => {
     await page.getByRole("button", { name: /^New/ }).click();
     await expect(page.getByText("Trader Joe's")).toBeVisible();
 
-    // No note yet — shows the "+ note" affordance
-    await page.getByRole("button", { name: "+ note" }).click();
-    await page.locator("textarea[placeholder='Add a note…']").fill("Double-check this charge");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    // Notes field is a plain always-visible input — no click-to-reveal step.
+    const notesField = page.getByPlaceholder("Add a note…");
+    await expect(notesField).toBeVisible();
+    await notesField.fill("Double-check this charge");
+    await notesField.blur();
 
     await expect.poll(() => notesPatchBody).not.toBeNull();
     expect(notesPatchBody.notes).toBe("Double-check this charge");
 
-    // Row now shows the saved note instead of the "+ note" affordance
-    await expect(page.getByText("📝 Double-check this charge")).toBeVisible();
+    // Row's note field now reflects the saved value after reload
+    await expect(page.getByPlaceholder("Add a note…")).toHaveValue("Double-check this charge");
 
     // Assign it to the budget item — carries the note along with it
     await page.locator("select.budget-item-select").selectOption("30");
 
     // Switch to Tracked — the same note is still there, no copy step required
     await page.getByRole("button", { name: /^Tracked/ }).click();
-    await expect(page.getByText("📝 Double-check this charge")).toBeVisible();
+    await expect(page.getByPlaceholder("Add a note…")).toHaveValue("Double-check this charge");
   });
 });
 

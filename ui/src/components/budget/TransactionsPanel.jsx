@@ -22,8 +22,6 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
   const [loading, setLoading] = useState(false);
   const [autoAssigning, setAutoAssigning] = useState(false);
   const [autoResult, setAutoResult] = useState(null); // {assigned, skipped} after run
-  const [notesEditing, setNotesEditing] = useState(null); // transaction_id currently being edited
-  const [notesDraft, setNotesDraft] = useState("");
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
@@ -114,9 +112,8 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
     onBudgetUpdate?.();
   }
 
-  async function handleSaveNote(txnId) {
-    await saveTransactionNotes(txnId, notesDraft.trim() || null);
-    setNotesEditing(null);
+  async function handleSaveNote(txnId, notes) {
+    await saveTransactionNotes(txnId, notes);
     await loadAll();
   }
 
@@ -346,63 +343,27 @@ export default function TransactionsPanel({ month, allGroups, onBudgetUpdate }) 
               </div>
             </div>
 
-            {/* Notes — available on New/Pending/Tracked (not Deleted). Notes are
-                stored per-transaction independent of assignment, so a note added
-                here is still there once the transaction is categorized. */}
+            {/* Notes — a plain always-visible field on New/Pending/Tracked (not
+                Deleted). Notes are stored per-transaction independent of
+                assignment, so a note typed here is still there once the
+                transaction is categorized. Uncontrolled + save-on-blur, same
+                as any other inline-edit field — no click-to-reveal step. */}
             {tab !== "deleted" && (
-              <div style={{ marginTop: 4 }} onClick={e => e.stopPropagation()}>
-                {notesEditing === t.transaction_id ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <textarea
-                      autoFocus
-                      value={notesDraft}
-                      onChange={e => setNotesDraft(e.target.value)}
-                      placeholder="Add a note…"
-                      rows={2}
-                      style={{
-                        width: "100%", boxSizing: "border-box",
-                        background: "var(--bg3)", border: "1px solid var(--border)",
-                        borderRadius: 6, color: "var(--text)", fontSize: 11, padding: "4px 6px",
-                        resize: "vertical",
-                      }}
-                    />
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={() => handleSaveNote(t.transaction_id)}
-                        style={{
-                          padding: "3px 10px", borderRadius: 5, fontSize: 10, fontWeight: 700,
-                          background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.35)",
-                          color: "#22c55e", cursor: "pointer",
-                        }}>
-                        Save
-                      </button>
-                      <button onClick={() => setNotesEditing(null)}
-                        style={{
-                          padding: "3px 10px", borderRadius: 5, fontSize: 10, fontWeight: 600,
-                          background: "none", border: "1px solid var(--border)",
-                          color: "var(--text2)", cursor: "pointer",
-                        }}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : t.notes ? (
-                  <div
-                    onClick={() => { setNotesEditing(t.transaction_id); setNotesDraft(t.notes || ""); }}
-                    title="Click to edit note"
-                    style={{ fontSize: 10, color: "var(--text2)", fontStyle: "italic", cursor: "pointer" }}>
-                    📝 {t.notes}
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => { setNotesEditing(t.transaction_id); setNotesDraft(""); }}
-                    style={{
-                      fontSize: 10, color: "var(--text2)", opacity: 0.6,
-                      background: "none", border: "none", cursor: "pointer", padding: 0,
-                    }}>
-                    + note
-                  </button>
-                )}
-              </div>
+              <input
+                defaultValue={t.notes || ""}
+                placeholder="Add a note…"
+                onClick={e => e.stopPropagation()}
+                onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+                onBlur={e => {
+                  const val = e.target.value.trim();
+                  if (val !== (t.notes || "")) handleSaveNote(t.transaction_id, val || null);
+                }}
+                style={{
+                  marginTop: 4, width: "100%", boxSizing: "border-box",
+                  background: "var(--bg3)", border: "1px solid var(--border)",
+                  borderRadius: 6, color: "var(--text)", fontSize: 11, padding: "4px 8px",
+                }}
+              />
             )}
 
             {/* Correct dropdown (Pending tab) — approve with a different item */}
