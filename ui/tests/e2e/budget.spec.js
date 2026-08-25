@@ -115,6 +115,90 @@ const MOCK_BUDGET_UNPLANNED_SPEND = {
   },
 };
 
+// Regression for issue #75: notes on a transaction sitting in the New/Pending/
+// Tracked queues, and carrying over once the transaction is assigned.
+const MOCK_BUDGET_NOTES = {
+  month: CURRENT_MONTH,
+  groups: [{
+    id: 3, name: "Food", type: "expense", display_order: 0,
+    total_planned: 300, total_spent: 0, is_archived: false,
+    items: [{ id: 30, name: "Groceries", planned: 300, spent: 0, remaining: 300, is_archived: false }],
+  }],
+  summary: {
+    total_income_planned: 0, total_income_received: 0,
+    total_expense_planned: 300, total_expense_spent: 0,
+    remaining_to_budget: -300,
+  },
+};
+
+const UNASSIGNED_TXN_NO_NOTE = {
+  transaction_id: "txn_notes_1", date: "2026-03-10", name: "Trader Joe's",
+  merchant_name: "Trader Joe's", amount: 42.50, category: "Groceries",
+  account_name: "Chase Checking", account_mask: "1234", notes: null,
+};
+
+test.describe("Budget — transaction notes (issue #75)", () => {
+  test.beforeEach(async ({ page }) => {
+    await loginMocked(page);
+    await page.route(`**/api/budget/${CURRENT_MONTH}`, r =>
+      r.fulfill({ json: MOCK_BUDGET_NOTES }));
+    await page.route("**/api/budget/pending-review/**", r => r.fulfill({ json: [] }));
+    await page.route("**/api/budget/deleted/**", r => r.fulfill({ json: [] }));
+
+    await page.locator(".nav-group-header", { hasText: "Budget" }).click();
+    await page.getByRole("link", { name: /monthly budget/i }).click();
+    await expect(page).toHaveURL(/\/budget$/);
+  });
+
+  test("add a note on an unassigned transaction, then see it carry over once tracked", async ({ page }) => {
+    let notesPatchBody = null;
+    let currentNote = null;
+
+    // Unassigned list reflects whatever note was last saved, so the UI can
+    // be asserted against after the row reloads post-save.
+    await page.route("**/api/budget/unassigned/**", r =>
+      r.fulfill({ json: [{ ...UNASSIGNED_TXN_NO_NOTE, notes: currentNote }] }));
+    await page.route("**/api/budget/assigned/**", r =>
+      r.fulfill({ json: currentNote ? [{
+        transaction_id: "txn_notes_1", date: "2026-03-10", name: "Trader Joe's",
+        merchant_name: "Trader Joe's", amount: 42.50, category: "Groceries",
+        item_id: 30, item_name: "Groceries", group_name: "Food",
+        account_name: "Chase Checking", account_mask: "1234", notes: currentNote,
+      }] : [] }));
+    await page.route("**/api/budget/transactions/txn_notes_1/notes", r => {
+      notesPatchBody = r.request().postDataJSON();
+      currentNote = notesPatchBody.notes;
+      r.fulfill({ json: { ok: true, transaction_id: "txn_notes_1", notes: currentNote } });
+    });
+    await page.route("**/api/budget/assign", r => {
+      r.fulfill({ json: { ok: true } });
+    });
+
+    // Open the Transactions panel → New tab (unassigned queue)
+    await page.getByRole("button", { name: "Transactions", exact: true }).click();
+    await page.getByRole("button", { name: /^New/ }).click();
+    await expect(page.getByText("Trader Joe's")).toBeVisible();
+
+    // No note yet — shows the "+ note" affordance
+    await page.getByRole("button", { name: "+ note" }).click();
+    await page.locator("textarea[placeholder='Add a note…']").fill("Double-check this charge");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    await expect.poll(() => notesPatchBody).not.toBeNull();
+    expect(notesPatchBody.notes).toBe("Double-check this charge");
+
+    // Row now shows the saved note instead of the "+ note" affordance
+    await expect(page.getByText("📝 Double-check this charge")).toBeVisible();
+
+    // Assign it to the budget item — carries the note along with it
+    await page.locator("select.budget-item-select").selectOption("30");
+
+    // Switch to Tracked — the same note is still there, no copy step required
+    await page.getByRole("button", { name: /^Tracked/ }).click();
+    await expect(page.getByText("📝 Double-check this charge")).toBeVisible();
+  });
+});
+
 test.describe("Budget — unplanned spending visibility (issue #74)", () => {
   test.beforeEach(async ({ page }) => {
     await loginMocked(page);

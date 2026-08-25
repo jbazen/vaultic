@@ -778,6 +778,16 @@ export async function saveTransactionSplits(transactionId, splits, meta = {}) {
   return res.json();
 }
 
+/** Save a note on a transaction independent of budget assignment — works on
+ *  unassigned, pending-review, or already-tracked transactions alike. */
+export async function saveTransactionNotes(transactionId, notes) {
+  const res = await apiFetch(
+    `/api/budget/transactions/${encodeURIComponent(transactionId)}/notes`,
+    { method: "PATCH", body: JSON.stringify({ notes }) }
+  );
+  return res.json();
+}
+
 // ── Web Push / PWA ────────────────────────────────────────────────────────────
 
 /** Fetch the server's VAPID public key (no auth required). */

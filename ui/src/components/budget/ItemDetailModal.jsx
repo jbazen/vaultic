@@ -202,6 +202,9 @@ export default function ItemDetailModal({ itemId, itemName, month, allGroups, on
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)",
                         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {t.merchant}
+                        {t.has_notes && (
+                          <span title="Has a note" style={{ marginLeft: 5, fontSize: 10 }}>📝</span>
+                        )}
                       </div>
                       <div style={{ fontSize: 10, color: "var(--text2)", marginTop: 1 }}>{t.date}</div>
                     </div>
