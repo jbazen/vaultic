@@ -204,6 +204,123 @@ class TestSplitMetadata:
             assert meta["notes"] == "Monthly payment"
 
 
+class TestTransactionNotes:
+    """PATCH /transactions/{id}/notes — standalone note save, independent of assignment."""
+
+    def test_requires_auth(self, client):
+        res = client.patch(
+            "/api/budget/transactions/some_txn/notes",
+            json={"notes": "hi"},
+        )
+        assert res.status_code == 401
+
+    def test_nonexistent_transaction_returns_404(self, client, auth_headers):
+        res = client.patch(
+            "/api/budget/transactions/nonexistent_txn_999/notes",
+            headers=auth_headers,
+            json={"notes": "hi"},
+        )
+        assert res.status_code == 404
+
+    def test_save_note_on_unassigned_transaction(self, client, auth_headers):
+        """A note can be saved before the transaction has any budget assignment."""
+        _, _, txn_id = _seed_budget_and_transaction("NotesGroup1", ["Item"])
+        res = client.patch(
+            f"/api/budget/transactions/{txn_id}/notes",
+            headers=auth_headers,
+            json={"notes": "Need to double check this charge"},
+        )
+        assert res.status_code == 200
+
+        with get_db() as conn:
+            meta = conn.execute(
+                "SELECT notes FROM transaction_metadata WHERE transaction_id = ?",
+                (txn_id,)
+            ).fetchone()
+            assert meta["notes"] == "Need to double check this charge"
+
+        # Surfaces in the unassigned list too
+        unassigned = client.get("/api/budget/unassigned/2026-03", headers=auth_headers).json()
+        row = next(t for t in unassigned if t["transaction_id"] == txn_id)
+        assert row["notes"] == "Need to double check this charge"
+
+    def test_note_persists_across_assignment(self, client, auth_headers):
+        """Notes carry over automatically when a transaction is assigned — no copy step,
+        since transaction_metadata is keyed only by transaction_id."""
+        _, item_ids, txn_id = _seed_budget_and_transaction("NotesGroup2", ["Groceries"])
+
+        client.patch(
+            f"/api/budget/transactions/{txn_id}/notes",
+            headers=auth_headers,
+            json={"notes": "Split with roommate later"},
+        )
+
+        # Now assign it to a budget item
+        res = client.put(
+            f"/api/budget/transactions/{txn_id}/splits",
+            headers=auth_headers,
+            json={"splits": [{"item_id": item_ids[0], "amount": 100.00}]},
+        )
+        assert res.status_code == 200
+
+        # Note is still attached and now visible in the assigned list
+        assigned = client.get("/api/budget/assigned/2026-03", headers=auth_headers).json()
+        row = next(t for t in assigned if t["transaction_id"] == txn_id)
+        assert row["notes"] == "Split with roommate later"
+
+        # And still returned by the single-transaction detail endpoint
+        detail = client.get(f"/api/budget/transactions/{txn_id}", headers=auth_headers).json()
+        assert detail["notes"] == "Split with roommate later"
+
+    def test_note_visible_in_item_detail_has_notes_flag(self, client, auth_headers):
+        _, item_ids, txn_id = _seed_budget_and_transaction("NotesGroup3", ["Rent"])
+        client.put(
+            f"/api/budget/transactions/{txn_id}/splits",
+            headers=auth_headers,
+            json={"splits": [{"item_id": item_ids[0], "amount": 100.00}]},
+        )
+        client.patch(
+            f"/api/budget/transactions/{txn_id}/notes",
+            headers=auth_headers,
+            json={"notes": "Rent went up this year"},
+        )
+
+        detail = client.get(
+            f"/api/budget/items/{item_ids[0]}/detail",
+            headers=auth_headers,
+            params={"month": "2026-03"},
+        ).json()
+        txn_row = next(t for t in detail["transactions"] if t["transaction_id"] == txn_id)
+        assert txn_row["has_notes"] is True
+
+    def test_updating_note_does_not_clobber_check_number(self, client, auth_headers):
+        """Saving a note via the standalone endpoint must not wipe an existing check_number."""
+        _, item_ids, txn_id = _seed_budget_and_transaction("NotesGroup4", ["Item"])
+        client.put(
+            f"/api/budget/transactions/{txn_id}/splits",
+            headers=auth_headers,
+            json={
+                "splits": [{"item_id": item_ids[0], "amount": 100.00}],
+                "check_number": "9911",
+                "notes": "first note",
+            },
+        )
+
+        client.patch(
+            f"/api/budget/transactions/{txn_id}/notes",
+            headers=auth_headers,
+            json={"notes": "updated note"},
+        )
+
+        with get_db() as conn:
+            meta = conn.execute(
+                "SELECT check_number, notes FROM transaction_metadata WHERE transaction_id = ?",
+                (txn_id,)
+            ).fetchone()
+            assert meta["check_number"] == "9911"
+            assert meta["notes"] == "updated note"
+
+
 class TestReassign:
     def test_reassign_clears_old_splits(self, client, auth_headers):
         """Reassigning via splits should clear previous splits."""

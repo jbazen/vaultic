@@ -148,6 +148,11 @@ class SplitsBody(BaseModel):
     notes: str | None = None         # free-form note on the transaction (optional)
 
 
+class NotesBody(BaseModel):
+    """Request body for PATCH /transactions/{id}/notes."""
+    notes: str | None = None
+
+
 class ManualTransactionBody(BaseModel):
     """Request body for POST /manual-transaction.
 
@@ -237,12 +242,14 @@ async def get_pending_review(month: str, _user: str = Depends(get_current_user))
                    bg.name           AS suggested_group_name,
                    ta.confidence     AS confidence,
                    COALESCE(a.display_name, a.name) AS account_name,
-                   a.mask            AS account_mask
+                   a.mask            AS account_mask,
+                   tm.notes          AS notes
             FROM transaction_assignments ta
             JOIN transactions t ON t.transaction_id = ta.transaction_id
             JOIN budget_items bi ON bi.id = ta.item_id
             JOIN budget_groups bg ON bg.id = bi.group_id
             LEFT JOIN accounts a ON a.account_number = t.account_number
+            LEFT JOIN transaction_metadata tm ON tm.transaction_id = t.transaction_id
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND ta.status = 'pending_review'
@@ -1041,10 +1048,12 @@ async def get_unassigned(month: str, _user: str = Depends(get_current_user)):
                    best.item_id  AS suggested_item_id,
                    bi.name       AS suggested_item_name,
                    COALESCE(a.display_name, a.name) AS account_name,
-                   a.mask        AS account_mask
+                   a.mask        AS account_mask,
+                   tm.notes      AS notes
             FROM transactions t
             LEFT JOIN accounts a ON a.account_number = t.account_number
             LEFT JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
+            LEFT JOIN transaction_metadata tm ON tm.transaction_id = t.transaction_id
             -- Best auto-rule: pick the rule with the highest match_count for the merchant
             LEFT JOIN (
                 SELECT merchant, item_id, MAX(match_count) AS match_count
@@ -1089,12 +1098,14 @@ async def get_assigned(month: str, _user: str = Depends(get_current_user)):
                    bi.name AS item_name,
                    bg.name AS group_name,
                    COALESCE(a.display_name, a.name) AS account_name,
-                   a.mask  AS account_mask
+                   a.mask  AS account_mask,
+                   tm.notes AS notes
             FROM transactions t
             LEFT JOIN accounts a ON a.account_number = t.account_number
             JOIN transaction_assignments ta ON ta.transaction_id = t.transaction_id
             JOIN budget_items bi ON bi.id = ta.item_id
             JOIN budget_groups bg ON bg.id = bi.group_id
+            LEFT JOIN transaction_metadata tm ON tm.transaction_id = t.transaction_id
             WHERE strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
               AND ta.item_id IS NOT NULL
@@ -1508,10 +1519,12 @@ async def get_item_detail(
                    t.amount AS display_amount,
                    0 AS is_split,
                    a.name AS account_name, a.mask AS account_mask,
-                   a.subtype AS account_subtype
+                   a.subtype AS account_subtype,
+                   tm.notes AS notes
             FROM transaction_assignments ta
             JOIN transactions t ON t.transaction_id = ta.transaction_id
             LEFT JOIN accounts a ON a.account_number = t.account_number
+            LEFT JOIN transaction_metadata tm ON tm.transaction_id = t.transaction_id
             WHERE ta.item_id = ?
               AND strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
@@ -1522,10 +1535,12 @@ async def get_item_detail(
                    ts.amount AS display_amount,
                    1 AS is_split,
                    a.name AS account_name, a.mask AS account_mask,
-                   a.subtype AS account_subtype
+                   a.subtype AS account_subtype,
+                   tm.notes AS notes
             FROM transaction_splits ts
             JOIN transactions t ON t.transaction_id = ts.transaction_id
             LEFT JOIN accounts a ON a.account_number = t.account_number
+            LEFT JOIN transaction_metadata tm ON tm.transaction_id = t.transaction_id
             WHERE ts.item_id = ?
               AND strftime('%Y-%m', t.date) = ?
               AND t.pending = 0
@@ -1566,6 +1581,7 @@ async def get_item_detail(
                 "account_name": r["account_name"],
                 "account_mask": r["account_mask"],
                 "account_subtype": r["account_subtype"],
+                "has_notes": bool(r["notes"]),
             }
             for r in txn_rows
         ],
@@ -1777,6 +1793,43 @@ async def save_transaction_splits(
                 """, (merchant, split_pattern))
 
     return {"status": "saved", "splits": len(body.splits)}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /transactions/{transaction_id}/notes — save a note independent of assignment
+# ---------------------------------------------------------------------------
+
+@router.patch("/transactions/{transaction_id}/notes")
+async def save_transaction_notes(
+    transaction_id: str,
+    body: NotesBody,
+    _user: str = Depends(get_current_user),
+):
+    """Save a free-form note on a transaction, regardless of budget assignment.
+
+    Unlike PUT /transactions/{id}/splits, this never touches assignment or
+    splits — it lets a note be added while a transaction is still unassigned
+    or pending review. Because transaction_metadata is keyed only by
+    transaction_id, the note stays attached automatically when the
+    transaction is later assigned to a budget item.
+    """
+    with get_db() as conn:
+        txn = conn.execute(
+            "SELECT 1 FROM transactions WHERE transaction_id = ?",
+            (transaction_id,)
+        ).fetchone()
+        if not txn:
+            raise HTTPException(status_code=404, detail="Transaction not found")
+
+        conn.execute("""
+            INSERT INTO transaction_metadata (transaction_id, notes, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(transaction_id) DO UPDATE SET
+                notes      = excluded.notes,
+                updated_at = CURRENT_TIMESTAMP
+        """, (transaction_id, body.notes))
+
+    return {"ok": True, "transaction_id": transaction_id, "notes": body.notes}
 
 
 # ---------------------------------------------------------------------------
