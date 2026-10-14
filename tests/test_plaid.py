@@ -174,6 +174,91 @@ class TestPlaidUpdateLinkToken:
             self._cleanup_item(item_id)
 
 
+class TestPlaidExchange:
+    """Linking an institution that's already connected must not create a
+    duplicate item and a second copy of every account (issue #76)."""
+
+    EXISTING = "item-exchange-existing"
+    NEW = "item-exchange-new"
+
+    def _mock_client(self, new_item_id):
+        mock_api = MagicMock()
+        mock_api.item_public_token_exchange.return_value = MagicMock(
+            access_token="access-new", item_id=new_item_id)
+        return mock_api
+
+    def _insert_existing(self):
+        from tests.conftest import _test_get_db
+        from api.encryption import encrypt
+        with _test_get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO plaid_items (item_id, institution_id, institution_name, access_token_enc) "
+                "VALUES (?, 'ins_exchange_test', 'Chase', ?)", (self.EXISTING, encrypt("access-old")))
+
+    def _cleanup(self):
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            conn.execute("DELETE FROM plaid_items WHERE item_id IN (?, ?)", (self.EXISTING, self.NEW))
+
+    def _exchange(self, client, auth_headers, mock_api, institution_id="ins_exchange_test"):
+        with patch("api.routers.plaid._get_client", return_value=mock_api), patch("api.sync.sync_all"):
+            return client.post("/api/plaid/exchange", headers=auth_headers, json={
+                "public_token": "public-x", "institution_id": institution_id, "institution_name": "Chase"})
+
+    def _item_ids(self):
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            return {r[0] for r in conn.execute(
+                "SELECT item_id FROM plaid_items WHERE item_id IN (?, ?)", (self.EXISTING, self.NEW))}
+
+    def test_exchange_requires_auth(self, client):
+        res = client.post("/api/plaid/exchange", json={"public_token": "x"})
+        assert res.status_code == 401
+
+    def test_new_institution_is_stored(self, client, auth_headers):
+        try:
+            res = self._exchange(client, auth_headers, self._mock_client(self.NEW))
+            assert res.status_code == 200
+            assert self._item_ids() == {self.NEW}
+        finally:
+            self._cleanup()
+
+    def test_already_connected_institution_returns_409(self, client, auth_headers):
+        self._insert_existing()
+        try:
+            mock_api = self._mock_client(self.NEW)
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+            assert "Reconnect" in res.json()["detail"]
+            assert self._item_ids() == {self.EXISTING}
+            # The new item is removed at Plaid so it never bills
+            req = mock_api.item_remove.call_args[0][0]
+            assert req.access_token == "access-new"
+        finally:
+            self._cleanup()
+
+    def test_409_even_if_plaid_item_remove_fails(self, client, auth_headers):
+        import plaid
+        self._insert_existing()
+        try:
+            mock_api = self._mock_client(self.NEW)
+            mock_api.item_remove.side_effect = plaid.ApiException(status=400, reason="Bad Request")
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+            assert self._item_ids() == {self.EXISTING}
+        finally:
+            self._cleanup()
+
+    def test_different_institution_is_allowed(self, client, auth_headers):
+        self._insert_existing()
+        try:
+            res = self._exchange(client, auth_headers, self._mock_client(self.NEW), institution_id="ins_other")
+            assert res.status_code == 200
+            assert self._item_ids() == {self.EXISTING, self.NEW}
+        finally:
+            self._cleanup()
+
+
 class TestPlaidSyncRefresh:
     """Manual /sync forces a Plaid transactions/refresh (issue #72); the
     follow-up poll passes refresh=false to avoid a second on-demand charge."""

@@ -30,7 +30,7 @@ export default function PlaidLink({ onSuccess }) {
       setLinkToken(null);
       onSuccess?.();
     } catch (e) {
-      setError("Failed to connect account. Please try again.");
+      setError(e.message || "Failed to connect account. Please try again.");
     }
   }, [onSuccess]);
 

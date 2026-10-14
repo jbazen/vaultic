@@ -6,6 +6,7 @@ import plaid
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
 from fastapi import APIRouter, Depends, HTTPException
@@ -108,6 +109,25 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
     except plaid.ApiException as e:
         logger.error(f"Plaid exchange error: {e}")
         raise HTTPException(status_code=502, detail="Failed to exchange Plaid token")
+
+    # Re-linking an institution that's already connected mints a new item and a
+    # second copy of every account (issue #76). Remove the new item at Plaid so it
+    # never bills, and send the user to Reconnect on the existing item instead.
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM plaid_items WHERE institution_id = ? AND item_id != ?",
+            (body.institution_id, item_id),
+        ).fetchone() if body.institution_id else None
+    if existing:
+        try:
+            client.item_remove(ItemRemoveRequest(access_token=access_token))
+        except plaid.ApiException as e:
+            logger.error(f"Plaid item_remove for duplicate link {item_id} failed: {e}")
+        name = body.institution_name or "This institution"
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name} is already connected. Use Reconnect on the Accounts page instead of adding it again.",
+        )
 
     with get_db() as conn:
         conn.execute("""
