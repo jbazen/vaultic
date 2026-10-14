@@ -259,6 +259,106 @@ class TestPlaidExchange:
             self._cleanup()
 
 
+class TestPlaidRemoveItem:
+    """Disconnect removes the item at Plaid first (so it stops billing), then
+    deactivates its accounts and deletes the item without an FK error (issue #77)."""
+
+    ITEM = "item-remove-test"
+
+    def _seed(self):
+        from tests.conftest import _test_get_db
+        from api.encryption import encrypt
+        with _test_get_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO plaid_items (item_id, institution_id, institution_name, access_token_enc) "
+                "VALUES (?, 'ins_remove_test', 'Voya', ?)", (self.ITEM, encrypt("access-remove")))
+            item_db_id = cur.lastrowid
+            conn.execute(
+                "INSERT INTO accounts (plaid_account_id, plaid_item_id, name, type, account_number) "
+                "VALUES ('pa-remove-test', ?, '401K', 'investment', 'pa-remove-test')", (item_db_id,))
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE plaid_account_id = 'pa-remove-test'").fetchone()[0]
+            conn.execute(
+                "INSERT INTO account_balances (account_id, current, snapped_at, account_number) "
+                "VALUES (?, 100.0, '2099-02-01', 'pa-remove-test')", (acct_id,))
+        return acct_id
+
+    def _cleanup(self):
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            conn.execute("DELETE FROM account_balances WHERE account_number = 'pa-remove-test'")
+            conn.execute("DELETE FROM accounts WHERE plaid_account_id = 'pa-remove-test'")
+            conn.execute("DELETE FROM plaid_items WHERE item_id = ?", (self.ITEM,))
+
+    def _state(self):
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            item = conn.execute("SELECT 1 FROM plaid_items WHERE item_id = ?", (self.ITEM,)).fetchone()
+            acct = conn.execute(
+                "SELECT is_active, plaid_item_id FROM accounts WHERE plaid_account_id = 'pa-remove-test'").fetchone()
+            bals = conn.execute(
+                "SELECT COUNT(*) FROM account_balances WHERE account_number = 'pa-remove-test'").fetchone()[0]
+        return item is not None, dict(acct) if acct else None, bals
+
+    def _delete(self, client, auth_headers, mock_api):
+        with patch("api.routers.plaid._get_client", return_value=mock_api):
+            return client.delete(f"/api/plaid/items/{self.ITEM}", headers=auth_headers)
+
+    def test_remove_requires_auth(self, client):
+        res = client.delete(f"/api/plaid/items/{self.ITEM}")
+        assert res.status_code == 401
+
+    def test_remove_unknown_item_404(self, client, auth_headers):
+        res = client.delete("/api/plaid/items/does-not-exist", headers=auth_headers)
+        assert res.status_code == 404
+
+    def test_remove_calls_plaid_and_keeps_history(self, client, auth_headers):
+        self._seed()
+        try:
+            mock_api = MagicMock()
+            res = self._delete(client, auth_headers, mock_api)
+            assert res.status_code == 200
+            assert mock_api.item_remove.call_args[0][0].access_token == "access-remove"
+            item_exists, acct, bals = self._state()
+            # Regression: item with accounts deletes without a FOREIGN KEY failure
+            assert item_exists is False
+            assert acct == {"is_active": 0, "plaid_item_id": None}
+            assert bals == 1
+        finally:
+            self._cleanup()
+
+    def test_plaid_error_changes_nothing(self, client, auth_headers):
+        import plaid
+        self._seed()
+        try:
+            mock_api = MagicMock()
+            mock_api.item_remove.side_effect = plaid.ApiException(status=500, reason="Server Error")
+            res = self._delete(client, auth_headers, mock_api)
+            assert res.status_code == 502
+            item_exists, acct, _ = self._state()
+            assert item_exists is True
+            assert acct["is_active"] == 1
+            assert acct["plaid_item_id"] is not None
+        finally:
+            self._cleanup()
+
+    def test_item_not_found_at_plaid_counts_as_removed(self, client, auth_headers):
+        import plaid
+        self._seed()
+        try:
+            mock_api = MagicMock()
+            err = plaid.ApiException(status=400, reason="Bad Request")
+            err.body = '{"error_code": "ITEM_NOT_FOUND"}'
+            mock_api.item_remove.side_effect = err
+            res = self._delete(client, auth_headers, mock_api)
+            assert res.status_code == 200
+            item_exists, acct, _ = self._state()
+            assert item_exists is False
+            assert acct["is_active"] == 0
+        finally:
+            self._cleanup()
+
+
 class TestPlaidSyncRefresh:
     """Manual /sync forces a Plaid transactions/refresh (issue #72); the
     follow-up poll passes refresh=false to avoid a second on-demand charge."""

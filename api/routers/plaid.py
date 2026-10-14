@@ -6,7 +6,6 @@ import plaid
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
-from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,7 +15,7 @@ from api.dependencies import get_current_user
 from api.database import get_db
 from api.encryption import encrypt, decrypt
 from api import sync, security_log, rate_limit
-from api.plaid_client import get_plaid_client
+from api.plaid_client import get_plaid_client, remove_item_at_plaid
 
 logger = logging.getLogger("vaultic.plaid")
 
@@ -120,7 +119,7 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
         ).fetchone() if body.institution_id else None
     if existing:
         try:
-            client.item_remove(ItemRemoveRequest(access_token=access_token))
+            remove_item_at_plaid(client, access_token)
         except plaid.ApiException as e:
             logger.error(f"Plaid item_remove for duplicate link {item_id} failed: {e}")
         name = body.institution_name or "This institution"
@@ -197,10 +196,31 @@ async def force_resync(_user: str = Depends(get_current_user)):
 
 @router.delete("/items/{item_id}")
 async def remove_item(item_id: str, _user: str = Depends(get_current_user)):
+    """Disconnect an institution (issue #77).
+
+    Removes the item at Plaid FIRST so it stops billing; if Plaid refuses,
+    nothing changes locally (the item must not vanish from Vaultic while still
+    billing). Then the accounts are deactivated and unlinked from the item —
+    history stays reachable via account_number — and the item row is deleted.
+    Unlinking is required: accounts.plaid_item_id is a foreign key, so deleting
+    the item while accounts still reference it fails.
+    """
     with get_db() as conn:
-        item = conn.execute("SELECT id FROM plaid_items WHERE item_id = ?", (item_id,)).fetchone()
-        if not item:
-            raise HTTPException(status_code=404, detail="Item not found")
-        conn.execute("UPDATE accounts SET is_active = 0 WHERE plaid_item_id = ?", (item["id"],))
-        conn.execute("DELETE FROM plaid_items WHERE item_id = ?", (item_id,))
+        item = conn.execute(
+            "SELECT id, access_token_enc FROM plaid_items WHERE item_id = ?", (item_id,)
+        ).fetchone()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    try:
+        remove_item_at_plaid(_get_client(), decrypt(item["access_token_enc"]))
+    except plaid.ApiException as e:
+        logger.error(f"Plaid item_remove error for {item_id}: {e}")
+        raise HTTPException(status_code=502, detail="Plaid could not remove this connection. Nothing was changed.")
+
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE accounts SET is_active = 0, plaid_item_id = NULL WHERE plaid_item_id = ?", (item["id"],)
+        )
+        conn.execute("DELETE FROM plaid_items WHERE id = ?", (item["id"],))
     return {"status": "removed"}
