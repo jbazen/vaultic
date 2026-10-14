@@ -886,6 +886,7 @@ export default function Accounts() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [removeError, setRemoveError] = useState("");
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [coinbaseStatus, setCoinbaseStatus] = useState(null);
   const [manualEntries, setManualEntries] = useState([]);
@@ -935,8 +936,13 @@ export default function Accounts() {
 
   async function handleRemove(itemId) {
     if (!confirm("Disconnect this institution? Account history will be preserved.")) return;
-    await removePlaidItem(itemId);
-    await load();
+    setRemoveError("");
+    try {
+      await removePlaidItem(itemId);
+      await load();
+    } catch (e) {
+      setRemoveError(e.message || "Failed to disconnect. Please try again.");
+    }
   }
 
   const grouped = accounts.reduce((acc, a) => {
@@ -1041,6 +1047,10 @@ export default function Accounts() {
           <PlaidLink onSuccess={load} />
         </div>
       </div>
+
+      {removeError && (
+        <div className="status-banner warn" role="alert" style={{ marginBottom: 16 }}>{removeError}</div>
+      )}
 
       {loading ? (
         <div style={{ color: "var(--text2)" }}>Loading…</div>

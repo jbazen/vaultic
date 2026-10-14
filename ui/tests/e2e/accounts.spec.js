@@ -192,4 +192,22 @@ test.describe("Plaid Reconnect", () => {
     await expect(page.getByText(/login expired/i)).toHaveCount(0);
     await expect(page.getByText(/hasn't synced recently/i)).toBeVisible();
   });
+
+  test("failed Disconnect shows the error instead of silently doing nothing (issue #77)", async ({ page }) => {
+    await mockAllAPIs(page);
+    await page.route("**/api/plaid/items", r =>
+      r.fulfill({ json: [{
+        id: 1, item_id: "item-chase", institution_name: "Chase",
+        last_synced_at: "2026-07-31 08:00:06", error_code: null,
+        last_error_at: null, created_at: "2019-12-01 05:13:31",
+      }] }));
+    await page.route("**/api/plaid/items/item-chase", r =>
+      r.fulfill({ status: 502, json: { detail: "Plaid could not remove this connection. Nothing was changed." } }));
+
+    await gotoAccounts(page);
+    page.once("dialog", d => d.accept());
+    await page.getByRole("button", { name: /disconnect/i }).click();
+
+    await expect(page.getByRole("alert")).toContainText("Plaid could not remove this connection");
+  });
 });
