@@ -35,8 +35,8 @@ self.addEventListener("activate", (event) => {
  */
 self.addEventListener("push", (event) => {
   let title = "Vaultic";
-  let body  = "You have transactions to review.";
-  let url   = "/review";  // opens the mobile review queue
+  let body  = "";
+  let url   = "/";
 
   if (event.data) {
     try {
@@ -70,7 +70,7 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification.data?.url || "/review";
+  const targetUrl = event.notification.data?.url || "/";
 
   event.waitUntil(
     self.clients

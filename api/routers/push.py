@@ -154,7 +154,7 @@ async def send_test_notification(_user: str = Depends(get_current_user)):
     """Send a test push notification to all active subscriptions for this user.
 
     Fires a sample notification so the user can verify their device is set up
-    correctly without waiting for a real sync to produce pending transactions.
+    correctly without waiting for a real alert.
     """
     if not is_configured():
         raise HTTPException(
@@ -181,7 +181,7 @@ async def send_test_notification(_user: str = Depends(get_current_user)):
             subscription,
             title="Vaultic — Test Notification",
             body="Push notifications are working correctly.",
-            url="/review",
+            url="/",
         )
         if ok:
             sent += 1

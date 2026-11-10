@@ -179,7 +179,7 @@ def _encrypt_payload(subscription: dict, plaintext: str) -> bytes:
 # ── Public send function ──────────────────────────────────────────────────────
 
 def send_push_notification(subscription: dict, title: str, body: str,
-                           url: str = "/review") -> bool:
+                           url: str = "/") -> bool:
     """Send one encrypted Web Push notification to a subscribed browser.
 
     Uses synchronous httpx so this can be called from the APScheduler sync
@@ -235,52 +235,6 @@ def send_push_notification(subscription: dict, title: str, body: str,
     except Exception as exc:
         logger.error(f"Push send error: {exc}")
         return False
-
-
-def notify_pending_review(count: int) -> None:
-    """Fan-out a 'transactions pending review' push to all active subscribers.
-
-    Called by sync_all() after _auto_categorize_new() so the user gets an
-    immediate notification when new transactions are ready to approve.
-
-    Subscriptions that return 410 (expired) are deactivated automatically so
-    we don't keep sending to dead endpoints.
-
-    Args:
-        count: Number of newly created pending_review assignments in this sync.
-    """
-    if count <= 0 or not is_configured():
-        return
-
-    from api.database import get_db
-
-    noun  = "transaction" if count == 1 else "transactions"
-    verb  = "needs" if count == 1 else "need"
-    title = "Vaultic — Review Needed"
-    body  = f"{count} {noun} {verb} your approval"
-
-    with get_db() as conn:
-        subs = conn.execute(
-            "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE is_active = 1"
-        ).fetchall()
-
-    expired_ids = []
-    for sub in subs:
-        subscription = {
-            "endpoint": sub["endpoint"],
-            "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
-        }
-        ok = send_push_notification(subscription, title, body, url="/review")
-        if not ok:
-            expired_ids.append(sub["id"])
-
-    if expired_ids:
-        with get_db() as conn:
-            for sid in expired_ids:
-                conn.execute(
-                    "UPDATE push_subscriptions SET is_active = 0 WHERE id = ?", (sid,)
-                )
-        logger.info(f"Deactivated {len(expired_ids)} expired push subscription(s)")
 
 
 def notify_item_disconnected(institution_name: str | None) -> None:
