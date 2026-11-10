@@ -4,7 +4,6 @@ import { isAuthed, logout } from "./api.js";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Accounts from "./pages/Accounts.jsx";
-import Transactions from "./pages/Transactions.jsx";
 import Import from "./pages/Import.jsx";
 import Settings from "./pages/Settings.jsx";
 import "./App.css";
@@ -17,7 +16,6 @@ const NAV = [
     label: "Finance", icon: "⬡",
     children: [
       { to: "/accounts",     label: "Accounts" },
-      { to: "/transactions", label: "Transactions" },
       { to: "/import",       label: "Import" },
     ],
   },
@@ -103,7 +101,6 @@ export default function App() {
         <Routes>
           <Route path="/"             element={<Dashboard />} />
           <Route path="/accounts"     element={<Accounts />} />
-          <Route path="/transactions" element={<Transactions />} />
           <Route path="/import"       element={<Import />} />
           <Route path="/settings"     element={<Settings />} />
           {/* Legacy redirects for any bookmarked or linked old routes */}

@@ -4,7 +4,7 @@ These standards apply to all contributors — human or AI. They exist to prevent
 
 ## Scope
 
-Vaultic is a net worth dashboard: Dashboard, Accounts, Import, Settings and Login, plus the data syncs behind them (Plaid, Investor360, Insperity, Voya, Coinbase, manual entries, net worth snapshots, market/news feed). Sage, Budget, Fund Financials, Taxes, Paystubs, the Document Vault and the Calendar were removed in #82. The full app is preserved at git tag `full-app-2026-11`; do not restore those features piecemeal.
+Vaultic is a net worth dashboard: Dashboard, Accounts, Import, Settings and Login, plus the data syncs behind them (Plaid, Investor360, Insperity, Voya, Coinbase, manual entries, net worth snapshots, market/news feed). Sage, Budget, Fund Financials, Taxes, Paystubs, the Document Vault, the Calendar and the standalone Transactions page were removed in #82 (Plaid transactions still sync into the `transactions` table). The full app is preserved at git tag `full-app-2026-11`; do not restore those features piecemeal.
 
 ---
 
@@ -252,12 +252,12 @@ All E2E mocks live in `ui/tests/e2e/helpers.js`.
 ```javascript
 // Good — catch-all first, then specific, then base
 await page.route("**/api/**", r => r.fulfill({ json: {} }));
-await page.route("**/api/accounts/transactions/recent*", r => r.fulfill({ json: [] }));
+await page.route("**/api/accounts/portfolio/performance*", r => r.fulfill({ json: [] }));
 await page.route("**/api/accounts", r => r.fulfill({ json: [...] }));
 
 // Bad — base route intercepts sub-routes; missing catch-all causes ECONNREFUSED
 await page.route("**/api/accounts", r => r.fulfill({ json: [...] }));
-await page.route("**/api/accounts/transactions/recent*", r => r.fulfill({ json: [] }));
+await page.route("**/api/accounts/portfolio/performance*", r => r.fulfill({ json: [] }));
 ```
 
 **Mock response formats** must match what the frontend actually expects:
@@ -272,7 +272,7 @@ r.fulfill({ json: { rates: [] } });
 **Collapsible nav groups**: If a link is inside a collapsed sidebar group, expand the group first:
 ```javascript
 await page.getByRole("button", { name: /finance/i }).click();
-await page.getByRole("link", { name: /transactions/i }).click();
+await page.getByRole("link", { name: /accounts/i }).click();
 ```
 
 ### Test coverage expectations
