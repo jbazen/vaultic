@@ -463,8 +463,8 @@ function PushNotifications() {
   return (
     <div>
       <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 16 }}>
-        Get notified on this device when transactions are synced and ready for
-        your review. Notifications are sent once per sync — no spam.
+        Get notified on this device when a bank login expires and needs to be
+        reconnected, or when Parker data hasn't synced in over a day.
       </p>
 
       {/* Status badge */}
