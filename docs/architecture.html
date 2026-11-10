@@ -179,12 +179,6 @@
         <span class="label">Browser / PWA</span>
         <span class="sub">React 18 + Vite</span>
       </div>
-      <div class="box blue" id="b-sage-panel"
-           data-tip="Floating Sage chat panel. Always visible. Hey Sage wake-word activates voice mode. Push-to-talk. Text streaming via fetch. OpenAI TTS plays audio responses at 1.2× speed.">
-        <span class="icon">🔮</span>
-        <span class="label">Sage Panel</span>
-        <span class="sub">floating chat · voice</span>
-      </div>
       <div class="box blue" id="b-plaidlink"
            data-tip="Plaid Link React component. OAuth redirect flow for Chase/Rocket/HealthEquity. Non-OAuth inline MFA for Vanguard/Voya/etc. Exchanges public_token for access_token stored encrypted at rest.">
         <span class="icon">🏦</span>
@@ -213,18 +207,12 @@
       </div>
 
       <div class="box green" id="b-fastapi"
-           data-tip="FastAPI (Python 3.12) backend. JWT auth + bcrypt. TOTP 2FA. Rate limiting. APScheduler daily 2am sync. Routes: accounts, transactions, budget, manual, pdf, net-worth, sage, coinbase, sheets.">
+           data-tip="FastAPI (Python 3.12) backend. JWT auth + bcrypt. TOTP 2FA. Rate limiting. APScheduler daily 2am sync. Routes: accounts, plaid, manual, pdf, net-worth, crypto, market, ticker-feed, investor360, insperity, voya, push.">
         <span class="icon">⚡</span>
         <span class="label">FastAPI</span>
         <span class="sub">Python 3.12 · uvicorn</span>
       </div>
 
-      <div class="box green" id="b-sage-be"
-           data-tip="Sage backend route (/api/sage/chat). Tool-use loop with Claude Haiku. Tools: get_net_worth, get_accounts, get_transactions, get_budget, get_budget_history, search_budget_history, assign_transaction, auto_assign_month, web_search (Tavily), fetch_page, get_notes, update_notes. Token overflow guard: truncates old tool_result content to 800 chars before resend.">
-        <span class="icon">🧠</span>
-        <span class="label">Sage Engine</span>
-        <span class="sub">tool-use loop · /api/sage</span>
-      </div>
 
       <div class="box green" id="b-scheduler"
            data-tip="APScheduler cron — runs daily at 2am. Triggers Plaid transaction sync (cursor-based), Coinbase balance refresh, net worth snapshot computation. Gated behind TESTING env var to prevent test hangs.">
@@ -241,7 +229,7 @@
       </div>
 
       <div class="box purple" id="b-sqlite"
-           data-tip="SQLite in WAL mode. Tables: users, plaid_items, accounts, account_balances, transactions, transaction_splits, transaction_metadata, budget_groups, budget_items, budget_history, budget_auto_rules, transaction_assignments, manual_entries, manual_holdings, manual_entry_snapshots, manual_holdings_snapshots, net_worth_snapshots. Wrapped in Litestream for continuous R2 backup.">
+           data-tip="SQLite in WAL mode. Tables: users, plaid_items, accounts, account_balances, transactions, manual_entries, manual_holdings, manual_entry_snapshots, manual_holdings_snapshots, net_worth_snapshots. Wrapped in Litestream for continuous R2 backup.">
         <span class="icon">🗄️</span>
         <span class="label">SQLite (WAL)</span>
         <span class="sub">data/vaultic.db</span>
@@ -276,12 +264,6 @@
         <span class="sub">Advanced Trade API</span>
       </div>
 
-      <div class="box yellow" id="b-anthropic-haiku"
-           data-tip="Anthropic Claude Haiku (claude-haiku-4-5-20251001). Powers Sage tool-use loop. Chosen for low latency on conversational turns. 200K context window. Token overflow guard truncates old history.">
-        <span class="icon">🤖</span>
-        <span class="label">Claude Haiku</span>
-        <span class="sub">Anthropic · Sage advisor</span>
-      </div>
 
       <div class="box yellow" id="b-anthropic-sonnet"
            data-tip="Anthropic Claude Sonnet (claude-sonnet-4-6). Powers PDF parsing — complex multi-account statement extraction. Higher accuracy than Haiku for dense financial tables. Responses can take 60–90s on large PDFs; nginx proxy_read_timeout 180s required.">
@@ -290,26 +272,14 @@
         <span class="sub">Anthropic · PDF parsing</span>
       </div>
 
-      <div class="box white" id="b-openai"
-           data-tip="OpenAI TTS API (tts-1, voice: fable). Sage voice responses. Sentences split and fetched in parallel for low latency. Playback at 1.2× speed. Falls back silently if API unavailable.">
-        <span class="icon">🔊</span>
-        <span class="label">OpenAI TTS</span>
-        <span class="sub">tts-1 · fable · 1.2×</span>
-      </div>
 
       <div class="box teal" id="b-tavily"
-           data-tip="Tavily Search API. Powers Sage's web_search tool. include_answer: true for AI-synthesized answers. Used for market data, financial news, rate lookups. TAVILY_API_KEY in server .env.">
+           data-tip="Tavily Search API. Powers the Dashboard news feed for held tickers. Results are cached. TAVILY_API_KEY in server .env.">
         <span class="icon">🔍</span>
         <span class="label">Tavily Search</span>
-        <span class="sub">web_search for Sage</span>
+        <span class="sub">Dashboard news feed</span>
       </div>
 
-      <div class="box green" id="b-gsheets"
-           data-tip="Google Sheets API (read-only). Sheet: 11-e3Jodhs8YPGZ1CvcVjou8D2GP2iXs7rWLAljf2kDw. Wife's Fund Financials tracker. 10+ years of monthly data back to Oct 2015. Publicly shared (view-only). Range selector: 6M / 1Y / 2Y / 5Y / All.">
-        <span class="icon">📊</span>
-        <span class="label">Google Sheets</span>
-        <span class="sub">Fund Financials · read-only</span>
-      </div>
 
       <div class="box purple" id="b-r2"
            data-tip="Cloudflare R2 object storage. Receives continuous WAL replication from Litestream. Bucket: vaultic-backup. 7-day retention. Used for disaster recovery — restore.sh pulls latest snapshot on fresh deploy.">
@@ -446,7 +416,6 @@
   const CONNECTIONS = [
     // User ↔ Backend
     ["b-browser",        "b-nginx",          "#388bfd", "",      "HTTPS"],
-    ["b-sage-panel",     "b-nginx",          "#388bfd", "",      "HTTPS"],
     ["b-plaidlink",      "b-nginx",          "#388bfd", "",      "HTTPS"],
     ["b-pdfui",          "b-nginx",          "#388bfd", "",      "HTTPS"],
 
@@ -454,7 +423,6 @@
     ["b-nginx",          "b-fastapi",        "#2ea043", "5,3",   "proxy"],
 
     // FastAPI internals
-    ["b-fastapi",        "b-sage-be",        "#2ea043", "5,3",   ""],
     ["b-fastapi",        "b-pdf-router",     "#2ea043", "5,3",   ""],
     ["b-fastapi",        "b-scheduler",      "#2ea043", "5,3",   ""],
     ["b-fastapi",        "b-sqlite",         "#2ea043", "5,3",   "R/W"],
@@ -462,10 +430,8 @@
     ["b-litestream",     "b-r2",             "#a371f7", "2,3",   "stream"],
     ["b-github",         "b-fastapi",        "#8b949e", "4,3",   "CI/CD deploy"],
 
-    // Sage → external AI + search
-    ["b-sage-be",        "b-anthropic-haiku","#d29922", "",      "tool-use loop"],
-    ["b-sage-be",        "b-tavily",         "#2dd4bf", "",      "web_search"],
-    ["b-sage-be",        "b-openai",         "#8b949e", "",      "TTS"],
+    // News feed
+    ["b-fastapi",        "b-tavily",         "#2dd4bf", "",      "news"],
 
     // PDF → Claude Sonnet
     ["b-pdf-router",     "b-anthropic-sonnet","#d29922","",      "parse prompt"],
@@ -489,7 +455,6 @@
     ["b-parker",         "b-pdfui",          "#8b949e", "4,3",   "PDF download"],
 
     // Google Sheets
-    ["b-fastapi",        "b-gsheets",        "#2ea043", "5,3",   "read-only"],
 
     // Manual entries → SQLite (via FastAPI)
     ["b-manual",         "b-sqlite",         "#8b949e", "4,3",   ""],
