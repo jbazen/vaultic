@@ -516,21 +516,6 @@
 
 .btn-upload:disabled { opacity: 0.7; cursor: not-allowed; }
 
-/* Purple-accent button variant (used in tax wizards) */
-.btn-purple {
-  padding: 6px 14px;
-  border-radius: 8px;
-  background: #7c3aed;
-  color: #fff;
-  border: none;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.btn-purple:disabled { opacity: 0.7; cursor: not-allowed; }
-
 /* Status banners — green (ok) / yellow (warning) */
 .status-banner {
   border-radius: 10px;
