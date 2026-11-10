@@ -2,6 +2,10 @@
 
 These standards apply to all contributors — human or AI. They exist to prevent the classes of bugs and code quality issues found during the March 2026 peer review and the April 2026 stabilization audit.
 
+## Scope
+
+Vaultic is a net worth dashboard: Dashboard, Accounts, Import, Settings and Login, plus the data syncs behind them (Plaid, Investor360, Insperity, Voya, Coinbase, manual entries, net worth snapshots, market/news feed). Sage, Budget, Fund Financials, Taxes, Paystubs, the Document Vault and the Calendar were removed in #82. The full app is preserved at git tag `full-app-2026-11`; do not restore those features piecemeal.
+
 ---
 
 ## Development Process
@@ -19,7 +23,7 @@ All work follows this process — no exceptions. This was established after a st
 7. **Run full test suite** — `pytest --ignore=tests/e2e` for unit tests, `pytest tests/e2e/` for e2e
 8. **Commit** — format: `#N - type: description (fixes #N)` referencing the GitHub Issue
 9. **Push + CI** — CI runs unit + e2e tests automatically; deploy only if both pass
-10. **Production verification** — after deploy, check: server logs (`journalctl -u vaultic-api`), web UI, net worth snapshot, Sage chat
+10. **Production verification** — after deploy, check: server logs (`journalctl -u vaultic-api`), web UI (Dashboard, Accounts), net worth snapshot, Plaid sync
 
 ### Rules:
 
@@ -34,17 +38,16 @@ All work follows this process — no exceptions. This was established after a st
 
 ```
 api/                  # FastAPI backend
-  routers/            # One file per domain (accounts, budget, tax, etc.)
-  sage_tools.py       # Sage tool dispatch functions (keep out of sage.py)
+  routers/            # One file per domain (accounts, plaid, net_worth, etc.)
+  sync.py             # Scheduled Plaid + Coinbase sync and net worth snapshot
   main.py             # App factory, middleware, lifespan
 tests/                # pytest unit tests (one test_*.py per router)
 ui/
   src/
     pages/            # Top-level route components (thin orchestrators)
     components/       # Shared + domain-grouped sub-components
-      budget/         # Budget-specific components
+      accounts/       # Accounts-page components (Investor360, Insperity, Voya)
       dashboard/      # Dashboard-specific components
-      taxes/          # Tax-specific components
     api.js            # All backend API call functions
     App.jsx           # Router + layout shell
     App.css           # Global styles + utility classes
@@ -98,7 +101,7 @@ deploy/               # Deployment configs (systemd, nginx, litestream)
 | `.th-cell.right`, `.td-cell.bold`, `.td-cell.dim`, `.td-cell.negative`, `.td-cell.positive` | Table cell modifiers |
 | `.metric-tile`, `.metric-tile .label`, `.metric-tile .value` | Dashboard metric cards |
 | `.status-banner`, `.status-banner.ok`, `.status-banner.warn` | Status banners |
-| `.btn-upload`, `.btn-purple` | Button variants |
+| `.btn-upload` | Upload button variant |
 | `.section-label`, `.sub-label` | Text label patterns |
 | `.card` | Standard card container |
 | `.form-input` | Form input styling |
@@ -163,23 +166,11 @@ background: "#1e2330"
 
 - Use consistent response format: `{"ok": True, ...}` for mutations
 
-### Sage tools
-
-- All Sage tool functions live in `api/sage_tools.py` with a `TOOL_DISPATCH` dict
-- `sage.py` calls `_call_tool()` which dispatches via the dict — keep the dispatcher under 15 lines
-- Never add tool logic directly to `sage.py`
-
 ### Error handling
 
 - Let FastAPI's built-in exception handling work — don't wrap everything in try/except
 - Use `HTTPException` with appropriate status codes
 - Only catch exceptions at system boundaries (external API calls, file I/O)
-
-### Tax year and dynamic values
-
-- Never hardcode tax years, brackets, or deduction amounts
-- Use the current year or accept year as a parameter
-- Tax brackets and standard deductions should be data-driven
 
 ---
 
@@ -206,7 +197,7 @@ useEffect(() => {
 
 ### Performance
 
-- Use `React.memo()` on components that receive stable props but re-render due to parent state changes (e.g., chat message lists)
+- Use `React.memo()` on components that receive stable props but re-render due to parent state changes (e.g., long account or holdings lists)
 - Memoize expensive computations with `useMemo`
 - Use `useCallback` for handlers passed to memoized children
 
@@ -271,11 +262,11 @@ await page.route("**/api/accounts/transactions/recent*", r => r.fulfill({ json: 
 
 **Mock response formats** must match what the frontend actually expects:
 ```javascript
-// Sage chat — frontend reads response.response, not response.reply
-r.fulfill({ json: { response: "Hello!", history: [] } });
+// Net worth — Dashboard reads the flat snapshot object, not { data: ... }
+r.fulfill({ json: { total: 250000, liquid: 50000, invested: 150000, snapped_at: "2026-03-14" } });
 
-// Sage speak — returns audio blob, not JSON
-r.fulfill({ status: 200, contentType: "audio/mpeg", body: Buffer.from([]) });
+// Market rates — frontend reads response.rates
+r.fulfill({ json: { rates: [] } });
 ```
 
 **Collapsible nav groups**: If a link is inside a collapsed sidebar group, expand the group first:
@@ -333,10 +324,8 @@ These rules come from a full security audit (March 2026). Every finding below wa
 ### Input Validation & Injection Prevention
 
 - **SQL**: Always use parameterized queries (`?` placeholders) — never f-strings or string concatenation
-- **Sage input limits**: max 10,000 chars per message, max 100 history entries (enforced in `ChatRequest` Pydantic model)
 - **Password complexity**: minimum 8 chars, must include uppercase, lowercase, and digit
 - **File uploads**: validate file types server-side — don't trust client `Content-Type`
-- **SSRF prevention**: `_is_url_safe()` in `sage.py` blocks private/internal/loopback IPs and non-http(s) schemes for Sage's `fetch_page` tool
 
 ### Error Handling & Information Disclosure
 
@@ -346,7 +335,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 
 ### Rate Limiting
 
-- **Sage**: 60 messages/hour per user (in-memory sliding window)
+- **Manual sync**: 5 syncs per 5 minutes per user (in-memory sliding window, `rate_limit.py`)
 - **Login/2FA**: 5 requests/minute via nginx rate limiting
 - **General API**: 30 requests/second via nginx
 - **Per-username rate limiting**: 20 attempts per username per 15 minutes (prevents IP rotation bypass)
