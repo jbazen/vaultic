@@ -39,15 +39,6 @@ export async function mockAllAPIs(page) {
     r.fulfill({ json: [] }));
   await page.route("**/api/market/rates*", r =>
     r.fulfill({ json: { rates: [] } }));
-
-  // ── Calendar ──
-  // Sub-routes first (specific before parameterized), then base
-  await page.route("**/api/calendar/upcoming*", r =>
-    r.fulfill({ json: [] }));
-  await page.route("**/api/calendar/seed", r =>
-    r.fulfill({ json: { ok: true, inserted: 3 } }));
-  await page.route("**/api/calendar*", r =>
-    r.fulfill({ json: [] }));
 }
 
 export async function loginMocked(page) {

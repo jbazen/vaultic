@@ -21,7 +21,6 @@ import PortfolioPerformanceCard from "../components/dashboard/PortfolioPerforman
 import { StatCard, AccountRow, ManualAccountRow } from "../components/dashboard/AccountRows.jsx";
 import { isRetirementAccount } from "../utils/accounts.js";
 import { fmt, fmtSigned, fmtDate } from "../utils/format.js";
-import CalendarSection from "../components/calendar/CalendarSection.jsx";
 import NewsFeedPanel from "../components/dashboard/NewsFeedPanel.jsx";
 import I360SyncModal from "../components/dashboard/I360SyncModal.jsx";
 import InsperitySyncModal from "../components/dashboard/InsperitySyncModal.jsx";
@@ -395,17 +394,12 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── Portfolio Performance + Calendar (side by side, equal height) ── */}
-      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "stretch", marginBottom: 20 }}>
-        {portfolioPerf.length >= 2 && (
-          <div style={{ flex: "1 1 400px", minWidth: 0, display: "flex" }}>
-            <PortfolioPerformanceCard data={portfolioPerf} />
-          </div>
-        )}
-        <div style={{ flex: "1 1 340px", minWidth: 0, display: "flex" }}>
-          <CalendarSection />
+      {/* ── Portfolio Performance ── */}
+      {portfolioPerf.length >= 2 && (
+        <div style={{ display: "flex", marginBottom: 20 }}>
+          <PortfolioPerformanceCard data={portfolioPerf} />
         </div>
-      </div>
+      )}
 
       {/* ── Market Summary ── */}
       <MarketSummaryCard />
