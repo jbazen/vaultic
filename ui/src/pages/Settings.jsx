@@ -334,7 +334,6 @@ function SecurityLog() {
     if (line.includes("LOGIN_SUCCESS") || line.includes("2FA_SUCCESS") || line.includes("TOKEN_ISSUED")) return "var(--green)";
     if (line.includes("FAILED") || line.includes("HTTP_4") || line.includes("HTTP_5") || line.includes("RATE_LIMITED")) return "var(--red)";
     if (line.includes("SYNC")) return "var(--yellow)";
-    if (line.includes("SAGE_QUERY")) return "var(--purple)";
     if (line.includes("PLAID")) return "#60a5fa";
     if (line.includes("SERVER")) return "var(--text2)";
     return "var(--text)";
@@ -678,15 +677,14 @@ const APP_COSTS = [
   { service: "Cloudflare (DNS + SSL)",    cost: "$0.00/mo",   note: "Free plan + Origin Certificate" },
   { service: "vaulticsage.com (domain)",  cost: "$0.87/mo",   note: "$10.46/yr via Cloudflare Registrar" },
   { service: "Plaid (account linking)",   cost: "~$3–5/mo",   note: "Pay-as-you-go production; billed per product per connected item" },
-  { service: "Claude Haiku (Sage AI)",    cost: "~$1–3/mo",   note: "Per-token pricing at personal use rates" },
-  { service: "OpenAI TTS (Sage voice)",   cost: "~$0.50–2/mo",note: "tts-1, fable voice; requires credits at platform.openai.com/billing" },
+  { service: "Claude (PDF import)",       cost: "~$1–3/mo",   note: "Per-token pricing; used to parse uploaded statements" },
   { service: "Tavily (web search)",       cost: "$0.00/mo",   note: "Free tier — 1,000 searches/month" },
   { service: "GitHub Actions (CI/CD)",    cost: "$0.00/mo",   note: "Free tier — 2,000 min/month" },
 ];
 
 function AppCosts() {
-  const totalLow  = 5.37;   // 0+0+0.87+3+1+0.50+0+0
-  const totalHigh = 10.87;  // 0+0+0.87+5+3+2+0+0
+  const totalLow  = 4.87;   // 0+0+0.87+3+1+0+0
+  const totalHigh = 8.87;   // 0+0+0.87+5+3+0+0
   return (
     <div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>

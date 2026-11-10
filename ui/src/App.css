@@ -406,8 +406,6 @@
   .account-balance { font-size: 14px; }
   .account-grid { columns: 1; }
 
-  /* Sage button clears mobile nav */
-  .sage-float-btn { bottom: calc(var(--mobile-nav-height) + 16px) !important; }
 }
 
 @media (max-width: 480px) {

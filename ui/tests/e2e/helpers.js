@@ -48,12 +48,6 @@ export async function mockAllAPIs(page) {
     r.fulfill({ json: { ok: true, inserted: 3 } }));
   await page.route("**/api/calendar*", r =>
     r.fulfill({ json: [] }));
-
-  // ── Sage ──
-  await page.route("**/api/sage/chat", r =>
-    r.fulfill({ json: { response: "Hello! I'm Sage, your financial assistant.", history: [] } }));
-  await page.route("**/api/sage/speak", r =>
-    r.fulfill({ status: 200, contentType: "audio/mpeg", body: Buffer.from([]) }));
 }
 
 export async function loginMocked(page) {

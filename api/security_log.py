@@ -52,10 +52,6 @@ def log_plaid_event(msg: str):
     _logger.info(f"PLAID  {msg}")
 
 
-def log_sage_query(username: str, preview: str):
-    _logger.info(f"SAGE_QUERY  user={username}  msg={preview[:60]!r}")
-
-
 def log_token_event(ip: str, username: str, event: str):
     _logger.info(f"TOKEN_{event.upper()}  ip={ip}  user={username}")
 
