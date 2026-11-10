@@ -5,7 +5,7 @@ import App from "./App.jsx";
 import "./index.css";
 
 // Listen for navigation messages from the service worker.
-// The notificationclick handler sends {type:"NAVIGATE", url:"/review"} via
+// The notificationclick handler sends {type:"NAVIGATE", url} via
 // postMessage because client.navigate() is not supported on iOS Safari PWAs.
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.addEventListener("message", (event) => {

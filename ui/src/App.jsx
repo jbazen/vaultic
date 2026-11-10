@@ -1,21 +1,6 @@
-import { useState, useEffect, Component } from "react";
+import { useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
-
-class ReviewErrorBoundary extends Component {
-  constructor(props) { super(props); this.state = { error: null }; }
-  static getDerivedStateFromError(err) { return { error: err }; }
-  render() {
-    if (this.state.error) {
-      return <div style={{ position:"fixed", inset:0, background:"var(--bg)", color:"var(--text)", padding:20, fontSize:13, overflow:"auto", zIndex:99 }}>
-        <div style={{ color:"var(--red)", fontWeight:700, marginBottom:8, fontSize:16 }}>Something went wrong</div>
-        <p>Please refresh the page to try again.</p>
-      </div>;
-    }
-    return this.props.children;
-  }
-}
 import { isAuthed, logout } from "./api.js";
-import Review from "./pages/Review.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Accounts from "./pages/Accounts.jsx";
@@ -89,7 +74,6 @@ function NavGroup({ item }) {
 
 // ── App shell ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const location = useLocation();
   const [authed, setAuthed] = useState(isAuthed());
 
   // Hooks must all be called before any conditional return (Rules of Hooks).
@@ -98,12 +82,6 @@ export default function App() {
     window.addEventListener("auth:logout", handler);
     return () => window.removeEventListener("auth:logout", handler);
   }, []);
-
-  // Render the Review page completely outside the auth shell so push notification
-  // taps always land on a working page — it handles its own auth via device token.
-  if (location.pathname === "/review") {
-    return <ReviewErrorBoundary><Review /></ReviewErrorBoundary>;
-  }
 
   if (!authed) {
     return <Login onLogin={() => setAuthed(true)} />;

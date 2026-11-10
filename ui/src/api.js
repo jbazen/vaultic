@@ -570,11 +570,6 @@ export async function getUnassignedTransactions(month) {
   const res = await apiFetch(`/api/budget/unassigned/${month}`);
   return res.json();
 }
-// All unassigned transactions across recent months — used by the Review Queue.
-export async function getAllUnassignedTransactions() {
-  const res = await apiFetch("/api/budget/unassigned");
-  return res.json();
-}
 export async function getAssignedTransactions(month) {
   const res = await apiFetch(`/api/budget/assigned/${month}`);
   return res.json();
@@ -602,13 +597,6 @@ export async function autoAssignDebug(month) {
 /** Fetch transactions Sage auto-categorized during sync that need approval. */
 export async function getPendingReviewTransactions(month) {
   const res = await apiFetch(`/api/budget/pending-review/${month}`);
-  return res.json();
-}
-
-/** Fetch ALL pending_review transactions across every month — used by the
- *  mobile Review Queue page (/review) so nothing is missed. */
-export async function getAllPendingReview() {
-  const res = await apiFetch("/api/budget/pending-review");
   return res.json();
 }
 
@@ -793,13 +781,7 @@ export async function subscribePush() {
       auth:     json.keys.auth,
     }),
   });
-  const data = await res.json();
-
-  // Store the device_token so the Review page can silently re-authenticate
-  // after the normal JWT expires, without requiring a manual login.
-  if (data.device_token) {
-    localStorage.setItem("vaultic_device_token", data.device_token);
-  }
+  await res.json();
 
   return subscription;
 }
@@ -1021,33 +1003,6 @@ export async function getMarketRates() {
   const res = await apiFetch("/api/market/rates");
   return res.json(); // { rates: [{label, value, source}], cached }
 }
-
-/**
- * Exchange the stored device_token for a fresh JWT.
- *
- * Called by the Review page when no valid JWT is present (e.g. after the
- * 24-hour token expires). Returns true if a new JWT was successfully issued
- * and stored, false if the device token is missing or invalid.
- */
-export async function deviceAuth() {
-  const deviceToken = localStorage.getItem("vaultic_device_token");
-  if (!deviceToken) return false;
-
-  try {
-    const res = await fetch("/api/push/device-auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device_token: deviceToken }),
-    });
-    if (!res.ok) return false;
-    const { token } = await res.json();
-    setToken(token);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 
 // ── Financial Calendar ─────────────────────────────────────────────────────────
 export async function getUpcomingEvents(days = 14) {
