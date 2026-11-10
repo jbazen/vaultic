@@ -239,11 +239,6 @@ export async function getTransactions(accountId, limit = 50, offset = 0) {
   return res.json();
 }
 
-export async function getRecentTransactions(limit = 50) {
-  const res = await apiFetch(`/api/accounts/transactions/recent?limit=${limit}`);
-  return res.json();
-}
-
 // --- Plaid ---
 export async function createLinkToken() {
   const res = await apiFetch("/api/plaid/link-token", { method: "POST" });

@@ -133,23 +133,3 @@ export function fmtAxisDate(s, days) {
     return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
 }
-
-/**
- * Format amount with sign and color for transaction display.
- * Plaid convention: positive = money out (debit), negative = money in (credit).
- * @param {number|null} v
- * @returns {{ text: string, color: string }}
- */
-export function fmtAmount(v) {
-  const abs = new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Math.abs(v ?? 0));
-  const isDebit = (v ?? 0) >= 0;
-  return {
-    text: (isDebit ? "-" : "+") + abs,
-    color: isDebit ? "#f87171" : "#34d399",
-  };
-}

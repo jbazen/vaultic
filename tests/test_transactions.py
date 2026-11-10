@@ -102,14 +102,6 @@ class TestTransactions:
         assert res.status_code == 200
         assert len(res.json()) <= 1
 
-    def test_recent_transactions_requires_auth(self, client):
-        res = client.get("/api/accounts/transactions/recent")
-        assert res.status_code == 401
-
-    def test_recent_transactions_returns_list(self, client, auth_headers):
-        res = client.get("/api/accounts/transactions/recent", headers=auth_headers)
-        assert res.status_code == 200
-        assert isinstance(res.json(), list)
 
 
 class TestAccountRename:

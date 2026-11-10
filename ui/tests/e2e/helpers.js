@@ -25,8 +25,6 @@ export async function mockAllAPIs(page) {
     r.fulfill({ json: [] }));
 
   // ── Accounts (sub-routes first, then base) ──
-  await page.route("**/api/accounts/transactions/recent*", r =>
-    r.fulfill({ json: [] }));
   await page.route("**/api/accounts/portfolio/performance*", r =>
     r.fulfill({ json: [] }));
   await page.route("**/api/accounts", r =>

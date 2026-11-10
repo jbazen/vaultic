@@ -150,31 +150,6 @@ async def update_account_notes(
     return {"notes": notes or None}
 
 
-@router.get("/transactions/recent")
-async def recent_transactions(
-    limit: int = Query(default=50, le=500),
-    _user: str = Depends(get_current_user),
-):
-    with get_db() as conn:
-        rows = conn.execute("""
-            SELECT
-                t.transaction_id, t.amount, t.date, t.name,
-                t.merchant_name, t.category, t.pending,
-                a.name AS account_name, a.display_name, a.mask, a.institution_name
-            FROM transactions t
-            JOIN accounts a ON a.account_number = t.account_number
-            WHERE a.is_active = 1
-            ORDER BY t.date DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
-    result = []
-    for row in rows:
-        r = dict(row)
-        r["account_label"] = _display(r["account_name"], r["display_name"], r["mask"])
-        result.append(r)
-    return result
-
-
 @router.get("/portfolio/performance")
 async def portfolio_performance(
     days: int = Query(default=365, le=1825),

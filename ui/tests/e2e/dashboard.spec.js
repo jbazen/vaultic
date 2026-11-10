@@ -28,11 +28,11 @@ test.describe("Dashboard", () => {
     await expect(page).toHaveURL(/settings/);
   });
 
-  test("navigation to transactions works", async ({ page }) => {
-    // Transactions is inside the collapsed "Finance" nav group — expand it first
+  test("navigation to accounts works", async ({ page }) => {
+    // Accounts is inside the collapsed "Finance" nav group — expand it first
     await page.getByRole("button", { name: /finance/i }).click();
-    await page.getByRole("link", { name: /transactions/i }).click();
-    await expect(page).toHaveURL(/transactions/);
+    await page.getByRole("link", { name: /accounts/i }).click();
+    await expect(page).toHaveURL(/accounts/);
   });
 
   test("navigation back to dashboard works", async ({ page }) => {

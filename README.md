@@ -4,7 +4,7 @@
 
 Vaultic is a self-hosted personal finance dashboard that aggregates all your accounts in one place — bank accounts, investments, retirement, crypto, mortgage, and manually tracked assets — on one dashboard with net worth history, allocation, market data and news.
 
-> In November 2026 (#82) Vaultic was trimmed to the dashboard and the syncs behind it. Sage, Budget, Fund Financials, Taxes, Paystubs, the Document Vault and the Calendar were removed. The full app is preserved at git tag `full-app-2026-11`.
+> In November 2026 (#82) Vaultic was trimmed to the dashboard and the syncs behind it. Sage, Budget, Fund Financials, Taxes, Paystubs, the Document Vault, the Calendar and the standalone Transactions page were removed. The full app is preserved at git tag `full-app-2026-11`.
 
 ---
 
@@ -109,7 +109,6 @@ vaultic/
 │   │   │   ├── Login.jsx        # Two-step login: credentials → 2FA code
 │   │   │   ├── Dashboard.jsx    # Master view: net worth, accounts, charts
 │   │   │   ├── Accounts.jsx     # Account list with balance history charts
-│   │   │   ├── Transactions.jsx # Transaction browser
 │   │   │   ├── Import.jsx       # CSV/PDF import
 │   │   │   └── Settings.jsx     # Password, 2FA, user management, security log
 │   │   └── components/
@@ -473,7 +472,6 @@ All endpoints except `/api/auth/login`, `/api/auth/verify-2fa`, and `/api/health
 | GET | `/` | All active accounts with latest balances |
 | GET | `/{id}/balances?days=90` | Balance history for one account |
 | GET | `/{id}/transactions?limit=50&offset=0` | Transactions for one account |
-| GET | `/transactions/recent?limit=50` | Recent transactions across all accounts |
 | PATCH | `/{id}/rename` | Set display name |
 | PATCH | `/{id}/notes` | Save custom note (max 200 chars) |
 | GET | `/institutions/order?page=dashboard\|accounts` | Saved institution order for a page |
