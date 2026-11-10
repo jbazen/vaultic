@@ -562,66 +562,6 @@ export async function sendTestPush() {
   return res.json();
 }
 
-// ── Document Vault ────────────────────────────────────────────────────────────
-export async function getVaultYears() {
-  const res = await apiFetch("/api/vault/years");
-  return res.json();
-}
-
-export async function getVaultDocuments(year) {
-  const res = await apiFetch(`/api/vault/documents/${year}`);
-  return res.json();
-}
-
-export async function getVaultChecklist(year) {
-  const res = await apiFetch(`/api/vault/checklist/${year}`);
-  return res.json();
-}
-
-export async function getDeductionTracker(year) {
-  const res = await apiFetch(`/api/vault/deductions/${year}`);
-  return res.json();
-}
-
-export async function uploadToVault(file, year, category, issuer, description, autoRename = false) {
-  const token = localStorage.getItem("vaultic_token");
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("year", year || 0);
-  formData.append("category", category || "other");
-  if (issuer) formData.append("issuer", issuer);
-  if (description) formData.append("description", description);
-  formData.append("auto_parse", autoRename ? "true" : "false");
-  const res = await fetch("/api/vault/upload", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return res.json();
-}
-
-export async function downloadVaultDoc(id, filename) {
-  const token = localStorage.getItem("vaultic_token");
-  const res = await fetch(`/api/vault/download/${id}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!res.ok) throw new Error(`Download failed (${res.status})`);
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename || "document.pdf";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export async function deleteVaultDoc(id) {
-  const res = await apiFetch(`/api/vault/documents/${id}`, { method: "DELETE" });
-  return res.json();
-}
-
-
 // ── Market Rates ──────────────────────────────────────────────────────────────
 export async function getMarketRates() {
   const res = await apiFetch("/api/market/rates");
