@@ -6,7 +6,6 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Accounts from "./pages/Accounts.jsx";
 import Transactions from "./pages/Transactions.jsx";
 import Import from "./pages/Import.jsx";
-import Documents from "./pages/Documents.jsx";
 import Settings from "./pages/Settings.jsx";
 import "./App.css";
 
@@ -20,12 +19,6 @@ const NAV = [
       { to: "/accounts",     label: "Accounts" },
       { to: "/transactions", label: "Transactions" },
       { to: "/import",       label: "Import" },
-    ],
-  },
-  {
-    label: "Taxes", icon: "⊞",
-    children: [
-      { to: "/documents", label: "Document Vault" },
     ],
   },
   { to: "/settings", label: "Settings", icon: "⚙" },
@@ -112,7 +105,6 @@ export default function App() {
           <Route path="/accounts"     element={<Accounts />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/import"       element={<Import />} />
-          <Route path="/documents"    element={<Documents />} />
           <Route path="/settings"     element={<Settings />} />
           {/* Legacy redirects for any bookmarked or linked old routes */}
           <Route path="/manual"       element={<Navigate to="/import" replace />} />
