@@ -6,7 +6,6 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Accounts from "./pages/Accounts.jsx";
 import Transactions from "./pages/Transactions.jsx";
 import Import from "./pages/Import.jsx";
-import Budget from "./pages/Budget.jsx";
 import FundFinancials from "./pages/FundFinancials.jsx";
 import Taxes from "./pages/Taxes.jsx";
 import Documents from "./pages/Documents.jsx";
@@ -28,7 +27,6 @@ const NAV = [
   {
     label: "Budget", icon: "≡",
     children: [
-      { to: "/budget", label: "Monthly Budget" },
       { to: "/funds",  label: "Fund Financials" },
     ],
   },
@@ -123,7 +121,6 @@ export default function App() {
           <Route path="/accounts"     element={<Accounts />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/import"       element={<Import />} />
-          <Route path="/budget"       element={<Budget />} />
           <Route path="/funds"        element={<FundFinancials />} />
           <Route path="/taxes"        element={<Taxes />} />
           <Route path="/documents"    element={<Documents />} />
@@ -140,7 +137,6 @@ export default function App() {
         {[
           { to: "/",            label: "Dashboard", icon: "◈", end: true },
           { to: "/accounts",    label: "Accounts",  icon: "⬡" },
-          { to: "/budget",      label: "Budget",    icon: "≡" },
           { to: "/import",      label: "Import",    icon: "📄" },
           { to: "/settings",    label: "Settings",  icon: "⚙" },
         ].map(({ to, label, icon, end }) => (
