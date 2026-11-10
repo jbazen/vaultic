@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.dependencies import get_current_user, get_client_ip
-from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, funds, sheet, push, tax, paystubs, vault, market, calendar, crypto_gains, ticker_feed, investor360, insperity, voya
+from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, push, tax, paystubs, vault, market, calendar, crypto_gains, ticker_feed, investor360, insperity, voya
 from api import security_log
 
 logging.basicConfig(level=logging.INFO)
@@ -149,8 +149,6 @@ app.include_router(net_worth.router, dependencies=[Depends(get_current_user)])
 app.include_router(manual.router, dependencies=[Depends(get_current_user)])
 app.include_router(pdf.router, dependencies=[Depends(get_current_user)])
 app.include_router(crypto.router, dependencies=[Depends(get_current_user)])
-app.include_router(funds.router, dependencies=[Depends(get_current_user)])
-app.include_router(sheet.router, dependencies=[Depends(get_current_user)])
 # Push router is registered without a global auth dependency because
 # GET /api/push/vapid-public-key is intentionally public (needed pre-login).
 # Auth is enforced per-endpoint inside the push router.

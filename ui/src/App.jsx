@@ -6,7 +6,6 @@ import Dashboard from "./pages/Dashboard.jsx";
 import Accounts from "./pages/Accounts.jsx";
 import Transactions from "./pages/Transactions.jsx";
 import Import from "./pages/Import.jsx";
-import FundFinancials from "./pages/FundFinancials.jsx";
 import Taxes from "./pages/Taxes.jsx";
 import Documents from "./pages/Documents.jsx";
 import Settings from "./pages/Settings.jsx";
@@ -22,12 +21,6 @@ const NAV = [
       { to: "/accounts",     label: "Accounts" },
       { to: "/transactions", label: "Transactions" },
       { to: "/import",       label: "Import" },
-    ],
-  },
-  {
-    label: "Budget", icon: "≡",
-    children: [
-      { to: "/funds",  label: "Fund Financials" },
     ],
   },
   {
@@ -121,7 +114,6 @@ export default function App() {
           <Route path="/accounts"     element={<Accounts />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/import"       element={<Import />} />
-          <Route path="/funds"        element={<FundFinancials />} />
           <Route path="/taxes"        element={<Taxes />} />
           <Route path="/documents"    element={<Documents />} />
           <Route path="/settings"     element={<Settings />} />

@@ -500,40 +500,6 @@ export async function getManualEntryHistory(entryId, days = 1825) {
   return res.json();
 }
 
-// ── Fund Financials ───────────────────────────────────────────────────────────
-export async function getFunds() {
-  const res = await apiFetch("/api/funds");
-  return res.json();
-}
-export async function createFund(data) {
-  const res = await apiFetch("/api/funds", { method: "POST", body: JSON.stringify(data) });
-  return res.json();
-}
-export async function updateFund(id, data) {
-  const res = await apiFetch(`/api/funds/${id}`, { method: "PATCH", body: JSON.stringify(data) });
-  return res.json();
-}
-export async function deleteFund(id) {
-  const res = await apiFetch(`/api/funds/${id}`, { method: "DELETE" });
-  return res.json();
-}
-export async function getFundTransactions(id) {
-  const res = await apiFetch(`/api/funds/${id}/transactions`);
-  return res.json();
-}
-export async function addFundTransaction(id, data) {
-  const res = await apiFetch(`/api/funds/${id}/transactions`, { method: "POST", body: JSON.stringify(data) });
-  return res.json();
-}
-export async function deleteFundTransaction(id) {
-  const res = await apiFetch(`/api/funds/transactions/${id}`, { method: "DELETE" });
-  return res.json();
-}
-export async function getSheetFundFinancials(limit = 6) {
-  const res = await apiFetch(`/api/sheet/fund-financials?limit=${limit}`);
-  return res.json();
-}
-
 // Toggles whether a manual entry is excluded from the net worth total.
 // Useful when a PDF import creates both an "Overall Portfolio" summary entry
 // and individual per-account entries — exclude the summary to avoid double-counting.
