@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.dependencies import get_current_user, get_client_ip
-from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, push, tax, paystubs, vault, market, calendar, crypto_gains, ticker_feed, investor360, insperity, voya
+from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, push, vault, market, calendar, crypto_gains, ticker_feed, investor360, insperity, voya
 from api import security_log
 
 logging.basicConfig(level=logging.INFO)
@@ -153,8 +153,6 @@ app.include_router(crypto.router, dependencies=[Depends(get_current_user)])
 # GET /api/push/vapid-public-key is intentionally public (needed pre-login).
 # Auth is enforced per-endpoint inside the push router.
 app.include_router(push.router)
-app.include_router(tax.router, prefix="/api/tax", dependencies=[Depends(get_current_user)])
-app.include_router(paystubs.router, prefix="/api/paystubs", dependencies=[Depends(get_current_user)])
 app.include_router(vault.router, prefix="/api/vault", dependencies=[Depends(get_current_user)])
 app.include_router(market.router, prefix="/api/market", dependencies=[Depends(get_current_user)])
 app.include_router(calendar.router, dependencies=[Depends(get_current_user)])
