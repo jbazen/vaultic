@@ -366,7 +366,7 @@ function PDFTab() {
           <>
             <div style={{ fontSize: 40, marginBottom: 12 }}>⏳</div>
             <div style={{ fontWeight: 600, color: "var(--text)" }}>Extracting and parsing PDF…</div>
-            <div style={{ color: "var(--text2)", fontSize: 13, marginTop: 6 }}>Sage is reading your statement</div>
+            <div style={{ color: "var(--text2)", fontSize: 13, marginTop: 6 }}>Reading your statement</div>
           </>
         ) : (
           <>
@@ -390,7 +390,7 @@ function PDFTab() {
           <li>Use the most recent statement PDF from your investment portal</li>
           <li>Investor360 PDFs: download the "Portfolio Summary" or "Account Statement"</li>
           <li>Text-based PDFs work best — scanned image PDFs are not yet supported</li>
-          <li>Sage will extract account names, types, and balances automatically</li>
+          <li>Account names, types, and balances are extracted automatically</li>
           <li>You'll review everything before saving</li>
           <li>Upload past statements to build a performance history for each account</li>
         </ul>

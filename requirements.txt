@@ -5,15 +5,11 @@ PyJWT==2.12.1
 bcrypt==5.0.0
 cryptography==46.0.5
 anthropic==0.84.0
-openai==2.28.0
 pyotp==2.9.0
 pdfplumber==0.11.9
 python-multipart==0.0.22
 qrcode==8.2
 plaid-python==38.4.0
-python-docx>=1.1.0
-openpyxl>=3.1.0
-PyYAML==6.0.3
 APScheduler==3.11.2
 httpx==0.28.1
 setuptools==82.0.1

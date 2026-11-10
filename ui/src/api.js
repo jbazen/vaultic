@@ -293,55 +293,6 @@ export async function removePlaidItem(itemId) {
   return res.json();
 }
 
-// --- Sage ---
-export async function sageChat(message, history = [], attachments = []) {
-  const res = await apiFetch("/api/sage/chat", {
-    method: "POST",
-    body: JSON.stringify({ message, history, attachments }),
-  });
-  return res.json();
-}
-
-export async function sageProcessFile(file) {
-  const token = getToken();
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch("/api/sage/process-file", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: form,
-  });
-  if (res.status === 401) { clearToken(); window.dispatchEvent(new Event("auth:logout")); throw new Error("Session expired"); }
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "File processing failed"); }
-  return res.json();
-}
-
-export async function sageTranscribe(audioBlob) {
-  const token = getToken();
-  const form = new FormData();
-  form.append("file", audioBlob, "audio.webm");
-  const res = await fetch("/api/sage/transcribe", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: form,
-  });
-  if (res.status === 401) { clearToken(); window.dispatchEvent(new Event("auth:logout")); throw new Error("Session expired"); }
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Transcription failed"); }
-  return res.json(); // { text: "..." }
-}
-
-export async function sageSpeak(text) {
-  const res = await apiFetch("/api/sage/speak", {
-    method: "POST",
-    body: JSON.stringify({ text }),
-  });
-  // The endpoint streams an MP3 — collect the full blob then create an object URL
-  // so the browser can play it via new Audio(url). The caller is responsible for
-  // calling URL.revokeObjectURL(url) after playback to release the memory.
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
-}
-
 // --- Account rename ---
 export async function renameAccount(accountId, displayName) {
   const res = await apiFetch(`/api/accounts/${accountId}/rename`, {

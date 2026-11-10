@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
 # load_dotenv() MUST be called before any other import that reads os.environ.
-# Several modules (sage.py, routers/sage.py, auth.py) call os.environ.get() at
+# Several modules (auth.py, the routers) call os.environ.get() at
 # module-load time or at the top of functions that run during startup. If
 # load_dotenv() were called after those imports, the .env values would already
 # be missing and the app would silently fall back to empty strings (no API keys).
@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.dependencies import get_current_user, get_client_ip
-from api.routers import auth, plaid, accounts, net_worth, manual, sage, pdf, crypto, budget, funds, sheet, push, tax, paystubs, vault, market, calendar, crypto_gains, ticker_feed, investor360, insperity, voya
+from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, budget, funds, sheet, push, tax, paystubs, vault, market, calendar, crypto_gains, ticker_feed, investor360, insperity, voya
 from api import security_log
 
 logging.basicConfig(level=logging.INFO)
@@ -147,7 +147,6 @@ app.include_router(plaid.router, dependencies=[Depends(get_current_user)])
 app.include_router(accounts.router, dependencies=[Depends(get_current_user)])
 app.include_router(net_worth.router, dependencies=[Depends(get_current_user)])
 app.include_router(manual.router, dependencies=[Depends(get_current_user)])
-app.include_router(sage.router, dependencies=[Depends(get_current_user)])
 app.include_router(pdf.router, dependencies=[Depends(get_current_user)])
 app.include_router(crypto.router, dependencies=[Depends(get_current_user)])
 app.include_router(budget.router, dependencies=[Depends(get_current_user)])

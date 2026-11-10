@@ -1,7 +1,7 @@
 {
   "name": "Vaultic",
   "short_name": "Vaultic",
-  "description": "Personal financial command center powered by Sage",
+  "description": "Personal net worth dashboard",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f1117",

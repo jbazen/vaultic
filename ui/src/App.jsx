@@ -26,7 +26,6 @@ import FundFinancials from "./pages/FundFinancials.jsx";
 import Taxes from "./pages/Taxes.jsx";
 import Documents from "./pages/Documents.jsx";
 import Settings from "./pages/Settings.jsx";
-import SageChat from "./components/SageChat.jsx";
 import "./App.css";
 
 // ── Navigation structure ──────────────────────────────────────────────────────
@@ -119,7 +118,6 @@ export default function App() {
             <img src="/favicon.png" alt="" style={{ width: 42, height: 42, objectFit: "contain" }} />
             <h1>Vaultic</h1>
           </div>
-          <span>Powered by Sage</span>
         </div>
 
         <nav className="sidebar-nav">
@@ -175,8 +173,6 @@ export default function App() {
         ))}
       </nav>
 
-      {/* Sage — always present, accessible from any page */}
-      <SageChat />
     </div>
   );
 }
