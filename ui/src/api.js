@@ -416,41 +416,6 @@ export async function syncCoinbase() {
   return res.json();
 }
 
-// Fetch trade fills from Coinbase and store locally (idempotent)
-export async function syncCryptoTrades() {
-  const res = await apiFetch("/api/crypto/sync-trades", { method: "POST" });
-  return res.json();
-}
-
-// List stored crypto trades with optional date filter
-export async function getCryptoTrades(startDate, endDate, limit = 200) {
-  let url = `/api/crypto/trades?limit=${limit}`;
-  if (startDate) url += `&start_date=${startDate}`;
-  if (endDate) url += `&end_date=${endDate}`;
-  const res = await apiFetch(url);
-  return res.json();
-}
-
-// Recompute FIFO cost basis lots and capital gains from stored trades
-export async function calculateCryptoGains() {
-  const res = await apiFetch("/api/crypto/calculate-gains", { method: "POST" });
-  return res.json();
-}
-
-// Get realized crypto gains/losses for a tax year with short/long term breakdown
-export async function getCryptoGains(year) {
-  const res = await apiFetch(`/api/crypto/gains/${year}`);
-  return res.json();
-}
-
-// List all FIFO cost basis lots, optionally filtered by currency
-export async function getCryptoLots(currency) {
-  let url = "/api/crypto/lots";
-  if (currency) url += `?currency=${encodeURIComponent(currency)}`;
-  const res = await apiFetch(url);
-  return res.json();
-}
-
 // --- Plaid investment data ---
 // Fetches current holdings snapshot for one investment account, joined with security
 // metadata (name, ticker, type) and computed gain/loss fields.
@@ -597,35 +562,6 @@ export async function sendTestPush() {
   return res.json();
 }
 
-// ─── Tax ──────────────────────────────────────────────────────────────────────
-export async function getTaxReturns() {
-  const res = await apiFetch("/api/tax/returns");
-  return res.json();
-}
-
-export async function getTaxReturn(year) {
-  const res = await apiFetch(`/api/tax/returns/${year}`);
-  return res.json();
-}
-
-export async function getTaxSummary() {
-  const res = await apiFetch("/api/tax/summary");
-  return res.json();
-}
-
-export async function uploadTaxPdf(file) {
-  const token = localStorage.getItem("vaultic_token");
-  const formData = new FormData();
-  formData.append("file", file);
-  const res = await fetch("/api/tax/parse-pdf", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return res.json();
-}
-
 // ── Document Vault ────────────────────────────────────────────────────────────
 export async function getVaultYears() {
   const res = await apiFetch("/api/vault/years");
@@ -685,99 +621,6 @@ export async function deleteVaultDoc(id) {
   return res.json();
 }
 
-export async function uploadTaxDoc(file) {
-  const token = localStorage.getItem("vaultic_token");
-  const formData = new FormData();
-  formData.append("file", file);
-  const res = await fetch("/api/tax/docs/upload", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return res.json();
-}
-
-export async function getTaxDocs(year) {
-  const res = await apiFetch(`/api/tax/docs/${year}`);
-  return res.json();
-}
-
-export async function deleteTaxDoc(id) {
-  const res = await apiFetch(`/api/tax/docs/${id}`, { method: "DELETE" });
-  return res.json();
-}
-
-export async function getEstimatedPayments(year, otherIncome = 0) {
-  const res = await apiFetch(`/api/tax/estimated-payments/${year}?other_income=${otherIncome}`);
-  return res.json();
-}
-
-export async function getDraftReturn(year) {
-  const res = await apiFetch(`/api/tax/draft/${year}`);
-  return res.json();
-}
-
-export async function getTaxProjection(year) {
-  const res = await apiFetch(`/api/tax/projection/${year}`);
-  return res.json();
-}
-
-export async function getTaxChecklist(year) {
-  const res = await apiFetch(`/api/tax/checklist/${year}`);
-  return res.json();
-}
-
-export async function getW4s() {
-  const res = await apiFetch("/api/tax/w4s");
-  return res.json();
-}
-
-export async function getW4WizardPrefill() {
-  const res = await apiFetch("/api/tax/w4-wizard/prefill");
-  return res.json();
-}
-
-export async function runW4Wizard(input) {
-  const res = await apiFetch("/api/tax/w4-wizard", { method: "POST", body: JSON.stringify(input) });
-  return res.json();
-}
-
-export async function uploadW4(file) {
-  const token = localStorage.getItem("vaultic_token");
-  const formData = new FormData();
-  formData.append("file", file);
-  const res = await fetch("/api/tax/upload-w4", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return res.json();
-}
-
-export async function getPaystubs() {
-  const res = await apiFetch("/api/paystubs");
-  return res.json();
-}
-
-export async function getPaystubsYtd() {
-  const res = await apiFetch("/api/paystubs/ytd");
-  return res.json();
-}
-
-export async function uploadPaystub(file) {
-  const token = localStorage.getItem("vaultic_token");
-  const formData = new FormData();
-  formData.append("file", file);
-  const res = await fetch("/api/paystubs/upload", {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-    body: formData,
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  return res.json();
-}
 
 // ── Market Rates ──────────────────────────────────────────────────────────────
 export async function getMarketRates() {
