@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.dependencies import get_current_user, get_client_ip
-from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, push, market, crypto_gains, ticker_feed, investor360, insperity, voya
+from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, push, market, ticker_feed, investor360, insperity, voya
 from api import security_log
 
 logging.basicConfig(level=logging.INFO)
@@ -154,7 +154,6 @@ app.include_router(crypto.router, dependencies=[Depends(get_current_user)])
 # Auth is enforced per-endpoint inside the push router.
 app.include_router(push.router)
 app.include_router(market.router, prefix="/api/market", dependencies=[Depends(get_current_user)])
-app.include_router(crypto_gains.router, dependencies=[Depends(get_current_user)])
 app.include_router(ticker_feed.router, dependencies=[Depends(get_current_user)])
 app.include_router(investor360.router)
 app.include_router(insperity.router)
