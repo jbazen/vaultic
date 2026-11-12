@@ -95,7 +95,6 @@ vaultic/
 │       ├── push.py          # /api/push/* — push notification subscriptions
 │       ├── investor360.py   # /api/investor360/* — Investor360 sync, snapshot migration
 │       ├── ticker_feed.py   # /api/ticker-feed/* — personalized price quotes, financial news
-│       ├── crypto_gains.py  # /api/crypto/* — FIFO capital gains, trade sync, lots
 │       ├── pdf.py           # /api/pdf/* — PDF ingestion (Sonnet fallback), 4-tier matching
 │       └── pdf_nfs.py       # /api/pdf/nfs — deterministic NFS/Commonwealth parser ($0 cost)
 ├── ui/
@@ -135,7 +134,6 @@ vaultic/
 │   ├── test_pdf.py          # PDF ingestion, 4-tier matching, historical detection
 │   ├── test_pdf_nfs.py      # NFS deterministic parser, masked account rejection
 │   ├── test_investor360.py  # I360 sync, account mapping
-│   ├── test_crypto_gains.py # FIFO lot matching, trade sync, gains calculation
 │   ├── test_auth_refresh.py # Refresh tokens, mobile sessions
 │   ├── test_plaid.py        # Plaid link, token exchange
 │   ├── test_ticker_feed.py  # Ticker quotes, news feed
@@ -390,23 +388,6 @@ Per-holding detail rows linked to a `manual_entries` row. Populated from PDF imp
 | gain_loss_pct | REAL | |
 | notes | TEXT | |
 
-### `crypto_trades`
-Coinbase trade history synced via Advanced Trade API fills endpoint.
-
-| Column | Type | Notes |
-|---|---|---|
-| trade_id | TEXT UNIQUE | Coinbase fill ID |
-| order_id | TEXT | Parent order |
-| product_id | TEXT | e.g. "BTC-USD" |
-| side | TEXT | BUY or SELL |
-| size | REAL | Quantity traded |
-| price | REAL | Price per unit |
-| fee | REAL | Trading fee |
-| trade_time | TEXT | ISO datetime |
-
-### `crypto_lots` / `crypto_gains`
-FIFO cost basis tracking. `crypto_lots` tracks acquisition lots (quantity_remaining decreases on sell). `crypto_gains` records realized gain/loss events with short_term/long_term classification (>365 days).
-
 ### `ticker_quotes` / `news_articles`
 Cached market quotes and Tavily news articles for the personalized ticker feed. Quotes keyed by symbol (UNIQUE), articles deduplicated by URL.
 
@@ -522,15 +503,6 @@ Route ordering matters for the reorder endpoints — specific paths like `/insti
 | GET | `/news` | Cached financial news articles |
 | POST | `/news/refresh` | Refresh news from Tavily |
 | GET | `/summary` | Combined quotes + news summary |
-
-### Crypto Gains — `/api/crypto`
-| Method | Path | Description |
-|---|---|---|
-| POST | `/sync-trades` | Sync Coinbase trade history via fills API |
-| GET | `/trades` | List all synced trades |
-| POST | `/calculate-gains` | Run FIFO lot matching and calculate gains |
-| GET | `/gains/{year}` | Realized gains/losses for a year (no UI since #82) |
-| GET | `/lots` | Current lot inventory with remaining quantities |
 
 ---
 
@@ -871,7 +843,6 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 - `test_pdf.py` — PDF ingestion: `_salvage_json` recovery, duplicate prevention, Tier 1/2/3 matching, is_historical, force_holdings, `_normalize_acct`
 - `test_pdf_nfs.py` — NFS deterministic parser: holding extraction, section parsing, cash sweeps, negative amounts
 - `test_investor360.py` — I360 sync, account mapping
-- `test_crypto_gains.py` — FIFO lot matching: trade sync, gains calculation, lot inventory
 - `test_auth_refresh.py` — Refresh tokens, mobile sessions
 - `test_plaid.py` — Plaid link, token exchange
 - `test_ticker_feed.py` — Ticker quotes, news feed
@@ -967,7 +938,7 @@ Items marked *(removed in #82)* were built and later removed; see tag `full-app-
 - [x] **Test suite** — 475+ backend unit tests + 26 Playwright E2E tests
 - [x] **Sage budget tools** — full suite: `get_budget`, `get_budget_history`, auto-assign, transaction assignment, splits *(removed in #82)*
 - [x] **Tax module** — W-4 multi-job optimizer, 1040-ES estimated tax calculator, tax projection, draft return, AZ state tax, document checklist, paystub upload *(removed in #82)*
-- [x] **Capital gains tracker** — Coinbase trade sync, FIFO lot matching, short/long-term classification, Schedule D reporting *(UI removed in #82; backend kept)*
+- [x] **Capital gains tracker** — Coinbase trade sync, FIFO lot matching, short/long-term classification, Schedule D reporting *(UI removed in #82; backend removed in #84)*
 - [x] **Financial calendar** — native calendar with tax deadlines, 1040-ES, budget meetings; react-big-calendar UI; Sage tool *(removed in #82)*
 - [x] **Investor360 API sync** — Parker Financial accounts synced via Investor360 API; holdings, balances, performance, asset allocation, activity; per-account drill-down for each Parker account
 - [x] **Parker sync reminder** — daily push notification when Investor360 session is stale (>24h)
