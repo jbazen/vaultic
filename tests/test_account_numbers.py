@@ -1163,3 +1163,67 @@ class TestBackfillNetWorthMortgage:
         first = _mortgages(conn)
         _migrate_backfill_nw_mortgage(conn)
         assert _mortgages(conn) == first == {"2026-01-05": 149000.0, "2026-01-06": 150000.0}
+
+
+class TestSeedManualEntrySnapshots:
+    """_migrate_seed_manual_entry_snapshots gives entries with no history one
+    snapshot dated entered_at (#20 via #9). Isolated DB per test."""
+
+    def _conn(self):
+        from tests.conftest import make_isolated_db
+        conn = make_isolated_db()[0]
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Kia Carnival', 'car_value', 40000, '2026-03-18', 'vehicle_2025_kia_carnival')"
+        )
+        return conn
+
+    def _snaps(self, conn):
+        return [
+            (r["name"], r["account_number"], r["category"], r["value"], str(r["snapped_at"]))
+            for r in conn.execute(
+                "SELECT * FROM manual_entry_snapshots ORDER BY account_number, snapped_at"
+            )
+        ]
+
+    def test_seeds_entry_without_history_dated_entered_at(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert self._snaps(conn) == [
+            ("Kia Carnival", "vehicle_2025_kia_carnival", "car_value", 40000.0, "2026-03-18"),
+        ]
+
+    def test_leaves_entries_with_history_alone(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Mortgage', 'other_liability', 180000, '2026-11-03', '704931286')"
+        )
+        # Existing history under a different name still counts (exact account_number match)
+        _mes_row(conn, "Old Mortgage Name", "704931286", 190000.0, "2026-03-17")
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert self._snaps(conn) == [
+            ("Old Mortgage Name", "704931286", "other_liability", 190000.0, "2026-03-17"),
+            ("Kia Carnival", "vehicle_2025_kia_carnival", "car_value", 40000.0, "2026-03-18"),
+        ]
+
+    def test_skips_entries_without_account_number(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at) "
+            "VALUES ('Unkeyed', 'other_asset', 5, '2026-03-18')"
+        )
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert [s[0] for s in self._snaps(conn)] == ["Kia Carnival"]
+
+    def test_idempotent(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        _migrate_seed_manual_entry_snapshots(conn)
+        first = self._snaps(conn)
+        conn.execute("UPDATE manual_entries SET value = 41000")  # value changes later
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert self._snaps(conn) == first

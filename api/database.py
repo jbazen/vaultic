@@ -1738,6 +1738,42 @@ def _migrate_backfill_insperity_snapshots(conn):
         )
 
 
+def _migrate_seed_manual_entry_snapshots(conn):
+    """Give manual entries that have no history a first snapshot (#20 via #9).
+
+    Every manual_entries row with an account_number and zero
+    manual_entry_snapshots rows under that exact account_number gets one row
+    holding its current value, dated its entered_at (the date the value was
+    recorded, not today). ON CONFLICT DO NOTHING keeps any existing
+    (name, snapped_at) row. Entries without an account_number are skipped and
+    logged, since history is keyed by account_number. Idempotent: once seeded,
+    the entry has a snapshot and is no longer selected.
+    """
+    unkeyed = conn.execute(
+        "SELECT name FROM manual_entries WHERE account_number IS NULL OR account_number = ''"
+    ).fetchall()
+    if unkeyed:
+        logger.info(
+            "Manual snapshot seed: skipped %d entr(ies) without an account_number: %s",
+            len(unkeyed), ", ".join(r["name"] for r in unkeyed),
+        )
+    cur = conn.execute(
+        """INSERT INTO manual_entry_snapshots
+               (name, account_number, category, value, snapped_at)
+           SELECT m.name, m.account_number, m.category, m.value,
+                  COALESCE(date(m.entered_at), m.entered_at)
+           FROM manual_entries m
+           WHERE m.account_number IS NOT NULL AND m.account_number <> ''
+             AND NOT EXISTS (
+                 SELECT 1 FROM manual_entry_snapshots s
+                 WHERE s.account_number = m.account_number
+             )
+           ON CONFLICT(name, snapped_at) DO NOTHING"""
+    )
+    if cur.rowcount:
+        logger.info("Manual snapshot seed: created %d first snapshot(s)", cur.rowcount)
+
+
 def _migrate_backfill_nw_mortgage(conn):
     """Backfill net_worth_snapshots.mortgage for rows written before #9.
 
@@ -1879,6 +1915,11 @@ def init_db():
             _migrate_backfill_insperity_snapshots(conn)
         except Exception as exc:
             logger.warning("Insperity snapshot backfill migration failed: %s", exc)
+        # First history point for manual entries that have none (#20 via #9).
+        try:
+            _migrate_seed_manual_entry_snapshots(conn)
+        except Exception as exc:
+            logger.warning("Manual entry snapshot seed migration failed: %s", exc)
         # Store the as-of-date mortgage on net worth rows written before the
         # mortgage column existed (#9), so history nets out that day's mortgage.
         try:
