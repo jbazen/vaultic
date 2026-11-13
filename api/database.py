@@ -233,12 +233,6 @@ MIGRATIONS = [
     "ALTER TABLE push_subscriptions ADD COLUMN device_token TEXT",
     # Store which user subscribed so device-auth issues JWT for the correct user
     "ALTER TABLE push_subscriptions ADD COLUMN username TEXT",
-    # Soft-delete transactions from the budget view without losing the Plaid record.
-    # budget_deleted=1 hides the transaction from all budget queues (unassigned,
-    # pending-review, assigned) and excludes it from spending totals. Use case:
-    # account transfers, credits, and other non-spending items that Sage can't
-    # reliably categorize and that the user wants to permanently dismiss.
-    "ALTER TABLE transactions ADD COLUMN budget_deleted INTEGER DEFAULT 0",
 
     # manual_holdings_snapshots: append-only dated holdings snapshots.
     # Every PDF import writes one row per holding per statement date so we keep

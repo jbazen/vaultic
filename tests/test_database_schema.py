@@ -94,3 +94,10 @@ def test_init_db_is_repeatable(fresh_db, caplog):
     with caplog.at_level(logging.WARNING, logger="api.database"):
         db_module.init_db()
     assert _migration_errors(caplog.records) == []
+
+
+def test_transactions_has_no_budget_deleted_column(fresh_db):
+    conn, _ = fresh_db
+    cols = _columns(conn, "transactions")
+    assert "budget_deleted" not in cols
+    assert {"transaction_id", "account_id", "amount", "date", "name"} <= cols
