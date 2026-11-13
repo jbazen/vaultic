@@ -103,11 +103,25 @@ export default function Dashboard() {
   }, []);
 
   // /#accounts (the /accounts redirect and push-notification links) lands on the
-  // account list. It only exists once the first load has finished.
+  // account list. It only exists once the first load has finished. The cards above
+  // it (market, news, Parker) load after that and push it down, so keep it in view
+  // while the page grows, for a few seconds or until the user scrolls or taps.
   useEffect(() => {
-    if (!loading && hash === "#accounts") {
-      document.getElementById("accounts")?.scrollIntoView();
+    if (loading || hash !== "#accounts") return;
+    const el = document.getElementById("accounts");
+    if (!el) return;
+    const keepInView = () => el.scrollIntoView();
+    const userEvents = ["wheel", "touchstart", "keydown", "mousedown"];
+    const observer = new ResizeObserver(keepInView);   // also fires once on observe()
+    observer.observe(el.parentElement);
+    const timer = setTimeout(stop, 5000);
+    userEvents.forEach(ev => window.addEventListener(ev, stop, { passive: true }));
+    function stop() {
+      observer.disconnect();
+      clearTimeout(timer);
+      userEvents.forEach(ev => window.removeEventListener(ev, stop));
     }
+    return stop;
   }, [loading, hash]);
 
   async function handleSync() {

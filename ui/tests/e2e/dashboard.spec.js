@@ -124,4 +124,22 @@ test.describe("Legacy /accounts link", () => {
     await expect(page.getByRole("heading", { name: "Accounts" })).toBeVisible();
     await expect(page.getByText("Chase", { exact: true })).toBeVisible();
   });
+
+  test("stays on the account list when the cards above it load late", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 700 });
+    await mockAllAPIs(page);
+    // A tall Market Summary that arrives after the list has rendered and scrolled
+    const indexes = Array.from({ length: 60 }, (_, i) => ({
+      symbol: `IDX${i}`, name: `Index ${i}`, last_trade_amount: 5000 + i,
+      net_change: 1, percent_change: 0.1, snapped_at: "2026-11-13",
+    }));
+    await page.route("**/api/investor360/market-summary", async r => {
+      await new Promise(res => setTimeout(res, 800));
+      await r.fulfill({ json: indexes });
+    });
+    await loginOnly(page, "/accounts");
+
+    await expect(page.getByText("Index 59")).toBeAttached();
+    await expect(page.getByRole("heading", { name: "Accounts" })).toBeInViewport();
+  });
 });
