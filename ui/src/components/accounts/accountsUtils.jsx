@@ -37,3 +37,57 @@ export function tabBtn(active) {
     cursor: "pointer",
   };
 }
+
+// ── Block list (institutions + manual sections) ────────────────────────────────
+
+// Splits manual entries into the collections each manual section renders.
+export function splitManualEntries(manualEntries) {
+  const investedImported = manualEntries
+    .filter(e => e.category === "invested" && (e.account_number || e.exclude_from_net_worth))
+    .sort((a, b) => (b.exclude_from_net_worth - a.exclude_from_net_worth) || a.name.localeCompare(b.name));
+  return {
+    investedImported,
+    investedOther:    manualEntries.filter(e => e.category === "invested" && !e.account_number && !e.exclude_from_net_worth),
+    liquidEntries:    manualEntries.filter(e => e.category === "liquid"),
+    propertyEntries:  manualEntries.filter(e => ["home_value", "car_value", "real_estate", "vehicles"].includes(e.category)),
+    liabilityEntries: manualEntries.filter(e => e.category === "other_liability"),
+  };
+}
+
+// Unified block list: one block per institution plus one per non-empty manual section.
+export function buildAccountBlocks(accounts, manual) {
+  const grouped = accounts.reduce((acc, a) => {
+    const key = a.institution_name || "Manual";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(a);
+    return acc;
+  }, {});
+  const blocks = [];
+  for (const [inst, accts] of Object.entries(grouped)) {
+    blocks.push({ key: inst, kind: "institution", accts });
+  }
+  if (manual.investedImported.length > 0) blocks.push({ key: SEC_INVESTED,       kind: "sec_invested" });
+  if (manual.investedOther.length > 0)    blocks.push({ key: SEC_INVESTED_OTHER, kind: "sec_invested_other" });
+  if (manual.liquidEntries.length > 0)    blocks.push({ key: SEC_LIQUID,         kind: "sec_liquid" });
+  if (manual.propertyEntries.length > 0)  blocks.push({ key: SEC_PROPERTY,       kind: "sec_property" });
+  if (manual.liabilityEntries.length > 0) blocks.push({ key: SEC_LIABILITIES,    kind: "sec_liabilities" });
+  return blocks;
+}
+
+// Sort blocks by the saved order. Blocks missing from it fall to the end:
+// institutions first (A-Z), then manual sections in their natural order.
+export function sortBlocks(blocks, savedOrder) {
+  const orderMap = new Map(savedOrder.map((n, i) => [n, i]));
+  const defaultIdx = new Map(blocks.map((b, i) => [b.key, i]));
+  return [...blocks].sort((a, b) => {
+    const oA = orderMap.get(a.key);
+    const oB = orderMap.get(b.key);
+    if (oA != null && oB != null) return oA - oB;
+    if (oA != null) return -1;
+    if (oB != null) return 1;
+    if (a.kind === "institution" && b.kind !== "institution") return -1;
+    if (a.kind !== "institution" && b.kind === "institution") return 1;
+    if (a.kind === "institution" && b.kind === "institution") return a.key.localeCompare(b.key);
+    return defaultIdx.get(a.key) - defaultIdx.get(b.key);
+  });
+}
