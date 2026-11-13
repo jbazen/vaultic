@@ -34,6 +34,9 @@ from cryptography.hazmat.primitives.serialization import (
 
 logger = logging.getLogger(__name__)
 
+# Where account-related notifications open: the account list on the Dashboard.
+ACCOUNTS_URL = "/#accounts"
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -242,8 +245,8 @@ def notify_item_disconnected(institution_name: str | None) -> None:
 
     Called by sync._record_item_error() only on the FIRST transition into
     ITEM_LOGIN_REQUIRED (issue #73), so the user isn't notified again on every
-    subsequent cron run for the same dead item. Links to the Accounts page where
-    the Reconnect button lives. Expired subscriptions are deactivated.
+    subsequent cron run for the same dead item. Links to the account list on the
+    Dashboard (/#accounts) where the Reconnect button lives. Expired subscriptions are deactivated.
     """
     if not is_configured():
         return
@@ -265,7 +268,7 @@ def notify_item_disconnected(institution_name: str | None) -> None:
             "endpoint": sub["endpoint"],
             "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
         }
-        ok = send_push_notification(subscription, title, body, url="/accounts")
+        ok = send_push_notification(subscription, title, body, url=ACCOUNTS_URL)
         if not ok:
             expired_ids.append(sub["id"])
 
@@ -331,7 +334,7 @@ def notify_stale_i360() -> None:
             "endpoint": sub["endpoint"],
             "keys": {"p256dh": sub["p256dh"], "auth": sub["auth"]},
         }
-        ok = send_push_notification(subscription, title, body, url="/accounts")
+        ok = send_push_notification(subscription, title, body, url=ACCOUNTS_URL)
         if not ok:
             expired_ids.append(sub["id"])
 
