@@ -215,134 +215,6 @@ MIGRATIONS = [
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(name, snapped_at)
     )""",
-    # ── Budget module ──────────────────────────────────────────────────────────
-    # budget_groups: named category groups (Income, Housing, Food, etc.)
-    """CREATE TABLE IF NOT EXISTS budget_groups (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        name          TEXT NOT NULL,
-        type          TEXT NOT NULL DEFAULT 'expense',
-        display_order INTEGER DEFAULT 0,
-        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-    # budget_items: individual line items within a group (Mortgage, Groceries, etc.)
-    """CREATE TABLE IF NOT EXISTS budget_items (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_id      INTEGER NOT NULL REFERENCES budget_groups(id) ON DELETE CASCADE,
-        name          TEXT NOT NULL,
-        display_order INTEGER DEFAULT 0,
-        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-    # budget_amounts: planned dollar amount per (item, month). YYYY-MM month key.
-    # user_set = 1 marks an amount the user entered by hand; the future-month
-    # carryforward mirror refreshes only user_set = 0 rows and never overwrites
-    # user_set = 1 rows (see budget.get_budget).
-    """CREATE TABLE IF NOT EXISTS budget_amounts (
-        id       INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id  INTEGER NOT NULL REFERENCES budget_items(id) ON DELETE CASCADE,
-        month    TEXT NOT NULL,
-        planned  REAL DEFAULT 0,
-        user_set INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(item_id, month)
-    )""",
-    # transaction_assignments: maps a Plaid transaction to a budget line item.
-    # item_id SET NULL so deleting an item un-assigns its transactions without
-    # losing the assignment row — they surface again as unassigned transactions.
-    """CREATE TABLE IF NOT EXISTS transaction_assignments (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        transaction_id TEXT NOT NULL UNIQUE,
-        item_id        INTEGER REFERENCES budget_items(id) ON DELETE SET NULL,
-        created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-    # ── Fund Financials (sinking funds tracker) ────────────────────────────────
-    # funds: named savings buckets (Vacation, Clothes, Gifts, etc.)
-    """CREATE TABLE IF NOT EXISTS funds (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        name          TEXT NOT NULL,
-        description   TEXT,
-        target_amount REAL,
-        display_order INTEGER DEFAULT 0,
-        is_active     INTEGER DEFAULT 1,
-        created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-    # fund_transactions: deposits (+) and withdrawals (-) for each fund.
-    # Balance = SUM(amount) computed live — no stored balance to go stale.
-    """CREATE TABLE IF NOT EXISTS fund_transactions (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        fund_id     INTEGER NOT NULL REFERENCES funds(id) ON DELETE CASCADE,
-        date        TEXT NOT NULL,
-        amount      REAL NOT NULL,
-        description TEXT,
-        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-    # ── Budget CSV import ──────────────────────────────────────────────────────
-    # budget_history: transactions imported from external budget CSV exports.
-    # These are NOT linked to Plaid transaction IDs — they come from a separate
-    # budgeting system and live in their own table for historical spending
-    # analysis and Sage queries.
-    """CREATE TABLE IF NOT EXISTS budget_history (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        group_name  TEXT NOT NULL,
-        item_id     INTEGER REFERENCES budget_items(id) ON DELETE SET NULL,
-        item_name   TEXT NOT NULL,
-        month       TEXT NOT NULL,
-        date        TEXT NOT NULL,
-        merchant    TEXT,
-        amount      REAL NOT NULL,
-        note        TEXT,
-        type        TEXT,
-        source_file TEXT,
-        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-    # budget_auto_rules: merchant-to-budget-item mapping learned from imported
-    # CSVs and user corrections. Used by Sage to auto-categorize incoming
-    # Plaid transactions without manual assignment.
-    """CREATE TABLE IF NOT EXISTS budget_auto_rules (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        merchant    TEXT NOT NULL,
-        item_id     INTEGER REFERENCES budget_items(id) ON DELETE CASCADE,
-        match_count INTEGER DEFAULT 1,
-        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(merchant, item_id)
-    )""",
-    # transaction_splits: stores split assignments when a single Plaid transaction
-    # is divided across multiple budget line items. A transaction with splits will
-    # have rows here but NOT in transaction_assignments — the two are mutually
-    # exclusive. When a transaction is assigned to a single item (no split),
-    # transaction_assignments is used (existing behavior). When split across 2+
-    # items, rows go here with a per-split amount that sums to the full txn amount.
-    """CREATE TABLE IF NOT EXISTS transaction_splits (
-        id             INTEGER PRIMARY KEY AUTOINCREMENT,
-        transaction_id TEXT NOT NULL,
-        item_id        INTEGER REFERENCES budget_items(id) ON DELETE SET NULL,
-        amount         REAL NOT NULL,
-        created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(transaction_id, item_id)
-    )""",
-    # Add status column to transaction_assignments so rows can be distinguished
-    # between manually assigned ('manual') and auto-categorized ('auto') entries.
-    "ALTER TABLE transaction_assignments ADD COLUMN status TEXT DEFAULT 'manual'",
-    # Add missing UNIQUE constraints — without these, INSERT OR IGNORE never fires
-    # and every import creates duplicate groups/items. These are safe to run on
-    # existing data only if duplicates have been removed first (see cleanup script).
-    "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_groups_name ON budget_groups(name)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS ux_budget_items_group_name ON budget_items(group_id, name)",
-    # (legacy — is_deleted columns have been consolidated into is_archived;
-    #  these migrations are kept so existing DBs don't fail on the DROP below)
-    "ALTER TABLE budget_groups ADD COLUMN is_deleted INTEGER DEFAULT 0",
-    "ALTER TABLE budget_items ADD COLUMN is_deleted INTEGER DEFAULT 0",
-    # Confidence score (0-100) for auto-categorized assignments. Set by the sync
-    # pipeline based on how many times we've seen this merchant→item pairing.
-    # NULL = manually assigned (no confidence concept applies).
-    "ALTER TABLE transaction_assignments ADD COLUMN confidence INTEGER DEFAULT NULL",
-    # User-entered metadata for transactions — check number and free-form notes.
-    # Keyed by transaction_id so it survives reassignments/splits.
-    """CREATE TABLE IF NOT EXISTS transaction_metadata (
-        transaction_id TEXT PRIMARY KEY,
-        check_number   TEXT,
-        notes          TEXT,
-        updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
     # ── Web Push subscriptions ─────────────────────────────────────────────────
     # Stores browser PushSubscription objects so the server can send encrypted
     # Web Push notifications (RFC 8291 / VAPID) to subscribed devices.
@@ -361,179 +233,12 @@ MIGRATIONS = [
     "ALTER TABLE push_subscriptions ADD COLUMN device_token TEXT",
     # Store which user subscribed so device-auth issues JWT for the correct user
     "ALTER TABLE push_subscriptions ADD COLUMN username TEXT",
-    # split_rules: stores percentage-based split patterns per merchant so future
-    # transactions from the same merchant can be pre-populated with the same split.
-    # splits column is JSON: [{"item_id": 1, "pct": 60.0}, {"item_id": 2, "pct": 40.0}]
-    # use_count increments each time the user saves a split for this merchant so the
-    # most-used pattern is always kept current.
-    """CREATE TABLE IF NOT EXISTS split_rules (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        merchant    TEXT NOT NULL UNIQUE,
-        splits      TEXT NOT NULL,
-        use_count   INTEGER DEFAULT 1,
-        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
     # Soft-delete transactions from the budget view without losing the Plaid record.
     # budget_deleted=1 hides the transaction from all budget queues (unassigned,
     # pending-review, assigned) and excludes it from spending totals. Use case:
     # account transfers, credits, and other non-spending items that Sage can't
     # reliably categorize and that the user wants to permanently dismiss.
     "ALTER TABLE transactions ADD COLUMN budget_deleted INTEGER DEFAULT 0",
-    # ── Tax module ─────────────────────────────────────────────────────────────
-    # tax_returns: one row per tax year, storing all key 1040 line items parsed
-    # from uploaded PDFs via Claude Haiku. UNIQUE on tax_year so re-importing
-    # a corrected PDF uses ON CONFLICT DO UPDATE to overwrite the prior parse.
-    """CREATE TABLE IF NOT EXISTS tax_returns (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        tax_year        INTEGER NOT NULL UNIQUE,
-        filing_status   TEXT DEFAULT 'married_filing_jointly',
-        -- Income
-        wages_w2        REAL,
-        taxable_interest REAL,
-        qualified_dividends REAL,
-        ordinary_dividends REAL,
-        capital_gains   REAL,
-        ira_distributions REAL,
-        other_income    REAL,
-        total_income    REAL,
-        adjustments_to_income REAL,
-        agi             REAL,
-        -- Deductions
-        deduction_method TEXT,
-        deduction_amount REAL,
-        qbi_deduction   REAL,
-        taxable_income  REAL,
-        -- Tax & Credits
-        total_tax       REAL,
-        child_tax_credit REAL,
-        other_credits   REAL,
-        total_credits   REAL,
-        -- Payments & Result
-        w2_withheld     REAL,
-        total_payments  REAL,
-        refund          REAL,
-        owed            REAL,
-        effective_rate  REAL,
-        -- Itemized deduction breakdown
-        salt_deduction  REAL,
-        mortgage_interest REAL,
-        charitable_cash REAL,
-        charitable_noncash REAL,
-        mortgage_insurance REAL,
-        total_itemized  REAL,
-        -- Metadata
-        source_file     TEXT,
-        parsed_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
-        notes           TEXT
-    )""",
-    # tax_documents: stores metadata about uploaded tax document files.
-    # parsed_data holds the raw JSON returned by Claude for audit/debug purposes.
-    """CREATE TABLE IF NOT EXISTS tax_documents (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        tax_year        INTEGER,
-        doc_type        TEXT NOT NULL,
-        filename        TEXT NOT NULL,
-        file_path       TEXT NOT NULL,
-        parsed_data     TEXT,
-        uploaded_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-
-    # paystubs: one row per uploaded paystub PDF.
-    # Stores current-period and YTD figures extracted by Claude Haiku.
-    """CREATE TABLE IF NOT EXISTS paystubs (
-        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-        employer                TEXT,
-        pay_date                TEXT,
-        period_start            TEXT,
-        period_end              TEXT,
-        gross_pay               REAL,
-        net_pay                 REAL,
-        federal_income_tax      REAL,
-        state_income_tax        REAL,
-        social_security         REAL,
-        medicare                REAL,
-        other_deductions        REAL,
-        ytd_gross               REAL,
-        ytd_federal             REAL,
-        ytd_state               REAL,
-        ytd_social_security     REAL,
-        ytd_medicare            REAL,
-        ytd_net                 REAL,
-        source_file             TEXT,
-        parsed_at               DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(employer, pay_date)
-    )""",
-
-    # w4s: one row per W-4 on file per employer.
-    # Stores key withholding elections so the W-4 optimizer knows current setup.
-    """CREATE TABLE IF NOT EXISTS w4s (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-        employer            TEXT,
-        employee_name       TEXT,
-        filing_status       TEXT,
-        multiple_jobs       INTEGER DEFAULT 0,
-        dependents_amount   REAL,
-        other_income        REAL,
-        deductions          REAL,
-        extra_withholding   REAL,
-        effective_date      TEXT,
-        source_file         TEXT,
-        parsed_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(employer, effective_date)
-    )""",
-
-    # tax_docs: universal tax document store. One row per uploaded document.
-    # doc_type: w2, 1098, 1099_int, 1099_div, 1099_b, 1099_r, 1099_g,
-    #           giving_statement, 1098_sa, 5498_sa
-    # parsed_data: full JSON returned by Claude for the document
-    # Key fields are denormalized for fast aggregation in the draft return calc.
-    """CREATE TABLE IF NOT EXISTS tax_docs (
-        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-        tax_year            INTEGER NOT NULL,
-        doc_type            TEXT NOT NULL,
-        issuer              TEXT,
-        source_file         TEXT,
-        parsed_data         TEXT,
-        -- W-2 fields
-        w2_wages            REAL,
-        w2_fed_withheld     REAL,
-        w2_state_withheld   REAL,
-        w2_ss_withheld      REAL,
-        w2_medicare_withheld REAL,
-        w2_401k             REAL,
-        w2_hsa_employer     REAL,
-        -- 1098 fields
-        mortgage_interest   REAL,
-        mortgage_points     REAL,
-        property_taxes      REAL,
-        -- 1099-INT fields
-        interest_income     REAL,
-        -- 1099-DIV fields
-        ordinary_dividends  REAL,
-        qualified_dividends REAL,
-        cap_gains_dist      REAL,
-        -- 1099-B fields (stored as JSON array in parsed_data; total here)
-        proceeds            REAL,
-        cost_basis          REAL,
-        net_cap_gains       REAL,
-        -- 1099-R fields
-        gross_distribution  REAL,
-        taxable_distribution REAL,
-        distribution_code   TEXT,
-        -- 1099-G fields
-        state_refund        REAL,
-        unemployment        REAL,
-        -- giving statement fields
-        charitable_cash     REAL,
-        charitable_noncash  REAL,
-        -- HSA fields (1098-SA / 5498-SA)
-        hsa_distributions   REAL,
-        hsa_contributions   REAL,
-        -- withholding (any 1099 with box 4)
-        fed_withheld        REAL,
-        parsed_at           DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
 
     # manual_holdings_snapshots: append-only dated holdings snapshots.
     # Every PDF import writes one row per holding per statement date so we keep
@@ -576,52 +281,9 @@ MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_manual_entry_snaps_acct ON manual_entry_snapshots(account_number)",
     "CREATE INDEX IF NOT EXISTS idx_manual_holdings_snaps_acct ON manual_holdings_snapshots(account_number)",
 
-    # vault_documents: every uploaded file stored in the document vault.
-    # The actual file lives at file_path on the server filesystem.
-    # category covers both tax and non-tax documents.
-    """CREATE TABLE IF NOT EXISTS vault_documents (
-        id              INTEGER PRIMARY KEY AUTOINCREMENT,
-        year            INTEGER NOT NULL,
-        category        TEXT NOT NULL,
-        category_label  TEXT,
-        issuer          TEXT,
-        description     TEXT,
-        original_name   TEXT NOT NULL,
-        file_path       TEXT NOT NULL,
-        file_size       INTEGER,
-        parsed          INTEGER DEFAULT 0,
-        related_id      INTEGER,
-        related_table   TEXT,
-        uploaded_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-
     # RBAC: admin flag for user management and security log access.
     # Existing users (jbazen, hbazen) are set to admin; new users default to non-admin.
     "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
-
-    # ── Financial Calendar ─────────────────────────────────────────────────────
-    # financial_events: one row per calendar event per user.
-    # auto_generated=1 rows are seeded by the system (tax deadlines, budget meetings).
-    # all_day=1: start_dt is "YYYY-MM-DD"; all_day=0: start_dt is "YYYY-MM-DDTHH:MM:SS".
-    # recurring is informational metadata — expansion into future instances is done
-    # at seed time (one row per concrete occurrence) rather than on-the-fly.
-    """CREATE TABLE IF NOT EXISTS financial_events (
-        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-        username             TEXT NOT NULL,
-        title                TEXT NOT NULL,
-        description          TEXT,
-        start_dt             TEXT NOT NULL,
-        end_dt               TEXT,
-        all_day              INTEGER DEFAULT 1,
-        event_type           TEXT NOT NULL DEFAULT 'custom',
-        recurring            TEXT NOT NULL DEFAULT 'none',
-        reminder_days_before INTEGER DEFAULT 3,
-        auto_generated       INTEGER DEFAULT 0,
-        is_active            INTEGER DEFAULT 1,
-        created_at           DATETIME DEFAULT CURRENT_TIMESTAMP
-    )""",
-    # Index for fast date-range queries (the most common access pattern)
-    "CREATE INDEX IF NOT EXISTS idx_financial_events_user_date ON financial_events(username, start_dt, is_active)",
 
     # ── Refresh tokens (mobile "keep me signed in") ─────────────────────────
     # Only the SHA-256 hash of the raw token is stored — never the raw value.
@@ -648,7 +310,7 @@ MIGRATIONS = [
     "ALTER TABLE transactions ADD COLUMN original_description TEXT",
     # merchant_entity_id: Plaid's normalized merchant identifier for cross-transaction linking
     "ALTER TABLE transactions ADD COLUMN merchant_entity_id TEXT",
-    # check_number: check number from Plaid (also stored in transaction_metadata if user-entered)
+    # check_number: check number from Plaid
     "ALTER TABLE transactions ADD COLUMN check_number TEXT",
     # logo_url: merchant logo for UI display
     "ALTER TABLE transactions ADD COLUMN logo_url TEXT",
@@ -660,12 +322,6 @@ MIGRATIONS = [
     # is_manual=1 flags it as non-Plaid; plaid_account_id='__manual__' satisfies UNIQUE.
     """INSERT OR IGNORE INTO accounts (plaid_account_id, name, type, subtype, is_manual)
        VALUES ('__manual__', 'Manual Transactions', 'other', 'manual', 1)""",
-    # Archive flag for budget groups/items — distinguishes "active but $0 this month"
-    # from "old historical item only relevant when viewing past months."
-    # is_archived=0 (default): always shown in current/future months.
-    # is_archived=1: only shown in months where total_planned > 0 or total_spent != 0.
-    "ALTER TABLE budget_groups ADD COLUMN is_archived INTEGER DEFAULT 0",
-    "ALTER TABLE budget_items ADD COLUMN is_archived INTEGER DEFAULT 0",
     # ── Ticker Feed ────────────────────────────────────────────────────────────
     # Cached price quotes for held tickers (crypto + equity/mutual funds).
     # UNIQUE(symbol) so INSERT OR REPLACE naturally refreshes stale rows.
@@ -691,12 +347,6 @@ MIGRATIONS = [
         published_at TEXT,
         fetched_at   DATETIME NOT NULL
     )""",
-    # Consolidate is_deleted into is_archived — one visibility flag instead of two.
-    # Convert any is_deleted=1 rows to is_archived=1, then drop the is_deleted column.
-    "UPDATE budget_items SET is_archived = 1 WHERE is_deleted = 1",
-    "UPDATE budget_groups SET is_archived = 1 WHERE is_deleted = 1",
-    "ALTER TABLE budget_items DROP COLUMN is_deleted",
-    "ALTER TABLE budget_groups DROP COLUMN is_deleted",
 
     # ── Investor360 Integration (Parker Financial / Commonwealth / NFS) ────────
     # Sync audit log — one row per sync attempt
@@ -1046,8 +696,6 @@ MIGRATIONS = [
     )""",
     # Migration: add image_url to news_articles for tile thumbnails
     "ALTER TABLE news_articles ADD COLUMN image_url TEXT",
-    # Migration: add series_id to link recurring event instances
-    "ALTER TABLE financial_events ADD COLUMN series_id TEXT",
     # User-controlled ordering of institution groups; one row per (page, institution_name)
     # so Dashboard and Accounts pages can be ordered independently. Schema upgrade
     # from the page-less version is handled by _migrate_institution_order_per_page().
@@ -1058,11 +706,6 @@ MIGRATIONS = [
         updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (page, institution_name)
     )""",
-    # Flags budget amounts the user entered by hand so the carryforward mirror
-    # (budget.get_budget) never overwrites them. Existing rows default to 0
-    # (treated as mirrored); the current/past months are never re-mirrored, so
-    # existing hand-entered amounts there are preserved without a backfill.
-    "ALTER TABLE budget_amounts ADD COLUMN user_set INTEGER NOT NULL DEFAULT 0",
     # Real Plaid error state on an item (issue #73) so the Accounts "reconnect"
     # banner keys off the actual error (e.g. ITEM_LOGIN_REQUIRED) instead of
     # guessing from sync staleness. Set when a sync raises an item error;
@@ -1216,62 +859,6 @@ def _migrate_encrypt_totp_secrets(conn):
         if updates:
             cols = ", ".join(f"{k} = ?" for k in updates)
             conn.execute(f"UPDATE users SET {cols} WHERE id = ?", (*updates.values(), uid))
-
-
-def _migrate_auto_archive_budget(conn):
-    """One-time migration: archive budget groups and items with no recent activity.
-
-    Archives groups/items that have NO budget_amounts rows for any month in the
-    last 3 months. This separates old imported historical data from the active
-    budget without losing anything — archived items still appear when viewing
-    past months where they had data.
-    """
-    from datetime import date, timedelta
-    today = date.today()
-    # Build the last 3 month strings (e.g. ['2026-01', '2026-02', '2026-03']).
-    # 28-day intervals ensure we always land in a different month regardless of
-    # month length. Items with planned > 0 in ANY of these months stay non-archived.
-    recent_months = []
-    for i in range(3):
-        d = today.replace(day=1) - timedelta(days=i * 28)
-        recent_months.append(d.strftime("%Y-%m"))
-
-    placeholders = ",".join("?" * len(recent_months))  # (?, ?, ?) for parameterized query
-
-    # Archive items that have no planned amounts in any of the recent months.
-    # Exclude "Other Deposits" — it's an active income catch-all for refunds and
-    # misc deposits that intentionally has $0 planned most months.
-    conn.execute(f"""
-        UPDATE budget_items SET is_archived = 1
-        WHERE is_archived = 0
-          AND LOWER(name) != 'other deposits'
-          AND id NOT IN (
-              SELECT DISTINCT item_id FROM budget_amounts
-              WHERE month IN ({placeholders})
-              AND planned > 0
-          )
-    """, recent_months)
-
-    # Archive groups where ALL their items are archived.
-    # A group with any active (non-archived) item stays visible so users
-    # can still access its contents on the current month's budget page.
-    conn.execute("""
-        UPDATE budget_groups SET is_archived = 1
-        WHERE is_archived = 0
-          AND id NOT IN (
-              SELECT DISTINCT group_id FROM budget_items
-              WHERE is_archived = 0
-          )
-    """)
-
-    archived_items = conn.execute(
-        "SELECT COUNT(*) AS c FROM budget_items WHERE is_archived = 1"
-    ).fetchone()["c"]
-    archived_groups = conn.execute(
-        "SELECT COUNT(*) AS c FROM budget_groups WHERE is_archived = 1"
-    ).fetchone()["c"]
-    if archived_items > 0 or archived_groups > 0:
-        logger.info("Auto-archived %d budget items and %d budget groups", archived_items, archived_groups)
 
 
 def _migrate_coinbase_account_numbers(conn):
@@ -1455,63 +1042,6 @@ def _migrate_manual_entry_account_numbers(conn):
         "WHERE category = 'home_value' "
         "AND (account_number IS NULL OR account_number = '')"
     )
-
-
-def _migrate_relink_orphaned_assignments(conn):
-    """Relink transaction_assignments stranded by archived/deleted budget items.
-
-    Two failure modes leave assignments orphaned:
-      1. Soft delete — the item gets is_archived=1 but the assignment still
-         points at it. The Budget view filters archived items, so the spend
-         vanishes from view even though the row is intact.
-      2. Hard delete on rename — PATCH /items and PATCH /groups execute
-         DELETE ... WHERE is_archived=1 to clear UNIQUE-name collisions.
-         FK cascade then SET NULLs every assignment.item_id pointing into
-         the deleted rows.
-
-    Either way: when the user re-creates a same-name item later, the new id
-    differs and the assignments stay stranded. This migration scans for
-    assignments whose item_id is NULL or points at an archived item, and
-    re-points them at an active item with the same name (case-insensitive).
-    Idempotent — finds zero work to do once everything is linked correctly.
-    """
-    # Build a name → id map of every active item. Lower-cased to make the
-    # match case-insensitive (the user's wife re-created "Other" vs the
-    # original archived "Other"; binary collation kept them apart).
-    active = {
-        row["lname"]: row["id"]
-        for row in conn.execute(
-            "SELECT id, LOWER(name) AS lname FROM budget_items WHERE is_archived = 0"
-        ).fetchall()
-    }
-    if not active:
-        return
-
-    # NULL item_id assignments — try to recover by joining to the original
-    # transaction's category/merchant; not enough signal to relink reliably,
-    # so we skip these. They surface as unassigned in the queue, which is
-    # the user-facing recovery path.
-
-    # Archived-item assignments — find the archived item's name, look up an
-    # active item with the same name, re-point. Only do same-name matches;
-    # cross-name "best guess" relinking would create surprises.
-    archived_rows = conn.execute("""
-        SELECT ta.id AS ta_id, ta.item_id AS old_id, LOWER(bi.name) AS lname
-        FROM transaction_assignments ta
-        JOIN budget_items bi ON bi.id = ta.item_id
-        WHERE bi.is_archived = 1
-    """).fetchall()
-    relinked = 0
-    for row in archived_rows:
-        new_id = active.get(row["lname"])
-        if new_id and new_id != row["old_id"]:
-            conn.execute(
-                "UPDATE transaction_assignments SET item_id = ? WHERE id = ?",
-                (new_id, row["ta_id"]),
-            )
-            relinked += 1
-    if relinked:
-        logger.info("Relinked %d orphaned transaction_assignments to active items", relinked)
 
 
 def _rekey_manual_snapshots(conn, old_acct, new_acct, new_name):
@@ -1773,9 +1303,6 @@ def init_db():
             _migrate_encrypt_totp_secrets(conn)
         except Exception as exc:
             logger.warning("TOTP encryption migration failed: %s", exc)
-        # Auto-archive migration removed — it ran on every startup and re-archived
-        # newly created items that had $0 planned, undoing user actions. The original
-        # migration has already run; future archiving is user-initiated only (DELETE).
         # Populate account_number for Coinbase accounts + backfill account_balances
         try:
             _migrate_coinbase_account_numbers(conn)
@@ -1801,11 +1328,6 @@ def init_db():
             _migrate_manual_entry_account_numbers(conn)
         except Exception as exc:
             logger.warning("Manual entry account_number migration failed: %s", exc)
-        # Re-link transaction_assignments orphaned by archived/deleted budget items
-        try:
-            _migrate_relink_orphaned_assignments(conn)
-        except Exception as exc:
-            logger.warning("Orphaned assignment relink migration failed: %s", exc)
         # Merge manual_entries duplicated by month-to-month account_number changes
         try:
             _migrate_merge_duplicate_manual_entries(conn)
