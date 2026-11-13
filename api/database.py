@@ -1738,6 +1738,49 @@ def _migrate_backfill_insperity_snapshots(conn):
         )
 
 
+def _migrate_backfill_nw_mortgage(conn):
+    """Backfill net_worth_snapshots.mortgage for rows written before #9.
+
+    For each row with mortgage IS NULL, the mortgage as of that date is the sum,
+    over every account_number that has other_liability snapshot history, of
+    ABS(value) of that account's latest manual_entry_snapshots row on or before
+    the row's date (ABS because PDF imports stored the mortgage negative). Exact
+    account_number matching only. A row with no snapshot on or before its date
+    stays NULL and the net worth endpoints fall back to the current mortgage.
+
+    One SQL UPDATE, so dates are compared by SQLite and never handled in Python.
+    Idempotent: only NULL rows are touched, and a stored value is never
+    overwritten.
+    """
+    def _filled() -> int:
+        return conn.execute(
+            "SELECT COUNT(*) FROM net_worth_snapshots WHERE mortgage IS NOT NULL"
+        ).fetchone()[0]
+
+    before = _filled()
+    conn.execute(
+        """UPDATE net_worth_snapshots
+           SET mortgage = (
+               SELECT SUM(ABS(s.value))
+               FROM (SELECT DISTINCT account_number AS acct
+                     FROM manual_entry_snapshots
+                     WHERE category = 'other_liability'
+                       AND account_number IS NOT NULL AND account_number <> '') l
+               JOIN manual_entry_snapshots s ON s.id = (
+                   SELECT s2.id FROM manual_entry_snapshots s2
+                   WHERE s2.account_number = l.acct
+                     AND date(s2.snapped_at) <= date(net_worth_snapshots.snapped_at)
+                   ORDER BY date(s2.snapped_at) DESC, s2.id DESC
+                   LIMIT 1
+               )
+           )
+           WHERE mortgage IS NULL"""
+    )
+    backfilled = _filled() - before
+    if backfilled:
+        logger.info("Net worth mortgage backfill: set mortgage on %d row(s)", backfilled)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1836,6 +1879,12 @@ def init_db():
             _migrate_backfill_insperity_snapshots(conn)
         except Exception as exc:
             logger.warning("Insperity snapshot backfill migration failed: %s", exc)
+        # Store the as-of-date mortgage on net worth rows written before the
+        # mortgage column existed (#9), so history nets out that day's mortgage.
+        try:
+            _migrate_backfill_nw_mortgage(conn)
+        except Exception as exc:
+            logger.warning("Net worth mortgage backfill migration failed: %s", exc)
         # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 

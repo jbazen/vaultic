@@ -1076,3 +1076,90 @@ class TestMigrateHoldingsHistory:
             finally:
                 conn.execute("DELETE FROM manual_holdings_snapshots WHERE account_number = 'UNMAPPED_XYZ'")
                 conn.commit()
+
+
+def _nw_row(conn, snapped_at, mortgage=None):
+    conn.execute(
+        "INSERT INTO net_worth_snapshots (snapped_at, total, liabilities, mortgage) "
+        "VALUES (?, 0, 0, ?)",
+        (snapped_at, mortgage),
+    )
+
+
+def _mes_row(conn, name, acct, value, snapped_at, category="other_liability"):
+    conn.execute(
+        "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (name, acct, category, value, snapped_at),
+    )
+
+
+def _mortgages(conn):
+    return {
+        str(r["snapped_at"]): r["mortgage"]
+        for r in conn.execute("SELECT snapped_at, mortgage FROM net_worth_snapshots")
+    }
+
+
+class TestBackfillNetWorthMortgage:
+    """_migrate_backfill_nw_mortgage sets each net worth row's mortgage from the
+    liability snapshot history as of that date (#9). Isolated DB per test."""
+
+    def _conn(self):
+        from tests.conftest import make_isolated_db
+        return make_isolated_db()[0]
+
+    def test_picks_latest_snapshot_on_or_before_date_with_abs(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "704931286", -200000.0, "2026-03-17")  # PDF sign
+        _mes_row(conn, "Mortgage", "704931286", 198700.0, "2026-04-02")
+        _mes_row(conn, "Mortgage", "704931286", 197400.0, "2026-05-02")
+        for d in ("2026-03-18", "2026-04-02", "2026-04-30", "2026-05-15"):
+            _nw_row(conn, d)
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {
+            "2026-03-18": 200000.0,
+            "2026-04-02": 198700.0,  # same-day snapshot counts as "on or before"
+            "2026-04-30": 198700.0,
+            "2026-05-15": 197400.0,
+        }
+
+    def test_sums_two_liability_accounts(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-01-01")
+        _mes_row(conn, "HELOC", "222", 20000.0, "2026-01-10")
+        _mes_row(conn, "HELOC", "222", 18000.0, "2026-02-10")
+        _nw_row(conn, "2026-01-05")
+        _nw_row(conn, "2026-02-15")
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {"2026-01-05": 150000.0, "2026-02-15": 168000.0}
+
+    def test_ignores_non_liability_accounts(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-01-01")
+        _mes_row(conn, "Home", "home_1", 650000.0, "2026-01-01", category="home_value")
+        _nw_row(conn, "2026-01-05")
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {"2026-01-05": 150000.0}
+
+    def test_leaves_null_when_no_prior_snapshot(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-02-01")
+        _nw_row(conn, "2026-01-15")
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {"2026-01-15": None}
+
+    def test_never_overwrites_stored_value_and_is_idempotent(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-01-01")
+        _nw_row(conn, "2026-01-05", mortgage=149000.0)  # written by the sync
+        _nw_row(conn, "2026-01-06")
+        _migrate_backfill_nw_mortgage(conn)
+        first = _mortgages(conn)
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == first == {"2026-01-05": 149000.0, "2026-01-06": 150000.0}
