@@ -1,12 +1,13 @@
 /**
- * E2E tests for the Insperity 401K detail view on the Accounts page.
+ * E2E tests for the account list on the Dashboard (merged from the old Accounts
+ * page in #86): the Insperity 401K detail view and Plaid Reconnect / Disconnect.
  *
  * Verifies the InsperityAccountCard renders with all 5 tabs:
  *   Holdings, Transactions, Performance, Contributions, Allocation.
  * All Insperity API endpoints are mocked with representative data.
  */
 import { test, expect } from "@playwright/test";
-import { mockAllAPIs, loginMocked } from "./helpers.js";
+import { mockAllAPIs, loginOnly } from "./helpers.js";
 
 // ── Mock data matching the shapes returned by /api/insperity/* endpoints ────
 
@@ -74,16 +75,7 @@ test.describe("Insperity Account Detail", () => {
     await mockInsperityAPIs(page);
     await page.route("**/api/manual", r =>
       r.fulfill({ json: [INSPERITY_ENTRY] }));
-
-    await page.goto("/");
-    await page.getByPlaceholder(/username/i).fill("testuser");
-    await page.getByPlaceholder(/password/i).fill("testpassword");
-    await page.getByRole("button", { name: /sign in|login|log in/i }).click();
-    await page.waitForSelector("text=Net Worth", { timeout: 8000 });
-
-    // Navigate to Accounts page
-    await page.getByRole("button", { name: /finance/i }).click();
-    await page.getByRole("link", { name: /accounts/i }).click();
+    await loginOnly(page);
   });
 
   test("renders Insperity card with balance", async ({ page }) => {
@@ -99,66 +91,34 @@ test.describe("Insperity Account Detail", () => {
 
   test("shows performance tab", async ({ page }) => {
     await page.getByText("INSPERITY 401K PLAN").click();
-    await page.getByRole("button", { name: "Performance" }).click();
+    await page.getByRole("button", { name: "Performance", exact: true }).click();
     await expect(page.getByText("1 Month")).toBeVisible();
     await expect(page.getByText("YTD")).toBeVisible();
   });
 
   test("shows contributions tab", async ({ page }) => {
     await page.getByText("INSPERITY 401K PLAN").click();
-    await page.getByRole("button", { name: "Contributions" }).click();
+    await page.getByRole("button", { name: "Contributions", exact: true }).click();
     await expect(page.getByText("Roth Rate")).toBeVisible();
     await expect(page.getByText("YTD Employee")).toBeVisible();
   });
 
   test("shows allocation tab", async ({ page }) => {
     await page.getByText("INSPERITY 401K PLAN").click();
-    await page.getByRole("button", { name: "Allocation" }).click();
+    await page.getByRole("button", { name: "Allocation", exact: true }).click();
     await expect(page.getByText("85.0%")).toBeVisible();
     await expect(page.getByText("Target Date")).toBeVisible();
   });
 
   test("shows transactions tab", async ({ page }) => {
     await page.getByText("INSPERITY 401K PLAN").click();
-    await page.getByRole("button", { name: "Transactions" }).click();
+    await page.getByRole("button", { name: "Transactions", exact: true }).click();
     await expect(page.getByText("Employee Roth Contrib")).toBeVisible();
     await expect(page.getByText("Employer Match")).toBeVisible();
   });
 });
 
-test.describe("Manual entry account numbers (Accounts)", () => {
-  test("HSA cash row shows the stored account number", async ({ page }) => {
-    await mockAllAPIs(page);
-    await page.route("**/api/manual", r =>
-      r.fulfill({ json: [
-        { id: 7, name: "HSA Cash Account", category: "liquid", value: 1544.06, entered_at: "2026-03-01", account_number: "430941440" },
-      ] }));
-
-    await page.goto("/");
-    await page.getByPlaceholder(/username/i).fill("testuser");
-    await page.getByPlaceholder(/password/i).fill("testpassword");
-    await page.getByRole("button", { name: /sign in|login|log in/i }).click();
-    await page.waitForSelector("text=Net Worth", { timeout: 8000 });
-
-    await page.getByRole("button", { name: /finance/i }).click();
-    await page.getByRole("link", { name: /accounts/i }).click();
-
-    await expect(page.getByText("HSA Cash Account")).toBeVisible();
-    await expect(page.getByText("#430941440")).toBeVisible();
-  });
-});
-
 test.describe("Plaid Reconnect", () => {
-  async function gotoAccounts(page) {
-    await page.goto("/");
-    await page.getByPlaceholder(/username/i).fill("testuser");
-    await page.getByPlaceholder(/password/i).fill("testpassword");
-    await page.getByRole("button", { name: /sign in|login|log in/i }).click();
-    await page.waitForSelector("text=Net Worth", { timeout: 8000 });
-    await page.getByRole("button", { name: /finance/i }).click();
-    await page.getByRole("link", { name: /accounts/i }).click();
-  }
-
   test("item with ITEM_LOGIN_REQUIRED shows the login-expired warning (issue #73)", async ({ page }) => {
     await mockAllAPIs(page);
     // Real Plaid disconnect: the banner is driven by error_code, not staleness.
@@ -169,7 +129,7 @@ test.describe("Plaid Reconnect", () => {
         last_error_at: "2026-07-31 08:00:06", created_at: "2019-12-01 05:13:31",
       }] }));
 
-    await gotoAccounts(page);
+    await loginOnly(page);
 
     await expect(page.getByRole("button", { name: /reconnect/i })).toBeVisible();
     await expect(page.getByText(/login expired/i)).toBeVisible();
@@ -185,7 +145,7 @@ test.describe("Plaid Reconnect", () => {
         created_at: "2019-12-01 05:13:31",
       }] }));
 
-    await gotoAccounts(page);
+    await loginOnly(page);
 
     // Reconnect is always available, but no false "login expired" alarm.
     await expect(page.getByRole("button", { name: /reconnect/i })).toBeVisible();
@@ -204,7 +164,7 @@ test.describe("Plaid Reconnect", () => {
     await page.route("**/api/plaid/items/item-chase", r =>
       r.fulfill({ status: 502, json: { detail: "Plaid could not remove this connection. Nothing was changed." } }));
 
-    await gotoAccounts(page);
+    await loginOnly(page);
     page.once("dialog", d => d.accept());
     await page.getByRole("button", { name: /disconnect/i }).click();
 

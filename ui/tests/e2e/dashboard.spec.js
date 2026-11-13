@@ -29,11 +29,11 @@ test.describe("Dashboard", () => {
     await expect(page).toHaveURL(/settings/);
   });
 
-  test("navigation to accounts works", async ({ page }) => {
-    // Accounts is inside the collapsed "Finance" nav group — expand it first
-    await page.getByRole("button", { name: /finance/i }).click();
-    await page.getByRole("link", { name: /accounts/i }).click();
-    await expect(page).toHaveURL(/accounts/);
+  test("the sidebar has no Accounts link or Finance group, and Import is top-level", async ({ page }) => {
+    await expect(page.getByRole("link", { name: /^accounts$/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /finance/i })).toHaveCount(0);
+    await page.getByRole("link", { name: /import/i }).first().click();
+    await expect(page).toHaveURL(/\/import/);
   });
 
   test("navigation back to dashboard works", async ({ page }) => {
@@ -57,6 +57,7 @@ test.describe("Manual entry account numbers (Dashboard)", () => {
       ] }));
     await loginOnly(page);
 
+    await expect(page.getByText("HSA Cash Account")).toBeVisible();
     await expect(page.getByText("#430941440")).toBeVisible();
   });
 });
@@ -110,5 +111,17 @@ test.describe("Dashboard account list", () => {
 
     await page.getByRole("button", { name: /coinbase/i }).click();
     await expect(page.getByText(/Coinbase is unreachable/)).toBeVisible();
+  });
+});
+
+test.describe("Legacy /accounts link", () => {
+  test("lands on the Dashboard account list", async ({ page }) => {
+    await mockAllAPIs(page);
+    // Sign in directly on the old URL, as an old bookmark or notification would
+    await loginOnly(page, "/accounts");
+
+    await expect(page).toHaveURL(/\/#accounts$/);
+    await expect(page.getByRole("heading", { name: "Accounts" })).toBeVisible();
+    await expect(page.getByText("Chase", { exact: true })).toBeVisible();
   });
 });

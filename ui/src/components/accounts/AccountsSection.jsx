@@ -14,10 +14,10 @@ const PROPERTY_BADGES = { home_value: "Home", car_value: "Vehicle", real_estate:
 
 // The draggable account list: one block per institution plus the manual sections.
 // Owns drag-and-drop state, Disconnect handling and its error banner. Reorders
-// are saved under `orderPage`; every successful change calls onChanged().
+// are saved under the "dashboard" order; every successful change calls onChanged().
 // The `id="accounts"` anchor is where /#accounts (push notifications) scrolls to.
 export default function AccountsSection({
-  accounts, manualEntries, plaidItems, savedOrder, orderPage, i360LastSync = null, onChanged,
+  accounts, manualEntries, plaidItems, savedOrder, i360LastSync = null, onChanged,
 }) {
   const [removeError, setRemoveError] = useState("");
   // Drag-and-drop ref (avoid setState during dragstart — see CLAUDE.md)
@@ -81,7 +81,7 @@ export default function AccountsSection({
     keys.splice(toIdx, 0, sourceKey);
 
     try {
-      await reorderInstitutions(orderPage, keys);
+      await reorderInstitutions("dashboard", keys);
       await onChanged();
     } catch { /* non-fatal */ }
   }

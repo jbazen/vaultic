@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useLocation } from "react-router-dom";
 import {
   getNetWorthLatest, getNetWorthHistory, triggerSync,
   getAccounts, getManualEntries,
@@ -39,6 +40,7 @@ export default function Dashboard() {
   const [i360LastSync, setI360LastSync] = useState(null);
   const [savedOrder, setSavedOrder] = useState([]);
   const mountedRef = useRef(true);
+  const { hash } = useLocation();
 
   // Full reload: first load, Sync All, Coinbase and the Parker / Insperity syncs.
   async function loadAll() {
@@ -99,6 +101,14 @@ export default function Dashboard() {
     loadAll();
     return () => { mountedRef.current = false; };
   }, []);
+
+  // /#accounts (the /accounts redirect and push-notification links) lands on the
+  // account list. It only exists once the first load has finished.
+  useEffect(() => {
+    if (!loading && hash === "#accounts") {
+      document.getElementById("accounts")?.scrollIntoView();
+    }
+  }, [loading, hash]);
 
   async function handleSync() {
     setSyncing(true);
@@ -220,7 +230,7 @@ export default function Dashboard() {
 
       {/* ── Accounts: full-width list; every block (institution + manual section) draggable ── */}
       <AccountsSection accounts={accounts} manualEntries={manualEntries} plaidItems={plaidItems}
-        savedOrder={savedOrder} orderPage="dashboard" i360LastSync={i360LastSync} onChanged={loadAccounts} />
+        savedOrder={savedOrder} i360LastSync={i360LastSync} onChanged={loadAccounts} />
 
       <I360SyncModal open={i360Open} onClose={() => setI360Open(false)} onSynced={loadAll} />
       <InsperitySyncModal open={insperityOpen} onClose={() => setInsperityOpen(false)} onSynced={loadAll} />
