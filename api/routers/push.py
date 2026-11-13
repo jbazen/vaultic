@@ -10,12 +10,9 @@ browser needs it before the user has logged in (to call PushManager.subscribe).
 The public key is not secret — it just identifies this server to push services.
 """
 
-import secrets
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from api.auth import create_token
 from api.database import get_db
 from api.dependencies import get_current_user
 from api.push import get_vapid_public_key, is_configured, send_push_notification
@@ -43,10 +40,6 @@ class SubscribeBody(BaseModel):
 
 class UnsubscribeBody(BaseModel):
     endpoint: str
-
-
-class DeviceAuthBody(BaseModel):
-    device_token: str
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -82,60 +75,20 @@ async def subscribe(body: SubscribeBody, _user: str = Depends(get_current_user))
             detail="Push notifications not configured on this server"
         )
 
-    # Generate a long-lived device token so this device can auto-authenticate
-    # on the Review page without requiring a manual login every 24 hours.
-    # The token is returned once and stored by the frontend in localStorage.
-    device_token = secrets.token_hex(32)
-
     with get_db() as conn:
-        # Upsert: insert new or reactivate existing endpoint, refreshing device_token
+        # Upsert: insert new or reactivate existing endpoint
         conn.execute(
-            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_token, username, is_active)
-               VALUES (?, ?, ?, ?, ?, 1)
+            """INSERT INTO push_subscriptions (endpoint, p256dh, auth, username, is_active)
+               VALUES (?, ?, ?, ?, 1)
                ON CONFLICT(endpoint) DO UPDATE SET
-                 p256dh       = excluded.p256dh,
-                 auth         = excluded.auth,
-                 device_token = excluded.device_token,
-                 username     = excluded.username,
-                 is_active    = 1""",
-            (body.endpoint, body.p256dh, body.auth, device_token, _user),
+                 p256dh    = excluded.p256dh,
+                 auth      = excluded.auth,
+                 username  = excluded.username,
+                 is_active = 1""",
+            (body.endpoint, body.p256dh, body.auth, _user),
         )
 
-    # Return the device_token so the frontend can store it for auto-auth
-    return {"status": "subscribed", "device_token": device_token}
-
-
-@router.post("/device-auth")
-async def device_auth(body: DeviceAuthBody):
-    """Exchange a stored device_token for a fresh JWT — no password required.
-
-    This endpoint is intentionally unauthenticated so that the Review page
-    can silently re-authenticate when the user taps a push notification, even
-    after their normal 24-hour JWT has expired.
-
-    Security model: the device_token is a 64-character random hex string
-    generated at subscribe time and stored only in the browser's localStorage
-    and the server's push_subscriptions table. Only the subscribed device
-    can use it. Tokens rotate on each new subscribe() call.
-    """
-    if not body.device_token:
-        raise HTTPException(status_code=400, detail="device_token required")
-
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT username FROM push_subscriptions
-               WHERE device_token = ? AND is_active = 1""",
-            (body.device_token,),
-        ).fetchone()
-
-    if not row:
-        raise HTTPException(status_code=401, detail="Invalid or expired device token")
-
-    # Issue a fresh JWT for the user who subscribed this device
-    import os
-    username = row["username"] or os.environ.get("AUTH_USERNAME", "jbazen")
-    token = create_token(username)
-    return {"token": token}
+    return {"status": "subscribed"}
 
 
 @router.post("/unsubscribe")
