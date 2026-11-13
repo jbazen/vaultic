@@ -200,3 +200,39 @@ class TestSyncAllErrorTracking:
             assert row["last_error_at"] is None
         finally:
             _cleanup_item(item_db_id)
+
+
+class TestNetWorthSnapshotMortgage:
+    """_take_net_worth_snapshot stores the manual liability it adds to
+    liabilities in the mortgage column (#9)."""
+
+    def _snapshot(self, liabilities_rows):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        for name, value in liabilities_rows:
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at) "
+                "VALUES (?, 'other_liability', ?, '2026-01-01')",
+                (name, value),
+            )
+        with patch("api.sync.get_db", get_db):
+            sync._take_net_worth_snapshot("2026-05-01")
+        row = conn.execute(
+            "SELECT liabilities, mortgage FROM net_worth_snapshots WHERE snapped_at = '2026-05-01'"
+        ).fetchone()
+        conn.close()
+        return row
+
+    def test_writes_manual_liability_total(self):
+        row = self._snapshot([("Mortgage", 180000.0)])
+        assert row["mortgage"] == 180000.0
+        assert row["liabilities"] == 180000.0
+
+    def test_zero_when_no_liability(self):
+        row = self._snapshot([])
+        assert row["mortgage"] == 0.0
+
+    def test_negative_stored_liability_written_positive(self):
+        row = self._snapshot([("Mortgage", -187121.85)])
+        assert row["mortgage"] == 187121.85
+        assert row["liabilities"] == 187121.85

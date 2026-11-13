@@ -18,6 +18,26 @@ def _get_mortgage(conn) -> float:
     return float(row[0]) if row else 0.0
 
 
+def _row_mortgage(d: dict, current_mortgage: float) -> float:
+    """Mortgage to net out of this snapshot's liabilities (#9).
+
+    Uses the amount stored on the snapshot row when the sync recorded it, so a
+    past row subtracts the mortgage of that day. Rows without a stored value
+    (written before the column existed, or with no history to backfill from)
+    fall back to the current mortgage, which was the behaviour for every row
+    before #9.
+    """
+    stored = d.get("mortgage")
+    return float(stored) if stored is not None else current_mortgage
+
+
+def _with_investable(d: dict, current_mortgage: float) -> dict:
+    """Set the effective `mortgage` and the derived `investable` on a snapshot dict."""
+    d["mortgage"] = _row_mortgage(d, current_mortgage)
+    d["investable"] = _investable(d, d["mortgage"])
+    return d
+
+
 def _investable(d: dict, mortgage: float) -> float:
     """Investable Net Worth = financial assets net of credit card debt, excluding home and car.
 
@@ -51,8 +71,7 @@ async def latest(_user: str = Depends(get_current_user)):
         d = dict(row)
         mortgage = _get_mortgage(conn)
 
-    d["investable"] = _investable(d, mortgage)
-    return d
+    return _with_investable(d, mortgage)
 
 
 @router.get("/history")
@@ -66,12 +85,14 @@ async def history(
     - Collapses to one point per month (last snapshot of each month) for longer ranges
     - Each row includes `investable` = liquid + invested + crypto + other_assets - credit_liabilities
       (gross financial assets minus credit card debt; mortgage excluded since home is already stripped)
+    - Each row's mortgage is the one stored on that snapshot (falls back to the
+      current mortgage when NULL) and is returned as `mortgage`
     - Max range: 3650 days (10 years)
     """
     with get_db() as conn:
         rows = conn.execute("""
             SELECT snapped_at, total, liquid, invested, crypto, real_estate,
-                   vehicles, liabilities, other_assets
+                   vehicles, liabilities, other_assets, mortgage
             FROM net_worth_snapshots
             WHERE snapped_at >= date('now', '-' || ? || ' days')
             ORDER BY snapped_at ASC
@@ -80,7 +101,7 @@ async def history(
 
     data = [dict(row) for row in rows]
     for row in data:
-        row["investable"] = _investable(row, mortgage)
+        _with_investable(row, mortgage)
 
     # Monthly aggregation when range > 90 days (keep last snapshot per month)
     if days > 90 and len(data) > 90:
@@ -106,8 +127,7 @@ async def refresh_snapshot(_user: str = Depends(get_current_user)):
         ).fetchone()
         d = dict(row) if row else {}
         mortgage = _get_mortgage(conn)
-    d["investable"] = _investable(d, mortgage)
-    return d
+    return _with_investable(d, mortgage)
 
 
 @router.get("/debug")
@@ -212,8 +232,10 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
     live_credit_liabilities = max(0.0, live_liabilities - mortgage)
     live_investable = live_liquid + live_invested + live_crypto + live_other_assets - live_credit_liabilities
 
-    # Stored snapshot investable
-    stored_investable = _investable(snap_dict, mortgage) if snap_dict else None
+    # Stored snapshot investable (uses the snapshot's own stored mortgage)
+    stored_investable = (
+        _with_investable(snap_dict, mortgage)["investable"] if snap_dict else None
+    )
 
     return {
         "snapshot": snap_dict,

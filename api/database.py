@@ -1069,6 +1069,11 @@ MIGRATIONS = [
     # cleared on the next successful sync. last_error_at times the transition.
     "ALTER TABLE plaid_items ADD COLUMN error_code TEXT",
     "ALTER TABLE plaid_items ADD COLUMN last_error_at DATETIME",
+    # Manual-liability (mortgage) amount included in this snapshot's liabilities
+    # (#9), so each history row's investable figure subtracts the mortgage of
+    # that day rather than today's. NULL on rows written before the column
+    # existed and not backfilled; readers fall back to the current mortgage.
+    "ALTER TABLE net_worth_snapshots ADD COLUMN mortgage REAL",
 ]
 
 

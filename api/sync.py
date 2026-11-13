@@ -576,7 +576,10 @@ def _take_net_worth_snapshot(today: str):
         # Liabilities from manual entries (mortgage, etc.) may be stored as
         # negative values from PDF import. Use abs() so they always ADD to
         # the liabilities total (which is subtracted from net worth later).
-        liabilities += abs(_sum_manual("other_liability"))
+        # The same amount is stored in the mortgage column so history can tell
+        # mortgage apart from credit card debt as of that day (#9).
+        mortgage = abs(_sum_manual("other_liability"))
+        liabilities += mortgage
 
         other_assets  = _sum_manual("other_asset")
         invested     += _sum_manual("invested")
@@ -589,8 +592,9 @@ def _take_net_worth_snapshot(today: str):
 
         conn.execute("""
             INSERT INTO net_worth_snapshots
-                (snapped_at, total, liquid, invested, crypto, real_estate, vehicles, liabilities, other_assets)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (snapped_at, total, liquid, invested, crypto, real_estate, vehicles, liabilities,
+                 other_assets, mortgage)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(snapped_at) DO UPDATE SET
                 total        = excluded.total,
                 liquid       = excluded.liquid,
@@ -599,7 +603,9 @@ def _take_net_worth_snapshot(today: str):
                 real_estate  = excluded.real_estate,
                 vehicles     = excluded.vehicles,
                 liabilities  = excluded.liabilities,
-                other_assets = excluded.other_assets
-        """, (today, total, liquid, invested, crypto, real_estate, vehicles, liabilities, other_assets))
+                other_assets = excluded.other_assets,
+                mortgage     = excluded.mortgage
+        """, (today, total, liquid, invested, crypto, real_estate, vehicles, liabilities,
+              other_assets, mortgage))
 
     logger.info(f"Net worth snapshot {today}: ${total:,.0f}")
