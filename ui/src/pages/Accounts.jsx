@@ -2,26 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import {
   getAccounts, getPlaidItems, removePlaidItem, renameAccount, syncCoinbase, getManualEntries,
   getAccountHoldings, getAccountInvestmentTransactions, toggleExcludeFromNetWorth,
-  deleteManualEntry, updateAccountNotes, renameManualEntry, getBalanceHistory,
+  deleteManualEntry, updateAccountNotes, renameManualEntry,
   getManualEntryHistory, reorderInstitutions, getInstitutionOrder,
 } from "../api.js";
-
-// Pseudo-keys for manual sections so they can be ordered alongside institutions.
-const SEC_INVESTED       = "__sec_investment_imported__";
-const SEC_INVESTED_OTHER = "__sec_investment_other__";
-const SEC_LIQUID         = "__sec_hsa_cash__";
-const SEC_PROPERTY       = "__sec_property_vehicles__";
-const SEC_LIABILITIES    = "__sec_liabilities__";
-
-// A Plaid item that hasn't synced in over 2 days has almost certainly dropped
-// its login (the cron runs 4×/day) — surface it so the user can reconnect.
-const STALE_SYNC_MS = 2 * 24 * 60 * 60 * 1000;
-function isSyncStale(lastSyncedAt) {
-  if (!lastSyncedAt) return true;
-  const t = new Date(String(lastSyncedAt).replace(" ", "T")).getTime();
-  if (Number.isNaN(t)) return false;
-  return Date.now() - t > STALE_SYNC_MS;
-}
 
 import PlaidLink from "../components/PlaidLink.jsx";
 import PlaidReconnect from "../components/PlaidReconnect.jsx";
@@ -32,33 +15,15 @@ import I360AccountCard from "../components/accounts/I360AccountCard.jsx";
 import InsperityAccountCard from "../components/accounts/InsperityAccountCard.jsx";
 import VoyaAccountCard from "../components/accounts/VoyaAccountCard.jsx";
 import { isRetirementAccount } from "../utils/accounts.js";
-import { AreaChart, Area, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer } from "recharts";
-import { fmt, fmtCrypto, fmtPrice, fmtPercent as fmtPct, fmtNum, fmtDate, fmtCompact, fmtAxisDate } from "../utils/format.js";
-
-function typeBadge(type) {
-  return <span className={`badge badge-${type}`}>{type}</span>;
-}
-
-function isLiability(type) {
-  return type === "credit" || type === "loan";
-}
-
-// ── Shared: Meta line ──────────────────────────────────────────────────────────
-// Badge + subtype/extra labels + editable notes + date — all on one line.
-// badgeType/badgeLabel override the type-derived badge (e.g. "retirement" for 401k/IRA).
-function MetaLine({ type, subtype, notes, onSaveNotes, date, extra, badgeType, badgeLabel }) {
-  const bType  = badgeType  || type;
-  const bLabel = badgeLabel || type;
-  return (
-    <div className="account-meta" style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 8px" }}>
-      <span className={`badge badge-${bType}`}>{bLabel}</span>
-      {subtype && <span style={{ color: "var(--text2)" }}>{subtype}</span>}
-      {extra}
-      <EditableNotes notes={notes} onSave={onSaveNotes} inline />
-      {date && <span style={{ color: "var(--text2)", opacity: 0.6 }}>· {date}</span>}
-    </div>
-  );
-}
+import AccountMetaLine from "../components/accounts/AccountMetaLine.jsx";
+import PlaidHoldingsTable from "../components/accounts/PlaidHoldingsTable.jsx";
+import InvestmentTransactionsTable from "../components/accounts/InvestmentTransactionsTable.jsx";
+import AccountBalanceChart from "../components/accounts/AccountBalanceChart.jsx";
+import {
+  SEC_INVESTED, SEC_INVESTED_OTHER, SEC_LIQUID, SEC_PROPERTY, SEC_LIABILITIES,
+  isSyncStale, isLiability, isPlaidInvestment, tabBtn,
+} from "../components/accounts/accountsUtils.jsx";
+import { fmt, fmtCrypto, fmtPrice, fmtPercent as fmtPct, fmtNum, fmtDate } from "../utils/format.js";
 
 // ── Crypto Account Row ─────────────────────────────────────────────────────────
 // Expandable row for Coinbase holdings. Click the row to show/hide native balance,
@@ -107,7 +72,7 @@ function CryptoAccountRow({ account, onRenamed }) {
                 style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
             </div>
           )}
-          <MetaLine
+          <AccountMetaLine
             type="crypto"
             notes={account.notes}
             onSaveNotes={async v => { await updateAccountNotes(account.id, v); onRenamed(); }}
@@ -144,7 +109,7 @@ function CryptoAccountRow({ account, onRenamed }) {
 // Shows available balance for depository accounts and credit limit for credit accounts.
 function AccountRow({ account, onRenamed }) {
   if (account.type === "crypto") return <CryptoAccountRow account={account} onRenamed={onRenamed} />;
-  if (account.source === "investor360") return <I360AccountCard account={account} onRenamed={onRenamed} BalanceChart={BalanceChart} />;
+  if (account.source === "investor360") return <I360AccountCard account={account} onRenamed={onRenamed} />;
   if (isPlaidInvestment(account)) return <PlaidInvestmentCard account={account} onRenamed={onRenamed} />;
 
   const [editing, setEditing] = useState(false);
@@ -197,7 +162,7 @@ function AccountRow({ account, onRenamed }) {
               style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
           </div>
         )}
-        <MetaLine
+        <AccountMetaLine
           type={account.type}
           subtype={account.subtype}
           notes={account.notes}
@@ -469,249 +434,10 @@ function ManualInvestmentCard({ entry, onDelete, onToggleExclude, onRenamed }) {
           {activeTab === "performance" && (
             perfLoading
               ? <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>Loading…</div>
-              : <BalanceChart data={perfHistory ?? []} />
+              : <AccountBalanceChart data={perfHistory ?? []} />
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Plaid Investment Detection ─────────────────────────────────────────────────
-function isPlaidInvestment(account) {
-  if (account.is_manual) return false;
-  return account.type === "investment" ||
-    ["401k", "ira", "roth", "pension", "brokerage"].includes(account.subtype);
-}
-
-function tabBtn(active) {
-  return {
-    background: active ? "var(--accent)" : "var(--bg)",
-    color: active ? "#fff" : "var(--text2)",
-    border: "1px solid var(--border)",
-    borderRadius: 6, padding: "4px 14px",
-    fontSize: 12, fontWeight: active ? 700 : 400,
-    cursor: "pointer",
-  };
-}
-
-// ── Plaid Holdings Table ───────────────────────────────────────────────────────
-function HoldingsTable({ holdings, totalValue }) {
-  if (!holdings || holdings.length === 0) {
-    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No holdings data available.</div>;
-  }
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border)" }}>
-            {["Security", "Ticker", "Type", "Qty", "Price", "Value", "Cost Basis", "Gain/Loss $", "Gain/Loss %", "% Assets"].map(h => (
-              <th key={h} scope="col" style={{ padding: "6px 10px 8px", textAlign: h === "Security" || h === "Type" ? "left" : "right",
-                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {holdings.map((h, i) => {
-            const glPos = h.gain_loss_dollars > 0;
-            const glNeg = h.gain_loss_dollars < 0;
-            const glColor = glPos ? "var(--green)" : glNeg ? "var(--red)" : "var(--text)";
-            return (
-              <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name || "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{h.ticker_symbol || "—"}</td>
-                <td style={{ padding: "8px 10px", color: "var(--text2)", fontSize: 12 }}>{h.security_type || "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(h.quantity, 4)}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{h.institution_price != null ? fmt(h.institution_price) : "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{h.institution_value != null ? fmt(h.institution_value) : "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{h.cost_basis != null ? fmt(h.cost_basis) : "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glColor }}>
-                  {h.gain_loss_dollars != null ? (glPos ? "+" : "") + fmt(h.gain_loss_dollars) : "—"}
-                </td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glColor }}>
-                  {h.gain_loss_pct != null ? (h.gain_loss_pct > 0 ? "+" : "") + fmtPct(h.gain_loss_pct) : "—"}
-                </td>
-                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{fmtPct(h.pct_assets)}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-        {totalValue > 0 && (
-          <tfoot>
-            <tr style={{ borderTop: "2px solid var(--border)" }}>
-              <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>Total</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>{fmt(totalValue)}</td>
-              <td colSpan={4} />
-            </tr>
-          </tfoot>
-        )}
-      </table>
-    </div>
-  );
-}
-
-// ── Investment Transactions Table ──────────────────────────────────────────────
-function InvestmentTransactionsTable({ transactions }) {
-  if (!transactions || transactions.length === 0) {
-    return (
-      <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>
-        No investment transactions found. Many 401k and IRA providers don't support
-        transaction history via Plaid — holdings and balance history still sync normally.
-      </div>
-    );
-  }
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border)" }}>
-            {["Date", "Type", "Subtype", "Security", "Ticker", "Qty", "Amount", "Fees"].map(h => (
-              <th key={h} scope="col" style={{ padding: "6px 10px 8px",
-                textAlign: ["Date", "Security", "Type", "Subtype"].includes(h) ? "left" : "right",
-                color: "var(--text2)", fontWeight: 600, whiteSpace: "nowrap", fontSize: 12 }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {transactions.map((t, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-              <td style={{ padding: "8px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{t.date}</td>
-              <td style={{ padding: "8px 10px", color: "var(--text)" }}>{t.type || "—"}</td>
-              <td style={{ padding: "8px 10px", color: "var(--text2)", fontSize: 12 }}>{t.subtype || "—"}</td>
-              <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t.security_name}>{t.security_name || t.name || "—"}</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{t.ticker || "—"}</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(t.quantity, 4)}</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{t.amount != null ? fmt(t.amount) : "—"}</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{t.fees != null ? fmt(t.fees) : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ── Balance History Chart ──────────────────────────────────────────────────────
-// Renders account balance over time for investment/retirement accounts.
-// Two modes:
-//   accountId  — fetches from /api/accounts/{id}/balances (Plaid-connected accounts)
-//   data       — pre-loaded [{snapped_at, current}] array; filters client-side by
-//                the selected period (PDF-imported accounts using manual_entry_snapshots)
-// Both modes produce identical charts so the UI is consistent across account types.
-function BalanceChart({ accountId, data: preloadedData }) {
-  const [days, setDays] = useState(365);
-  const [history, setHistory] = useState(null);
-  const [loading, setLoading] = useState(!preloadedData);
-
-  useEffect(() => {
-    // When pre-loaded data is provided (PDF-imported), filter it client-side
-    // by the selected period rather than making a new network request.
-    if (preloadedData) {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - days);
-      const cutoffStr = cutoff.toISOString().slice(0, 10);
-      setHistory(preloadedData.filter(r => r.snapped_at >= cutoffStr));
-      return;
-    }
-    // Plaid-connected path: fetch balance snapshots from the server.
-    setLoading(true);
-    getBalanceHistory(accountId, days)
-      .then(data => setHistory(data))
-      .catch(() => setHistory([]))
-      .finally(() => setLoading(false));
-  }, [accountId, days, preloadedData]);
-
-  const periods = [
-    { label: "30D", days: 30 },
-    { label: "90D", days: 90 },
-    { label: "1Y",  days: 365 },
-    { label: "3Y",  days: 1095 },
-  ];
-
-  const tab = active => ({
-    background: active ? "var(--accent)" : "var(--bg3)",
-    color: active ? "#fff" : "var(--text2)",
-    border: "1px solid var(--border)",
-    borderRadius: 6, padding: "3px 10px",
-    fontSize: 11, fontWeight: active ? 700 : 400,
-    cursor: "pointer",
-  });
-
-  if (loading) return <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>Loading…</div>;
-  if (!history || history.length === 0) {
-    return <div style={{ color: "var(--text2)", fontSize: 13, padding: "20px 0" }}>No history yet — sync this account or import a PDF to start tracking performance.</div>;
-  }
-
-  const first = history[0]?.current ?? 0;
-  const last  = history[history.length - 1]?.current ?? 0;
-  const returnDollar = last - first;
-  const returnPct    = first > 0 ? ((last - first) / first) * 100 : 0;
-  const isPositive   = returnDollar >= 0;
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null;
-    return (
-      <div style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 14px" }}>
-        <div style={{ color: "var(--text2)", fontSize: 11, marginBottom: 4 }}>{fmtAxisDate(label, days)}</div>
-        <div style={{ color: "var(--text)", fontWeight: 700, fontSize: 14 }}>{fmt(payload[0].value)}</div>
-      </div>
-    );
-  };
-
-  return (
-    <div>
-      {/* Period selector + return summary */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", gap: 5 }}>
-          {periods.map(p => (
-            <button key={p.days} style={tab(days === p.days)} onClick={() => setDays(p.days)}>{p.label}</button>
-          ))}
-        </div>
-        <div style={{ fontSize: 13 }}>
-          <span style={{ color: isPositive ? "var(--green)" : "var(--red)", fontWeight: 700 }}>
-            {isPositive ? "+" : ""}{fmt(returnDollar)}
-          </span>
-          <span style={{ color: "var(--text2)", marginLeft: 6, fontSize: 12 }}>
-            ({isPositive ? "+" : ""}{returnPct.toFixed(2)}%)
-          </span>
-        </div>
-      </div>
-
-      {/* Chart */}
-      <ResponsiveContainer width="100%" height={160}>
-        <AreaChart data={history} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id={`grad-${accountId ?? "manual"}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%"  stopColor="var(--accent)" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <XAxis
-            dataKey="snapped_at"
-            tickFormatter={s => fmtAxisDate(s, days)}
-            tick={{ fontSize: 10, fill: "var(--text2)" }}
-            axisLine={false} tickLine={false}
-            interval="preserveStartEnd"
-          />
-          <YAxis
-            tickFormatter={fmtCompact}
-            tick={{ fontSize: 10, fill: "var(--text2)" }}
-            axisLine={false} tickLine={false}
-            width={55}
-            domain={["auto", "auto"]}
-          />
-          <RechartsTooltip content={<CustomTooltip />} />
-          <Area
-            type="monotone"
-            dataKey="current"
-            stroke="var(--accent)"
-            strokeWidth={2}
-            fill={`url(#grad-${accountId ?? "manual"})`}
-            dot={history.length === 1 ? { r: 5, fill: "var(--accent)" } : false}
-            activeDot={{ r: 4 }}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
     </div>
   );
 }
@@ -787,7 +513,7 @@ function PlaidInvestmentCard({ account, onRenamed }) {
                 style={{ background: "none", border: "none", color: "var(--text2)", cursor: "pointer", fontSize: 12, padding: "2px 4px" }} aria-label="Rename">✎</button>
             </div>
           )}
-          <MetaLine
+          <AccountMetaLine
             type={account.type}
             subtype={account.subtype}
             notes={account.notes}
@@ -809,11 +535,11 @@ function PlaidInvestmentCard({ account, onRenamed }) {
             <button style={tabBtn(activeTab === "performance")} onClick={() => handleTabChange("performance")}>Performance</button>
           </div>
           {activeTab === "performance" ? (
-            <BalanceChart accountId={account.id} />
+            <AccountBalanceChart accountId={account.id} />
           ) : loading ? (
             <div style={{ color: "var(--text2)", fontSize: 13, padding: "8px 0" }}>Loading…</div>
           ) : activeTab === "holdings" ? (
-            <HoldingsTable holdings={holdings?.holdings} totalValue={holdings?.total_value} />
+            <PlaidHoldingsTable holdings={holdings?.holdings} totalValue={holdings?.total_value} />
           ) : (
             <InvestmentTransactionsTable transactions={transactions} />
           )}
