@@ -135,6 +135,11 @@ def sync_all(refresh: bool = False):
     # Net worth snapshot is taken inside _sync_item for each Plaid item, but we
     # call it once more here to capture Coinbase + any items that may have been
     # skipped, ensuring today's snapshot always reflects the full picture.
+    # Manual entry history is brought up to date first so both share `today`.
+    try:
+        snapshot_manual_entries(today)
+    except Exception as e:
+        logger.warning(f"Manual entry snapshot step failed (non-fatal): {e}")
     _take_net_worth_snapshot(today)
 
     # Check if Parker/I360 data is stale and send a push reminder (once per day)
@@ -511,6 +516,45 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
 
     except Exception as e:
         logger.warning(f"investment_transactions_get failed for item {item_db_id}: {e}")
+
+
+def snapshot_manual_entries(today: str):
+    """Record a manual entry's value in its history when it changed (#9).
+
+    For each manual entry with an account_number, compares the current value
+    with its latest manual_entry_snapshots row (exact account_number match).
+    If there is no row, or the values differ by more than half a cent, writes
+    a row dated `today`; otherwise writes nothing. Every edit/import path
+    already records its own snapshot, so in normal operation this is a no-op:
+    it only guarantees the current value and the latest history point never
+    drift apart. Running several times a day is safe (the second run finds the
+    value already recorded).
+    """
+    written = 0
+    with get_db() as conn:
+        entries = conn.execute(
+            "SELECT name, account_number, category, value FROM manual_entries "
+            "WHERE account_number IS NOT NULL AND account_number <> ''"
+        ).fetchall()
+        for e in entries:
+            latest = conn.execute(
+                "SELECT value FROM manual_entry_snapshots WHERE account_number = ? "
+                "ORDER BY snapped_at DESC, id DESC LIMIT 1",
+                (e["account_number"],),
+            ).fetchone()
+            if latest is not None and abs((latest["value"] or 0) - (e["value"] or 0)) <= 0.005:
+                continue
+            conn.execute(
+                """INSERT INTO manual_entry_snapshots
+                       (name, account_number, category, value, snapped_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(name, snapped_at) DO UPDATE SET value = excluded.value
+                   WHERE manual_entry_snapshots.account_number = excluded.account_number""",
+                (e["name"], e["account_number"], e["category"], e["value"], today),
+            )
+            written += 1
+    if written:
+        logger.info(f"Manual entry snapshots {today}: recorded {written} changed value(s)")
 
 
 def _take_net_worth_snapshot(today: str):
