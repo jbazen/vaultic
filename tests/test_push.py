@@ -113,10 +113,12 @@ class TestSubscribe:
         endpoint = _endpoint()
         resp = client.post("/api/push/subscribe", json=_subscribe_body(endpoint), headers=auth_headers)
         assert resp.status_code == 200
-        assert resp.json()["status"] == "subscribed"
+        assert resp.json() == {"status": "subscribed"}
+        assert "device_token" not in resp.json()
 
         row = _row(endpoint)
         assert row is not None
+        assert row["device_token"] is None
         assert row["username"] == "testuser"
         assert row["is_active"] == 1
         assert row["p256dh"] == "p256dh_key"
