@@ -74,7 +74,7 @@
       <strong>Browser push subscription details</strong>, if a user turns on notifications.
     </li>
   </ul>
-  <p>We do not collect data from visitors to this documentation site and use no cookies, analytics or advertising trackers.</p>
+  <p>This documentation site sets no cookies and uses no analytics or advertising trackers. It is hosted on GitHub Pages, which may log visits under GitHub's own privacy policy.</p>
 
   <h2>3. How Plaid is used</h2>
   <p>
@@ -110,8 +110,8 @@
   <h2>5. Storage and security</h2>
   <p>
     Traffic is encrypted in transit with HTTPS. Plaid access tokens and two-factor secrets are encrypted
-    at rest with Fernet (AES-based) encryption, and passwords are stored as bcrypt hashes. Access requires
-    a password plus two-factor authentication, and is limited to the household's users and the owner as
+    at rest with Fernet (AES-based) encryption, and passwords are stored as bcrypt hashes. Every account
+    is required to use a password plus two-factor authentication, and access is limited to the household's users and the owner as
     administrator. Other application data, such as balances and transactions, is stored in the application
     database without separate application-level encryption and relies on access controls and the hosting
     and backup providers' storage protections. See the <a href="security.html">Information Security Policy</a>

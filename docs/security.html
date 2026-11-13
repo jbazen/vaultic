@@ -46,14 +46,14 @@
 
   <h2>2. Access control</h2>
   <ul>
-    <li>Every API endpoint requires authentication. Administrative functions (user management, security log access) additionally require the administrator role.</li>
+    <li>Every endpoint that reads or changes data requires authentication; only sign-in, two-factor verification, token refresh, a health check and the public push key are reachable without it. Administrative functions (user management, security log access) additionally require the administrator role.</li>
     <li>Accounts are created only by an administrator. There is no public sign-up.</li>
     <li>Passwords must be at least 8 characters with upper-case, lower-case and a digit, and are stored only as bcrypt hashes.</li>
-    <li>Two-factor authentication (TOTP) is required at login. Disabling it requires the account password. The intermediate step after password entry uses a short-lived (5 minute), single-purpose token that cannot be used for general API access.</li>
-    <li>Sessions use signed tokens with unique identifiers and expiry. Logging out revokes the token server-side, and an administrator or user can revoke all sessions.</li>
+    <li>Every user account must have two-factor authentication (TOTP) turned on, and the monthly access review confirms it. Disabling it requires the account password. The intermediate step after password entry uses a short-lived (5 minute), single-purpose token that cannot be used for general API access.</li>
+    <li>Sessions use signed tokens with unique identifiers and expiry. Logging out revokes the token server-side, a user can revoke all of their long-lived (mobile) sessions, and changing the token signing key ends every active session.</li>
     <li>Failed logins are rate limited per IP address and per username, and manual sync actions are rate limited per user.</li>
     <li>Least privilege: users can only access the application's own data through the application; direct system and database access is limited to the owner.</li>
-    <li><strong>Access review:</strong> each month the owner reviews the list of active users and the security log for unexpected activity.</li>
+    <li><strong>Access review:</strong> each month the owner reviews the list of active users, confirms two-factor authentication is on for each, and reviews the security log for unexpected activity.</li>
   </ul>
 
   <h2>3. Encryption</h2>
@@ -123,7 +123,8 @@
   <h2>11. Personnel</h2>
   <p>
     There are no employees or contractors. Access for a person who should no longer have it is removed by deactivating
-    the user account and revoking that user's sessions.
+    the user account, revoking its long-lived sessions and, if the person may still hold an active session, changing the token
+    signing key so every session must sign in again.
   </p>
 
   <h2>12. Review</h2>
