@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vaultic — Information Security Policy</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      line-height: 1.7;
+      padding: 2rem 1rem 3rem;
+    }
+    main { max-width: 760px; margin: 0 auto; }
+    .logo { font-size: 1.6rem; font-weight: 700; color: #4f8ef7; }
+    .logo a { color: inherit; text-decoration: none; }
+    h1 { font-size: 1.9rem; margin: 1rem 0 0.25rem; line-height: 1.3; }
+    .updated { color: #8b92a8; font-size: 0.9rem; margin-bottom: 2rem; }
+    h2 { font-size: 1.2rem; margin: 2rem 0 0.5rem; color: #e6edf3; }
+    p, li { font-size: 1rem; color: #c9d1d9; }
+    p { margin-bottom: 0.9rem; }
+    ul, ol { margin: 0 0 0.9rem 1.4rem; }
+    li { margin-bottom: 0.35rem; }
+    a { color: #4f8ef7; }
+    table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 1rem; font-size: 0.92rem; }
+    th, td { text-align: left; padding: 0.55rem 0.7rem; border: 1px solid #21262d; vertical-align: top; color: #c9d1d9; }
+    th { background: #161b22; color: #e6edf3; }
+    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #21262d; font-size: 0.85rem; color: #8b92a8; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="logo"><a href="index.html">Vaultic</a></div>
+  <h1>Information Security Policy</h1>
+  <div class="updated">Last updated: November 13, 2026</div>
+
+  <h2>1. Purpose, scope and ownership</h2>
+  <p>
+    This policy describes how Vaultic, a personal self-hosted net worth dashboard, protects the financial data it
+    handles, including data obtained through Plaid. It covers the application, its database, its backups, its source
+    code and its deployment pipeline. The system owner, who is also the sole developer, is responsible for this policy.
+    The system has two household users plus the owner as administrator.
+  </p>
+
+  <h2>2. Access control</h2>
+  <ul>
+    <li>Every endpoint that reads or changes data requires authentication; only sign-in, two-factor verification, token refresh, a health check and the public push key are reachable without it. Administrative functions (user management, security log access) additionally require the administrator role.</li>
+    <li>Accounts are created only by an administrator. There is no public sign-up.</li>
+    <li>Passwords must be at least 8 characters with upper-case, lower-case and a digit, and are stored only as bcrypt hashes.</li>
+    <li>Every user account must have two-factor authentication (TOTP) turned on, and the monthly access review confirms it. Disabling it requires the account password. The intermediate step after password entry uses a short-lived (5 minute), single-purpose token that cannot be used for general API access.</li>
+    <li>Sessions use signed tokens with unique identifiers and expiry. Logging out revokes the token server-side, a user can revoke all of their long-lived (mobile) sessions, and changing the token signing key ends every active session.</li>
+    <li>Failed logins are rate limited per IP address and per username, and manual sync actions are rate limited per user.</li>
+    <li>Least privilege: users can only access the application's own data through the application; direct system and database access is limited to the owner.</li>
+    <li><strong>Access review:</strong> each month the owner reviews the list of active users, confirms two-factor authentication is on for each, and reviews the security log for unexpected activity.</li>
+  </ul>
+
+  <h2>3. Encryption</h2>
+  <ul>
+    <li><strong>In transit:</strong> all access to the application is over HTTPS, and the application connects to Plaid and other services over TLS.</li>
+    <li><strong>At rest:</strong> Plaid access tokens and two-factor secrets are encrypted with Fernet before storage, and passwords are bcrypt-hashed. Other application data (such as balances and transactions) is held in the application database without separate application-level encryption and is protected by access controls and the storage protections of the hosting and backup providers.</li>
+  </ul>
+
+  <h2>4. Secrets management</h2>
+  <ul>
+    <li>Secrets (encryption key, token signing key, API keys) are kept in server environment configuration and are never committed to source control; the repository contains only a template with no values.</li>
+    <li>Secrets are never written to logs or shared in chat or tickets.</li>
+    <li>Secrets are rotated whenever exposure is suspected and at least once a year.</li>
+  </ul>
+
+  <h2>5. Backup and recovery</h2>
+  <ul>
+    <li>The database is continuously replicated to off-site cloud object storage (7-day retention) and to a local replica (72-hour retention).</li>
+    <li>A documented restore procedure is kept in the repository. The owner performs a test restore at least once a quarter.</li>
+  </ul>
+
+  <h2>6. Logging and monitoring</h2>
+  <ul>
+    <li>A security log records logins and failures, authentication failures, requests and server events. It rotates automatically with bounded size.</li>
+    <li>System logs are retained for 7 days.</li>
+    <li>Errors on connected Plaid institutions trigger a push alert to the owner.</li>
+  </ul>
+
+  <h2>7. Vulnerability and patch management</h2>
+  <ul>
+    <li>Dependabot alerts and security updates are enabled for the repository, and weekly version updates are configured for Python, JavaScript and GitHub Actions dependencies.</li>
+    <li>Updates arrive as pull requests and go through the normal automated tests and owner review before deployment.</li>
+  </ul>
+  <table>
+    <thead><tr><th scope="col">Severity</th><th scope="col">Remediation target</th></tr></thead>
+    <tbody>
+      <tr><td>Critical / High</td><td>Within 7 days of disclosure</td></tr>
+      <tr><td>Medium</td><td>Within 30 days</td></tr>
+      <tr><td>Low</td><td>At the next regular update</td></tr>
+    </tbody>
+  </table>
+
+  <h2>8. Secure development</h2>
+  <ul>
+    <li>Every change is tracked in an issue, analyzed before coding, and made in small commits.</li>
+    <li>Automated unit and end-to-end tests must pass in CI before anything is deployed.</li>
+    <li>Coding rules require parameterized SQL, input validation, no stack traces in error responses, a restrictive content security policy and restricted cross-origin access. Security controls may not be weakened without explicit owner approval.</li>
+  </ul>
+
+  <h2>9. Incident response</h2>
+  <ol>
+    <li><strong>Detect:</strong> alerts, log review, or notices from Plaid or the dependency scanner.</li>
+    <li><strong>Contain:</strong> revoke sessions, rotate affected secrets, remove affected Plaid items, and take the service offline if needed.</li>
+    <li><strong>Assess:</strong> determine what data was affected using logs and backups.</li>
+    <li><strong>Notify:</strong> inform Plaid and affected users within 72 hours of confirming an incident involving their data, or sooner if required.</li>
+    <li><strong>Recover:</strong> restore from backup and verify integrity.</li>
+    <li><strong>Review:</strong> record a post-incident review and follow-up fixes in the issue tracker.</li>
+  </ol>
+
+  <h2>10. Data retention and disposal</h2>
+  <p>
+    Retention and deletion practices are described in the <a href="privacy.html">Privacy Policy</a>. Disconnecting an
+    institution removes its Plaid item and access token. User data is deleted manually on request, and backups expire on
+    the schedule above.
+  </p>
+
+  <h2>11. Personnel</h2>
+  <p>
+    There are no employees or contractors. Access for a person who should no longer have it is removed by deactivating
+    the user account, revoking its long-lived sessions and, if the person may still hold an active session, changing the token
+    signing key so every session must sign in again.
+  </p>
+
+  <h2>12. Review</h2>
+  <p>This policy is reviewed at least once a year and after any security incident.</p>
+
+  <footer>
+    <a href="index.html">Home</a> · <a href="privacy.html">Privacy Policy</a>
+  </footer>
+</main>
+</body>
+</html>
