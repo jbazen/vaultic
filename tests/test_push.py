@@ -83,6 +83,16 @@ class TestPushAuthGuards:
         assert resp.headers.get("www-authenticate") == "Bearer"
 
 
+class TestDeviceAuthRemoved:
+    """Regression for #85 and #66: the passwordless device-token login is gone."""
+
+    @pytest.mark.parametrize("body", [{"device_token": "a" * 64}, None])
+    def test_device_auth_returns_404(self, client, body):
+        resp = client.post("/api/push/device-auth", json=body)
+        assert resp.status_code == 404
+        assert "token" not in resp.json()
+
+
 class TestVapidPublicKey:
     """The VAPID public key is intentionally public."""
 

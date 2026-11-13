@@ -15,7 +15,6 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from api.auth import create_token
 from api.database import get_db
 from api.dependencies import get_current_user
 from api.push import get_vapid_public_key, is_configured, send_push_notification
@@ -43,10 +42,6 @@ class SubscribeBody(BaseModel):
 
 class UnsubscribeBody(BaseModel):
     endpoint: str
-
-
-class DeviceAuthBody(BaseModel):
-    device_token: str
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -103,39 +98,6 @@ async def subscribe(body: SubscribeBody, _user: str = Depends(get_current_user))
 
     # Return the device_token so the frontend can store it for auto-auth
     return {"status": "subscribed", "device_token": device_token}
-
-
-@router.post("/device-auth")
-async def device_auth(body: DeviceAuthBody):
-    """Exchange a stored device_token for a fresh JWT — no password required.
-
-    This endpoint is intentionally unauthenticated so that the Review page
-    can silently re-authenticate when the user taps a push notification, even
-    after their normal 24-hour JWT has expired.
-
-    Security model: the device_token is a 64-character random hex string
-    generated at subscribe time and stored only in the browser's localStorage
-    and the server's push_subscriptions table. Only the subscribed device
-    can use it. Tokens rotate on each new subscribe() call.
-    """
-    if not body.device_token:
-        raise HTTPException(status_code=400, detail="device_token required")
-
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT username FROM push_subscriptions
-               WHERE device_token = ? AND is_active = 1""",
-            (body.device_token,),
-        ).fetchone()
-
-    if not row:
-        raise HTTPException(status_code=401, detail="Invalid or expired device token")
-
-    # Issue a fresh JWT for the user who subscribed this device
-    import os
-    username = row["username"] or os.environ.get("AUTH_USERNAME", "jbazen")
-    token = create_token(username)
-    return {"token": token}
 
 
 @router.post("/unsubscribe")
