@@ -1069,6 +1069,11 @@ MIGRATIONS = [
     # cleared on the next successful sync. last_error_at times the transition.
     "ALTER TABLE plaid_items ADD COLUMN error_code TEXT",
     "ALTER TABLE plaid_items ADD COLUMN last_error_at DATETIME",
+    # Manual-liability (mortgage) amount included in this snapshot's liabilities
+    # (#9), so each history row's investable figure subtracts the mortgage of
+    # that day rather than today's. NULL on rows written before the column
+    # existed and not backfilled; readers fall back to the current mortgage.
+    "ALTER TABLE net_worth_snapshots ADD COLUMN mortgage REAL",
 ]
 
 
@@ -1733,6 +1738,121 @@ def _migrate_backfill_insperity_snapshots(conn):
         )
 
 
+# Orphaned manual_entry_snapshots account numbers -> the entry's real number
+# (#9). Exact literals only: a home row stored under a truncated number and an
+# Optum HSA row stored with an extra digit.
+_ORPHAN_SNAPSHOT_REKEYS = (
+    ("16623S17THDRPHOENIXAZ85045", "16623S17THDRPHOENIXAZ850456"),
+    ("4309414404", "430941440"),
+)
+
+
+def _migrate_rekey_orphan_manual_snapshots(conn):
+    """Re-attach the orphaned history rows listed in _ORPHAN_SNAPSHOT_REKEYS.
+
+    Each old account_number's rows move onto the manual entry that owns the new
+    account_number (its name too), via _rekey_manual_snapshots, which drops an
+    old row only if the entry already has a snapshot that day. Skipped when no
+    entry has the new number. Idempotent: once moved, no rows carry the old
+    number.
+    """
+    for old_acct, new_acct in _ORPHAN_SNAPSHOT_REKEYS:
+        entry = conn.execute(
+            "SELECT name FROM manual_entries WHERE account_number = ?", (new_acct,)
+        ).fetchone()
+        if not entry:
+            continue
+        moved = conn.execute(
+            "SELECT COUNT(*) FROM manual_entry_snapshots WHERE account_number = ?",
+            (old_acct,),
+        ).fetchone()[0]
+        if not moved:
+            continue
+        _rekey_manual_snapshots(conn, old_acct, new_acct, entry["name"])
+        logger.info(
+            "Re-keyed %d orphaned snapshot row(s) %s -> %s", moved, old_acct, new_acct
+        )
+
+
+def _migrate_seed_manual_entry_snapshots(conn):
+    """Give manual entries that have no history a first snapshot (#20 via #9).
+
+    Every manual_entries row with an account_number and zero
+    manual_entry_snapshots rows under that exact account_number gets one row
+    holding its current value, dated its entered_at (the date the value was
+    recorded, not today). ON CONFLICT DO NOTHING keeps any existing
+    (name, snapped_at) row. Entries without an account_number are skipped and
+    logged, since history is keyed by account_number. Idempotent: once seeded,
+    the entry has a snapshot and is no longer selected.
+    """
+    unkeyed = conn.execute(
+        "SELECT name FROM manual_entries WHERE account_number IS NULL OR account_number = ''"
+    ).fetchall()
+    if unkeyed:
+        logger.info(
+            "Manual snapshot seed: skipped %d entr(ies) without an account_number: %s",
+            len(unkeyed), ", ".join(r["name"] for r in unkeyed),
+        )
+    cur = conn.execute(
+        """INSERT INTO manual_entry_snapshots
+               (name, account_number, category, value, snapped_at)
+           SELECT m.name, m.account_number, m.category, m.value,
+                  COALESCE(date(m.entered_at), m.entered_at)
+           FROM manual_entries m
+           WHERE m.account_number IS NOT NULL AND m.account_number <> ''
+             AND NOT EXISTS (
+                 SELECT 1 FROM manual_entry_snapshots s
+                 WHERE s.account_number = m.account_number
+             )
+           ON CONFLICT(name, snapped_at) DO NOTHING"""
+    )
+    if cur.rowcount:
+        logger.info("Manual snapshot seed: created %d first snapshot(s)", cur.rowcount)
+
+
+def _migrate_backfill_nw_mortgage(conn):
+    """Backfill net_worth_snapshots.mortgage for rows written before #9.
+
+    For each row with mortgage IS NULL, the mortgage as of that date is the sum,
+    over every account_number that has other_liability snapshot history, of
+    ABS(value) of that account's latest manual_entry_snapshots row on or before
+    the row's date (ABS because PDF imports stored the mortgage negative). Exact
+    account_number matching only. A row with no snapshot on or before its date
+    stays NULL and the net worth endpoints fall back to the current mortgage.
+
+    One SQL UPDATE, so dates are compared by SQLite and never handled in Python.
+    Idempotent: only NULL rows are touched, and a stored value is never
+    overwritten.
+    """
+    def _filled() -> int:
+        return conn.execute(
+            "SELECT COUNT(*) FROM net_worth_snapshots WHERE mortgage IS NOT NULL"
+        ).fetchone()[0]
+
+    before = _filled()
+    conn.execute(
+        """UPDATE net_worth_snapshots
+           SET mortgage = (
+               SELECT SUM(ABS(s.value))
+               FROM (SELECT DISTINCT account_number AS acct
+                     FROM manual_entry_snapshots
+                     WHERE category = 'other_liability'
+                       AND account_number IS NOT NULL AND account_number <> '') l
+               JOIN manual_entry_snapshots s ON s.id = (
+                   SELECT s2.id FROM manual_entry_snapshots s2
+                   WHERE s2.account_number = l.acct
+                     AND date(s2.snapped_at) <= date(net_worth_snapshots.snapped_at)
+                   ORDER BY date(s2.snapped_at) DESC, s2.id DESC
+                   LIMIT 1
+               )
+           )
+           WHERE mortgage IS NULL"""
+    )
+    backfilled = _filled() - before
+    if backfilled:
+        logger.info("Net worth mortgage backfill: set mortgage on %d row(s)", backfilled)
+
+
 def init_db():
     with get_db() as conn:
         conn.executescript(SCHEMA)
@@ -1831,6 +1951,22 @@ def init_db():
             _migrate_backfill_insperity_snapshots(conn)
         except Exception as exc:
             logger.warning("Insperity snapshot backfill migration failed: %s", exc)
+        # Re-attach two orphaned history rows stored under mistyped numbers (#9).
+        try:
+            _migrate_rekey_orphan_manual_snapshots(conn)
+        except Exception as exc:
+            logger.warning("Orphan manual snapshot re-key migration failed: %s", exc)
+        # First history point for manual entries that have none (#20 via #9).
+        try:
+            _migrate_seed_manual_entry_snapshots(conn)
+        except Exception as exc:
+            logger.warning("Manual entry snapshot seed migration failed: %s", exc)
+        # Store the as-of-date mortgage on net worth rows written before the
+        # mortgage column existed (#9), so history nets out that day's mortgage.
+        try:
+            _migrate_backfill_nw_mortgage(conn)
+        except Exception as exc:
+            logger.warning("Net worth mortgage backfill migration failed: %s", exc)
         # _migrate_i360_per_account_tables runs before MIGRATIONS loop (above)
 
 

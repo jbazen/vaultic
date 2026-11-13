@@ -200,3 +200,119 @@ class TestSyncAllErrorTracking:
             assert row["last_error_at"] is None
         finally:
             _cleanup_item(item_db_id)
+
+
+class TestNetWorthSnapshotMortgage:
+    """_take_net_worth_snapshot stores the manual liability it adds to
+    liabilities in the mortgage column (#9)."""
+
+    def _snapshot(self, liabilities_rows):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        for name, value in liabilities_rows:
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at) "
+                "VALUES (?, 'other_liability', ?, '2026-01-01')",
+                (name, value),
+            )
+        with patch("api.sync.get_db", get_db):
+            sync._take_net_worth_snapshot("2026-05-01")
+        row = conn.execute(
+            "SELECT liabilities, mortgage FROM net_worth_snapshots WHERE snapped_at = '2026-05-01'"
+        ).fetchone()
+        conn.close()
+        return row
+
+    def test_writes_manual_liability_total(self):
+        row = self._snapshot([("Mortgage", 180000.0)])
+        assert row["mortgage"] == 180000.0
+        assert row["liabilities"] == 180000.0
+
+    def test_zero_when_no_liability(self):
+        row = self._snapshot([])
+        assert row["mortgage"] == 0.0
+
+    def test_negative_stored_liability_written_positive(self):
+        row = self._snapshot([("Mortgage", -187121.85)])
+        assert row["mortgage"] == 187121.85
+        assert row["liabilities"] == 187121.85
+
+
+class TestSnapshotManualEntries:
+    """snapshot_manual_entries records a manual entry's value only when it
+    changed (#9). Isolated DB per test."""
+
+    def _setup(self, value=40000.0, account_number="vehicle_kia"):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Kia Carnival', 'car_value', ?, '2026-03-18', ?)",
+            (value, account_number),
+        )
+        return conn, get_db
+
+    def _run(self, get_db, today):
+        with patch("api.sync.get_db", get_db):
+            sync.snapshot_manual_entries(today)
+
+    def _snaps(self, conn):
+        return [
+            (r["name"], r["account_number"], r["value"], str(r["snapped_at"]))
+            for r in conn.execute("SELECT * FROM manual_entry_snapshots ORDER BY snapped_at, id")
+        ]
+
+    def _add_snap(self, conn, name, value, snapped_at, acct="vehicle_kia"):
+        conn.execute(
+            "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+            "VALUES (?, ?, 'car_value', ?, ?)",
+            (name, acct, value, snapped_at),
+        )
+
+    def test_writes_row_when_entry_has_none(self):
+        conn, get_db = self._setup()
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == [("Kia Carnival", "vehicle_kia", 40000.0, "2026-11-13")]
+
+    def test_writes_row_when_value_changed(self):
+        conn, get_db = self._setup(value=38500.0)
+        self._add_snap(conn, "Kia Carnival", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn)[-1] == ("Kia Carnival", "vehicle_kia", 38500.0, "2026-11-13")
+        assert len(self._snaps(conn)) == 2
+
+    def test_writes_nothing_when_unchanged(self):
+        conn, get_db = self._setup(value=40000.004)  # within half a cent
+        self._add_snap(conn, "Kia Carnival", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        assert len(self._snaps(conn)) == 1
+
+    def test_second_run_same_day_is_noop(self):
+        conn, get_db = self._setup(value=38500.0)
+        self._add_snap(conn, "Kia Carnival", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        first = self._snaps(conn)
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == first
+
+    def test_skips_entries_without_account_number(self):
+        conn, get_db = self._setup(account_number=None)
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == []
+
+    def test_matches_by_account_number_not_name(self):
+        conn, get_db = self._setup()
+        self._add_snap(conn, "Old Kia Name", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == [("Old Kia Name", "vehicle_kia", 40000.0, "2026-03-18")]
+
+    def test_sync_all_runs_it_before_net_worth_snapshot(self):
+        calls = []
+        with patch("api.sync.get_db", self._setup()[1]), \
+             patch("api.sync.snapshot_manual_entries", side_effect=lambda d: calls.append(("manual", d))), \
+             patch("api.sync._take_net_worth_snapshot", side_effect=lambda d: calls.append(("nw", d))), \
+             patch("api.coinbase_sync.sync_coinbase"), \
+             patch("api.push.notify_stale_i360"):
+            sync.sync_all()
+        assert [c[0] for c in calls] == ["manual", "nw"]
+        assert calls[0][1] == calls[1][1]

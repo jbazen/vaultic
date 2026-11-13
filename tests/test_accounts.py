@@ -200,6 +200,61 @@ class TestNetWorth:
         months = [r["snapped_at"][:7] for r in rows]
         assert len(months) == len(set(months)), "expected at most one row per month"
 
+    def _insert_history_rows(self, rows):
+        from api.database import get_db
+        with get_db() as conn:
+            for snapped_at, liquid, liabilities, mortgage in rows:
+                conn.execute("""
+                    INSERT INTO net_worth_snapshots
+                        (snapped_at, total, liquid, invested, crypto, real_estate,
+                         vehicles, liabilities, other_assets, mortgage)
+                    VALUES (?, ?, ?, 0, 0, 0, 0, ?, 0, ?)
+                """, (snapped_at, liquid - liabilities, liquid, liabilities, mortgage))
+
+    def _delete_history_rows(self, dates):
+        from api.database import get_db
+        with get_db() as conn:
+            for d in dates:
+                conn.execute("DELETE FROM net_worth_snapshots WHERE snapped_at = ?", (d,))
+
+    def test_history_uses_each_rows_stored_mortgage(self, client, auth_headers):
+        """Regression (#13 via #9): each history row nets out the mortgage stored
+        on that row, not today's mortgage. Both rows hold $2,000 of credit card
+        debt; the mortgage was paid down between them."""
+        dates = ("2020-01-15", "2020-02-15")
+        self._insert_history_rows([
+            (dates[0], 100000, 202000, 200000),
+            (dates[1], 100000, 196000, 194000),
+        ])
+        try:
+            res = client.get("/api/net-worth/history?days=3650", headers=auth_headers)
+            assert res.status_code == 200, res.text
+            by_date = {r["snapped_at"]: r for r in res.json()}
+            for d, mortgage in ((dates[0], 200000), (dates[1], 194000)):
+                assert by_date[d]["mortgage"] == mortgage
+                assert by_date[d]["investable"] == 98000
+        finally:
+            self._delete_history_rows(dates)
+
+    def test_history_null_mortgage_falls_back_to_current(self, client, auth_headers):
+        """A row with no stored mortgage keeps the pre-#9 behaviour: it nets out
+        the current manual liability total."""
+        from api.database import get_db
+        from api.routers.net_worth import _get_mortgage
+
+        d = "2020-03-15"
+        self._insert_history_rows([(d, 900000, 850000, None)])
+        try:
+            with get_db() as conn:
+                current = _get_mortgage(conn)
+            res = client.get("/api/net-worth/history?days=3650", headers=auth_headers)
+            assert res.status_code == 200, res.text
+            row = next(r for r in res.json() if r["snapped_at"] == d)
+            assert row["mortgage"] == current
+            assert row["investable"] == 900000 - max(0.0, 850000 - current)
+        finally:
+            self._delete_history_rows((d,))
+
 
 class TestManualEntries:
     def test_add_and_list_entry(self, client, auth_headers):
