@@ -7,16 +7,17 @@ import ManualInvestmentCard from "./ManualInvestmentCard.jsx";
 import ManualSimpleRow from "./ManualSimpleRow.jsx";
 import InsperityAccountCard from "./InsperityAccountCard.jsx";
 import VoyaAccountCard from "./VoyaAccountCard.jsx";
-import { isSyncStale, splitManualEntries, buildAccountBlocks, sortBlocks } from "./accountsUtils.jsx";
-import { fmtDate } from "../../utils/format.js";
+import AllocationBar from "../AllocationBar.jsx";
+import { institutionStatus, splitManualEntries, buildAccountBlocks, sortBlocks } from "./accountsUtils.jsx";
 
 const PROPERTY_BADGES = { home_value: "Home", car_value: "Vehicle", real_estate: "Real Estate", vehicles: "Vehicle" };
 
 // The draggable account list: one block per institution plus the manual sections.
 // Owns drag-and-drop state, Disconnect handling and its error banner. Reorders
 // are saved under `orderPage`; every successful change calls onChanged().
+// The `id="accounts"` anchor is where /#accounts (push notifications) scrolls to.
 export default function AccountsSection({
-  accounts, manualEntries, plaidItems, savedOrder, orderPage, onChanged,
+  accounts, manualEntries, plaidItems, savedOrder, orderPage, i360LastSync = null, onChanged,
 }) {
   const [removeError, setRemoveError] = useState("");
   // Drag-and-drop ref (avoid setState during dragstart — see CLAUDE.md)
@@ -24,6 +25,15 @@ export default function AccountsSection({
 
   const manual = splitManualEntries(manualEntries);
   const orderedBlocks = sortBlocks(buildAccountBlocks(accounts, manual), savedOrder);
+
+  // Consolidated allocation across all imported investment holdings
+  const allHoldings = manual.investedImported.flatMap(e => e.holdings || []);
+  const allHoldingsTotal = allHoldings.reduce((sum, h) => sum + (h.value || 0), 0);
+  const allocationByClass = allHoldings.reduce((acc, h) => {
+    const cls = h.asset_class || "other";
+    acc[cls] = (acc[cls] || 0) + (h.value || 0);
+    return acc;
+  }, {});
 
   async function handleRemove(itemId) {
     if (!confirm("Disconnect this institution? Account history will be preserved.")) return;
@@ -94,18 +104,8 @@ export default function AccountsSection({
 
     if (block.kind === "institution") {
       const item = plaidItems.find(i => i.institution_name === block.key);
-      // Real disconnect detection (issue #73): the "Reconnect" banner is driven by
-      // Plaid's actual error_code, not by sync staleness. A merely slow/late sync
-      // shows a softer "hasn't synced recently" note instead.
-      const loginExpired = item?.error_code === "ITEM_LOGIN_REQUIRED";
-      let subtitle = null;
-      if (loginExpired) {
-        subtitle = "⚠ Login expired — click Reconnect to resume syncing";
-      } else if (item?.last_synced_at) {
-        subtitle = isSyncStale(item.last_synced_at)
-          ? `Synced ${fmtDate(item.last_synced_at)} — hasn't synced recently`
-          : `Synced ${fmtDate(item.last_synced_at)}`;
-      }
+      const isI360 = block.accts.some(x => x.source === "investor360");
+      const { loginExpired, subtitle } = institutionStatus(item, isI360, i360LastSync);
       const actions = item && (
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <PlaidReconnect itemId={item.item_id} onSuccess={onChanged} />
@@ -127,8 +127,14 @@ export default function AccountsSection({
 
     if (block.kind === "sec_invested") {
       return (
-        <AccountBlockCard key={block.key} {...card} title="Investment Accounts (PDF Imported)"
+        <AccountBlockCard key={block.key} {...card} title="Investment Accounts (Imported)"
           subtitle={'Click any row to expand holdings. Use "⊘ Exclude" on consolidated portfolio summaries to avoid double-counting in net worth.'}>
+          {allHoldingsTotal > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div className="section-label" style={{ marginBottom: 8 }}>Portfolio Allocation</div>
+              <AllocationBar allocation={allocationByClass} total={allHoldingsTotal} />
+            </div>
+          )}
           <div className="account-list">
             {manual.investedImported.map(entry => entry.account_number === "105001401K" ? (
               <InsperityAccountCard key={entry.id} entry={entry}
@@ -155,6 +161,7 @@ export default function AccountsSection({
     const simple = {
       sec_liquid:       { title: "HSA / Cash Accounts",  entries: manual.liquidEntries,    badge: () => "liquid",   badgeClass: "badge-depository" },
       sec_property:     { title: "Property & Vehicles",  entries: manual.propertyEntries,  badge: e => PROPERTY_BADGES[e.category], badgeClass: "badge-investment" },
+      sec_other_assets: { title: "Other Assets",        entries: manual.otherAssets,      badge: () => "asset",    badgeClass: "badge-depository" },
       sec_liabilities:  { title: "Liabilities",          entries: manual.liabilityEntries, badge: () => "Liability", badgeClass: "badge-credit", negative: true },
     }[block.kind];
     return (
@@ -171,11 +178,16 @@ export default function AccountsSection({
   }
 
   return (
-    <>
+    <section id="accounts" aria-label="Accounts">
+      <h3 style={{ fontSize: 18, fontWeight: 700, margin: "4px 0 12px" }}>Accounts</h3>
       {removeError && (
         <div className="status-banner warn" role="alert" style={{ marginBottom: 16 }}>{removeError}</div>
       )}
-      {orderedBlocks.map(renderBlock)}
-    </>
+      {orderedBlocks.length === 0 ? (
+        <div className="card" style={{ textAlign: "center", padding: "24px 0", color: "var(--text2)" }}>
+          No accounts connected. Click <strong>+ Connect Account</strong> above.
+        </div>
+      ) : orderedBlocks.map(renderBlock)}
+    </section>
   );
 }

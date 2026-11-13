@@ -228,19 +228,6 @@
 
 .account-list { display: flex; flex-direction: column; gap: 6px; }
 
-/* Two-column masonry layout for account sections; collapses to 1 column on narrow screens */
-.account-grid {
-  columns: 2;
-  column-gap: 16px;
-  margin-bottom: 20px;
-}
-
-/* Prevent cards from splitting across columns */
-.account-grid > .card {
-  break-inside: avoid;
-  margin-bottom: 16px;
-}
-
 .account-row {
   display: flex;
   align-items: center;
@@ -404,7 +391,6 @@
   .account-row { padding: 10px 12px; }
   .account-name { font-size: 13px; }
   .account-balance { font-size: 14px; }
-  .account-grid { columns: 1; }
 
 }
 
