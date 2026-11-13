@@ -58,7 +58,12 @@ test.describe("Sync All (issue #79)", () => {
 
     await page.getByRole("button", { name: /sync all/i }).click();
     await expect(page.getByRole("button", { name: /sync all/i })).toBeEnabled();
+    await expect(page.getByText(/refresh requested/i)).toHaveCount(0);
+
+    // Run past the old 12s re-poll, then give any delayed fetch real time to
+    // reach the route handler before counting (fastForward alone returns first).
     await page.clock.fastForward(15000);
+    await page.waitForTimeout(1000);
 
     expect(syncUrls).toHaveLength(1);
     expect(syncUrls[0]).not.toContain("refresh");
