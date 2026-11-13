@@ -1227,3 +1227,70 @@ class TestSeedManualEntrySnapshots:
         conn.execute("UPDATE manual_entries SET value = 41000")  # value changes later
         _migrate_seed_manual_entry_snapshots(conn)
         assert self._snaps(conn) == first
+
+
+class TestRekeyOrphanManualSnapshots:
+    """_migrate_rekey_orphan_manual_snapshots moves the two known orphan rows
+    onto their entries by exact account_number (#9). Isolated DB per test."""
+
+    def _conn(self):
+        from tests.conftest import make_isolated_db
+        conn = make_isolated_db()[0]
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Home', 'home_value', 655000, '2026-11-04', '16623S17THDRPHOENIXAZ850456')"
+        )
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Optum HSA', 'invested', 3000, '2026-11-04', '430941440')"
+        )
+        _mes_row(conn, "Home", "16623S17THDRPHOENIXAZ850456", 650000.0, "2026-05-01", "home_value")
+        _mes_row(conn, "16623 S 17th Dr", "16623S17THDRPHOENIXAZ85045", 647600.0, "2026-06-01", "home_value")
+        _mes_row(conn, "Optum HSA", "430941440", 2800.0, "2026-08-02", "invested")
+        _mes_row(conn, "Optum Bank HSA", "4309414404", 2895.33, "2026-09-02", "invested")
+        return conn
+
+    def _by_acct(self, conn, acct):
+        return [
+            (r["name"], r["value"], str(r["snapped_at"]))
+            for r in conn.execute(
+                "SELECT * FROM manual_entry_snapshots WHERE account_number = ? ORDER BY snapped_at",
+                (acct,),
+            )
+        ]
+
+    def test_moves_orphans_onto_entries(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        assert self._by_acct(conn, "16623S17THDRPHOENIXAZ850456") == [
+            ("Home", 650000.0, "2026-05-01"), ("Home", 647600.0, "2026-06-01"),
+        ]
+        assert self._by_acct(conn, "430941440") == [
+            ("Optum HSA", 2800.0, "2026-08-02"), ("Optum HSA", 2895.33, "2026-09-02"),
+        ]
+        assert self._by_acct(conn, "16623S17THDRPHOENIXAZ85045") == []
+        assert self._by_acct(conn, "4309414404") == []
+
+    def test_idempotent(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        first = conn.execute("SELECT * FROM manual_entry_snapshots ORDER BY id").fetchall()
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        again = conn.execute("SELECT * FROM manual_entry_snapshots ORDER BY id").fetchall()
+        assert [tuple(r) for r in again] == [tuple(r) for r in first]
+
+    def test_only_exact_literals_move(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        _mes_row(conn, "Other", "43094144", 1.0, "2026-09-03", "invested")  # near-miss
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        assert self._by_acct(conn, "43094144") == [("Other", 1.0, "2026-09-03")]
+
+    def test_skips_when_target_entry_missing(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        conn.execute("DELETE FROM manual_entries WHERE account_number = '430941440'")
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        assert self._by_acct(conn, "4309414404") == [("Optum Bank HSA", 2895.33, "2026-09-02")]

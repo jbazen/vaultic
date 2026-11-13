@@ -1738,6 +1738,42 @@ def _migrate_backfill_insperity_snapshots(conn):
         )
 
 
+# Orphaned manual_entry_snapshots account numbers -> the entry's real number
+# (#9). Exact literals only: a home row stored under a truncated number and an
+# Optum HSA row stored with an extra digit.
+_ORPHAN_SNAPSHOT_REKEYS = (
+    ("16623S17THDRPHOENIXAZ85045", "16623S17THDRPHOENIXAZ850456"),
+    ("4309414404", "430941440"),
+)
+
+
+def _migrate_rekey_orphan_manual_snapshots(conn):
+    """Re-attach the orphaned history rows listed in _ORPHAN_SNAPSHOT_REKEYS.
+
+    Each old account_number's rows move onto the manual entry that owns the new
+    account_number (its name too), via _rekey_manual_snapshots, which drops an
+    old row only if the entry already has a snapshot that day. Skipped when no
+    entry has the new number. Idempotent: once moved, no rows carry the old
+    number.
+    """
+    for old_acct, new_acct in _ORPHAN_SNAPSHOT_REKEYS:
+        entry = conn.execute(
+            "SELECT name FROM manual_entries WHERE account_number = ?", (new_acct,)
+        ).fetchone()
+        if not entry:
+            continue
+        moved = conn.execute(
+            "SELECT COUNT(*) FROM manual_entry_snapshots WHERE account_number = ?",
+            (old_acct,),
+        ).fetchone()[0]
+        if not moved:
+            continue
+        _rekey_manual_snapshots(conn, old_acct, new_acct, entry["name"])
+        logger.info(
+            "Re-keyed %d orphaned snapshot row(s) %s -> %s", moved, old_acct, new_acct
+        )
+
+
 def _migrate_seed_manual_entry_snapshots(conn):
     """Give manual entries that have no history a first snapshot (#20 via #9).
 
@@ -1915,6 +1951,11 @@ def init_db():
             _migrate_backfill_insperity_snapshots(conn)
         except Exception as exc:
             logger.warning("Insperity snapshot backfill migration failed: %s", exc)
+        # Re-attach two orphaned history rows stored under mistyped numbers (#9).
+        try:
+            _migrate_rekey_orphan_manual_snapshots(conn)
+        except Exception as exc:
+            logger.warning("Orphan manual snapshot re-key migration failed: %s", exc)
         # First history point for manual entries that have none (#20 via #9).
         try:
             _migrate_seed_manual_entry_snapshots(conn)
