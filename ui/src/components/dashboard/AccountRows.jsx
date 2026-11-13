@@ -5,19 +5,6 @@ import AccountNumberMeta from "../AccountNumberMeta.jsx";
 import { isRetirementAccount } from "../../utils/accounts.js";
 import { fmt, fmtDate } from "../../utils/format.js";
 
-// ── Stat card (used in the net worth category grid) ──────────────────────────
-
-export function StatCard({ label, value, color, icon, negative }) {
-  return (
-    <div className="category-card">
-      <div className="label">{icon} {label}</div>
-      <div className="value" style={{ color, fontSize: 18 }}>
-        {negative ? `-${fmt(value)}` : fmt(value)}
-      </div>
-    </div>
-  );
-}
-
 // ── Crypto account row ───────────────────────────────────────────────────────
 
 export function CryptoAccountRow({ account, onRenamed }) {
