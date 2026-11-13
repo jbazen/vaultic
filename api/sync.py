@@ -9,7 +9,6 @@ from datetime import date
 import plaid
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
-from plaid.model.transactions_refresh_request import TransactionsRefreshRequest
 
 from api.database import get_db
 from api.encryption import decrypt
@@ -83,29 +82,14 @@ def _clear_item_error(item_db_id: int):
         logger.warning(f"Failed to clear item error for {item_db_id}: {db_err}")
 
 
-def _refresh_transactions(access_token: str):
-    """Ask Plaid to pull fresh transactions from the bank right now (issue #72).
-
-    transactions/refresh is an on-demand, ASYNCHRONOUS product: the call returns
-    immediately and Plaid fetches new data in the background (seconds to a
-    minute), signalling completion via a SYNC_UPDATES_AVAILABLE webhook. The
-    fresh transactions therefore land on a SUBSEQUENT transactions/sync, not in
-    this same request. Called only on the manual Sync button — never on the
-    scheduled cron — because each call is billed as an on-demand request.
-    """
-    client = _get_plaid_client()
-    client.transactions_refresh(TransactionsRefreshRequest(access_token=access_token))
-
-
-def sync_all(refresh: bool = False):
+def sync_all():
     """Sync all Plaid items + Coinbase holdings, then snapshot net worth.
 
-    refresh=True forces a Plaid transactions/refresh per item before syncing
-    (issue #72). Only the manual Sync button passes refresh=True; the scheduled
-    cron calls sync_all() with the default so it never incurs on-demand cost.
+    Used by both the manual Sync button and the scheduled cron. It does not ask
+    Plaid to force a fresh bank pull (transactions/refresh was removed, issue #79).
     """
     today = date.today().isoformat()
-    security_log.log_sync_event(f"STARTED  date={today}  refresh={refresh}")
+    security_log.log_sync_event(f"STARTED  date={today}")
 
     # --- Plaid ---
     with get_db() as conn:
@@ -115,7 +99,7 @@ def sync_all(refresh: bool = False):
     for item in items:
         try:
             access_token = decrypt(item["access_token_enc"])
-            _sync_item(item["id"], item["item_id"], access_token, today, refresh=refresh)
+            _sync_item(item["id"], item["item_id"], access_token, today)
             _clear_item_error(item["id"])
             ok += 1
         except Exception as e:
@@ -147,19 +131,8 @@ def sync_all(refresh: bool = False):
     security_log.log_sync_event(f"COMPLETED  ok={ok}  failed={failed}")
 
 
-def _sync_item(item_db_id: int, item_id: str, access_token: str, today: str, refresh: bool = False):
+def _sync_item(item_db_id: int, item_id: str, access_token: str, today: str):
     client = _get_plaid_client()
-
-    # --- Force-refresh from the bank (manual sync only) ---
-    # Fired first so Plaid's async background pull has the most lead time; the
-    # freshly-pulled transactions land on a later sync, not this one. Best-effort:
-    # a refresh failure (e.g. a dead login) is swallowed here — the accounts_get
-    # below will raise the same error and drive the reconnect state (issue #73).
-    if refresh:
-        try:
-            _refresh_transactions(access_token)
-        except Exception as e:
-            logger.info(f"transactions/refresh skipped for item {item_db_id}: {e}")
 
     # --- Accounts ---
     acct_resp = client.accounts_get(AccountsGetRequest(access_token=access_token))
