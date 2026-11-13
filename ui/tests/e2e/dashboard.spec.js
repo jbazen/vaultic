@@ -45,6 +45,32 @@ test.describe("Dashboard", () => {
   });
 });
 
+test.describe("Sync All (issue #79)", () => {
+  test("posts one sync, no refresh message, no delayed second sync", async ({ page }) => {
+    await page.clock.install();
+    await loginMocked(page);
+
+    const syncUrls = [];
+    await page.route("**/api/plaid/sync*", r => {
+      syncUrls.push(r.request().url());
+      r.fulfill({ json: { status: "ok" } });
+    });
+
+    await page.getByRole("button", { name: /sync all/i }).click();
+    await expect(page.getByRole("button", { name: /sync all/i })).toBeEnabled();
+    await expect(page.getByText(/refresh requested/i)).toHaveCount(0);
+
+    // Run past the old 12s re-poll, then give any delayed fetch real time to
+    // reach the route handler before counting (fastForward alone returns first).
+    await page.clock.fastForward(15000);
+    await page.waitForTimeout(1000);
+
+    expect(syncUrls).toHaveLength(1);
+    expect(syncUrls[0]).not.toContain("refresh");
+    await expect(page.getByText(/refresh requested/i)).toHaveCount(0);
+  });
+});
+
 test.describe("Manual entry account numbers (Dashboard)", () => {
   test("ManualAccountRow shows the stored account number", async ({ page }) => {
     // Register the manual-entries override BEFORE login so the dashboard's

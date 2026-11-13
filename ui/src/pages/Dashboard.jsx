@@ -62,7 +62,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState("");
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [i360Open, setI360Open] = useState(false);
   const [insperityOpen, setInsperityOpen] = useState(false);
@@ -112,19 +111,9 @@ export default function Dashboard() {
 
   async function handleSync() {
     setSyncing(true);
-    setSyncMsg("");
     try {
-      // refresh=true forces Plaid to pull fresh transactions from the bank now.
       await triggerSync();
       await load();
-      // That pull is async on Plaid's side (issue #72) — new transactions land
-      // seconds later. Tell the user, then poll once more (refresh=false, no extra
-      // charge) to surface them without a manual re-sync.
-      if (mountedRef.current) setSyncMsg("Refresh requested — new transactions will appear shortly…");
-      setTimeout(async () => {
-        try { await triggerSync(false); await load(); } catch { /* non-fatal — also runs 4×/day */ }
-        if (mountedRef.current) setSyncMsg("");
-      }, 12000);
     }
     finally { if (mountedRef.current) setSyncing(false); }
   }
@@ -292,10 +281,6 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
-
-      {syncMsg && (
-        <div style={{ fontSize: 13, color: "var(--accent)", marginBottom: 12 }}>{syncMsg}</div>
-      )}
 
       {/* ── Net Worth Hero ── */}
       <div className="card">
