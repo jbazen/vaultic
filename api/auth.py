@@ -131,15 +131,30 @@ def authenticate_user(username: str, password: str) -> bool:
     return verify_password(password, row["password_hash"])
 
 
-def is_active_user(username: str) -> bool:
-    """True if the users table has an active row for this username."""
+def token_rejection_reason(username: str, issued_at: object) -> str | None:
+    """Why a validly signed token must be refused for this user, or None if
+    it is still good.
+
+    The user needs an active users row (issue #99). When the row has a
+    tokens_valid_after cutoff (Unix seconds, set on deactivation), the token's
+    iat must be after it, so reactivating a user doesn't revive tokens issued
+    before the deactivation (issue #126). NULL means no cutoff. Anything that
+    isn't an integer on either side fails closed.
+    """
     from api.database import get_db
     with get_db() as conn:
         row = conn.execute(
-            "SELECT 1 FROM users WHERE username = ? AND is_active = 1",
+            "SELECT tokens_valid_after FROM users WHERE username = ? AND is_active = 1",
             (username,)
         ).fetchone()
-    return row is not None
+    if row is None:
+        return "inactive user"
+    cutoff = row["tokens_valid_after"]
+    if cutoff is None:
+        return None
+    if not isinstance(cutoff, int) or not isinstance(issued_at, int) or issued_at <= cutoff:
+        return "token issued before cutoff"
+    return None
 
 
 def get_user_2fa(username: str) -> dict | None:
@@ -338,13 +353,20 @@ def decode_2fa_pending_token(token: str) -> str | None:
         return None
 
 
-def decode_token(token: str) -> str | None:
+def decode_token_claims(token: str) -> dict | None:
+    """Return a general-access token's claims, or None if it is invalid,
+    expired, revoked, or scoped (e.g. 2fa_pending)."""
     try:
         if is_token_revoked(token):
             return None
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         if payload.get("purpose"):
             return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth
-        return payload.get("sub")
+        return payload
     except jwt.PyJWTError:
         return None
+
+
+def decode_token(token: str) -> str | None:
+    claims = decode_token_claims(token)
+    return claims.get("sub") if claims else None

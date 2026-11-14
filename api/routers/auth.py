@@ -1,3 +1,4 @@
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, status, Request, Depends
@@ -295,7 +296,12 @@ async def delete_user(username: str, current_user: str = Depends(admin_required)
     if username == current_user:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
     with get_db() as conn:
-        conn.execute("UPDATE users SET is_active = 0 WHERE username = ?", (username,))
+        # The cutoff keeps every token issued up to now dead, even if the row
+        # is later switched back to is_active = 1 (issue #126).
+        conn.execute(
+            "UPDATE users SET is_active = 0, tokens_valid_after = ? WHERE username = ?",
+            (int(time.time()), username),
+        )
         # End their mobile "keep me signed in" sessions in the same transaction
         # (issue #99). Their access tokens stop working via get_current_user.
         conn.execute(
