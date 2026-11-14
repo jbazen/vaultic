@@ -54,7 +54,7 @@ Vaultic is a **personal-use, self-hosted** application. It is not a commercial S
 |---|---|
 | **Backend** | Python 3.12, FastAPI, Uvicorn |
 | **Database** | SQLite (WAL mode) |
-| **Frontend** | React 18, Vite |
+| **Frontend** | React 19, Vite 8 |
 | **Account linking** | Plaid Python SDK + Plaid Link (React) |
 | **News search** | Tavily API (Dashboard news feed) |
 | **PDF parsing** | pdfplumber + deterministic NFS regex parser ($0 cost) + Claude Sonnet fallback |
@@ -159,7 +159,7 @@ vaultic/
 flowchart TB
 
     subgraph USER["👤  User"]
-        Browser["🖥️ Browser / PWA\nReact 18 + Vite"]
+        Browser["🖥️ Browser / PWA\nReact 19 + Vite"]
         PlaidLink["🏦 Plaid Link UI\nOAuth flow"]
         PDFui["📄 PDF Importer\ndrag & drop · preview"]
     end
@@ -523,7 +523,7 @@ Route ordering matters for the reorder endpoints — specific paths like `/insti
 
 ### Prerequisites
 - Python 3.12+
-- Node.js 18+
+- Node.js 20.19+ or 22.12+ (Vite 8)
 - Git
 
 ### 1. Clone and create virtual environment
@@ -809,12 +809,16 @@ If you ever migrate from SQLite to PostgreSQL, swap Litestream for [WAL-G](https
 
 ## CI/CD Pipeline
 
-On every push to `main`:
+On every pull request to `main` and every push to `main`:
 
 1. **Test job** — runs `pytest` against in-memory SQLite on Ubuntu (Python 3.12)
-2. **Deploy job** — SSH into Oracle Cloud, `git pull`, `npm ci && npm run build`, `systemctl restart vaultic-api`
+2. **E2E job** — runs the Playwright tests against the Vite dev server
 
-Deploy only runs if tests pass.
+On a push to `main` only:
+
+3. **Deploy job** — builds the UI on the runner, uploads it, then SSH into Oracle Cloud, `git pull`, `pip install`, `systemctl restart vaultic-api`
+
+Deploy only runs if both test jobs pass. Pull request runs never deploy.
 
 ---
 

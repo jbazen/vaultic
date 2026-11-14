@@ -174,9 +174,9 @@ background: "#1e2330"
 
 ---
 
-## Frontend (React 18)
+## Frontend (React 19)
 
-### React 18 StrictMode
+### React StrictMode
 
 StrictMode double-invokes effects in development. This means:
 
