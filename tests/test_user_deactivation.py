@@ -177,10 +177,11 @@ class TestReactivationDoesNotReviveTokens:
         _create_user(client, auth_headers, "react_new", "ReactPass1")
         assert client.delete("/api/auth/users/react_new", headers=auth_headers).status_code == 200
         with get_db() as conn:
-            conn.execute(
-                "UPDATE users SET is_active = 1, tokens_valid_after = tokens_valid_after - 5 "
-                "WHERE username = ?", ("react_new",),
-            )
+            # Reactivation sets a fresh cutoff (#136); step it back afterwards
+            # so a login in this same second is after it.
+            conn.execute("UPDATE users SET is_active = 1 WHERE username = ?", ("react_new",))
+            conn.execute("UPDATE users SET tokens_valid_after = tokens_valid_after - 5 "
+                         "WHERE username = ?", ("react_new",))
 
         token = _login(client, "react_new", "ReactPass1").json()["token"]
         assert client.get("/api/auth/me",
@@ -482,11 +483,10 @@ class TestDirectDbDeactivation:
     def test_refresh_works_after_reactivation_and_new_login(self, client, auth_headers):
         _create_user(client, auth_headers, "db_rt_new", "DbDeact1")
         self._set_active("db_rt_new", 0)
+        self._set_active("db_rt_new", 1)
         with get_db() as conn:  # step the cutoff back so the new login is after it
-            conn.execute(
-                "UPDATE users SET is_active = 1, tokens_valid_after = tokens_valid_after - 5 "
-                "WHERE username = ?", ("db_rt_new",),
-            )
+            conn.execute("UPDATE users SET tokens_valid_after = tokens_valid_after - 5 "
+                         "WHERE username = ?", ("db_rt_new",))
 
         refresh = _login(client, "db_rt_new", "DbDeact1", remember_me=True).json()["refresh_token"]
         res = client.post("/api/auth/refresh", json={"refresh_token": refresh})
@@ -498,22 +498,91 @@ class TestDirectDbDeactivation:
         _create_user(client, auth_headers, "db_race", "DbDeact1")
         self._set_active("db_race", 0)
         raw = create_refresh_token("db_race")
-        self._set_active("db_race", 1)
 
-        with get_db() as conn:
+        with get_db() as conn:  # revoked at insert, before any reactivation
             revoked = conn.execute(
                 "SELECT revoked FROM refresh_tokens WHERE username = ?", ("db_race",)
             ).fetchone()[0]
         assert revoked == 1
+
+        self._set_active("db_race", 1)
         assert validate_refresh_token(raw) is None
 
-    def test_triggers_created_once_across_restarts(self):
+    def test_access_token_minted_after_deactivation_dies_on_reactivation(self, client, auth_headers):
+        """A login or refresh racing a hand deactivation can mint an access
+        token whose iat is a second after the deactivation cutoff. Reactivation
+        sets a fresh cutoff, so that token stays dead."""
+        _create_user(client, auth_headers, "db_race_access", "DbDeact1")
+        self._set_active("db_race_access", 0)
+        with get_db() as conn:  # put the deactivation cutoff in the past
+            conn.execute("UPDATE users SET tokens_valid_after = tokens_valid_after - 5 "
+                         "WHERE username = ?", ("db_race_access",))
+        raced = create_token("db_race_access")
+
+        before = int(time.time())
+        self._set_active("db_race_access", 1)
+
+        assert self._cutoff("db_race_access") >= before
+        res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {raced}"})
+        assert res.status_code == 401
+
+    def test_reactivation_revokes_refresh_tokens(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_react_rt", "DbDeact1")
+        self._set_active("db_react_rt", 0)
+        raw = create_refresh_token("db_react_rt")
+        with get_db() as conn:  # a row left live by hand, e.g. restored from a backup
+            conn.execute("UPDATE refresh_tokens SET revoked = 0 WHERE username = ?", ("db_react_rt",))
+
+        self._set_active("db_react_rt", 1)
+
+        with get_db() as conn:
+            unrevoked = conn.execute(
+                "SELECT COUNT(*) FROM refresh_tokens WHERE username = ? AND revoked = 0",
+                ("db_react_rt",),
+            ).fetchone()[0]
+        assert unrevoked == 0
+        assert validate_refresh_token(raw) is None
+
+    def test_any_non_1_is_active_counts_as_deactivation(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_null", "DbDeact1")
+        self._set_active("db_null", None)
+        assert isinstance(self._cutoff("db_null"), int)
+
+    def test_multi_row_update_sets_each_cutoff(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_multi_a", "DbDeact1")
+        _create_user(client, auth_headers, "db_multi_b", "DbDeact1")
+        with get_db() as conn:
+            conn.execute("UPDATE users SET is_active = 0 WHERE username IN ('db_multi_a', 'db_multi_b')")
+        assert isinstance(self._cutoff("db_multi_a"), int)
+        assert isinstance(self._cutoff("db_multi_b"), int)
+        assert self._cutoff("testuser") is None
+
+    def test_init_db_reruns_with_triggers_in_place(self, client, auth_headers):
         from api.database import init_db
         init_db()
         init_db()
         with get_db() as conn:
-            names = [r[0] for r in conn.execute(
+            names = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'trigger'"
-            )]
-        assert names.count("users_deactivation_cutoff") == 1
-        assert names.count("refresh_tokens_inactive_user") == 1
+            )}
+        assert {"users_active_change_cutoff", "refresh_tokens_inactive_user"} <= names
+        assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
+
+    def test_startup_fails_if_trigger_did_not_apply(self, monkeypatch):
+        import sqlite3
+        from contextlib import contextmanager
+        import api.database as db
+
+        bare = sqlite3.connect(":memory:", check_same_thread=False)
+        bare.row_factory = sqlite3.Row
+
+        @contextmanager
+        def _bare_get_db():
+            yield bare
+            bare.commit()
+
+        monkeypatch.setattr(db, "get_db", _bare_get_db)
+        monkeypatch.setattr(db, "MIGRATIONS",
+                            [m for m in db.MIGRATIONS if "refresh_tokens_inactive_user" not in m])
+        with pytest.raises(RuntimeError, match="refresh_tokens_inactive_user"):
+            db.init_db()
