@@ -46,6 +46,36 @@ def _test_get_db():
 
 db_module.get_db = _test_get_db
 
+
+def make_isolated_db():
+    """Return (conn, get_db) for a brand-new in-memory DB with SCHEMA + MIGRATIONS.
+
+    For tests that need exact sums over a whole table (e.g. every manual
+    liability) without the rows other test modules leave in the shared DB.
+    Patch a module's `get_db` with the returned context manager to point it here.
+    """
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.executescript(db_module.SCHEMA)
+    for migration in db_module.MIGRATIONS:
+        try:
+            conn.execute(migration)
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+
+    @contextmanager
+    def _get_db():
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    return conn, _get_db
+
 import pytest
 from fastapi.testclient import TestClient
 from api.main import app
