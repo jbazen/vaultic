@@ -421,3 +421,120 @@ class TestSyncInvestmentTransactions:
             "SELECT cancel_transaction_id FROM plaid_investment_transactions "
             "WHERE investment_transaction_id = 'inv-1'"
         ).fetchone()[0] is None
+
+    def _currency_rows(self, conn):
+        return [
+            tuple(r) for r in conn.execute(
+                "SELECT investment_transaction_id, iso_currency_code, unofficial_currency_code "
+                "FROM plaid_investment_transactions ORDER BY investment_transaction_id"
+            )
+        ]
+
+    def test_unofficial_currency_is_not_labelled_usd(self):
+        """Plaid sends crypto with iso_currency_code null and the code in
+        unofficial_currency_code; both are saved as sent (#137)."""
+        conn, get_db = self._setup()
+        crypto = self._txn("inv-btc")
+        crypto.iso_currency_code = None
+        crypto.unofficial_currency_code = "BTC"
+        m_warn = self._run(get_db, [crypto, self._txn("inv-usd")])
+        m_warn.assert_not_called()
+        assert self._currency_rows(conn) == [
+            ("inv-btc", None, "BTC"),
+            ("inv-usd", "USD", None),
+        ]
+
+    def test_missing_both_currency_codes_falls_back_to_usd(self):
+        conn, get_db = self._setup()
+        txn = self._txn("inv-1")
+        txn.iso_currency_code = None
+        self._run(get_db, [txn])
+        assert self._currency_rows(conn) == [("inv-1", "USD", None)]
+
+    def test_resync_refreshes_currency_codes(self):
+        """A row saved as USD before the fix is corrected on the next sync."""
+        conn, get_db = self._setup()
+        self._run(get_db, [self._txn("inv-1")])
+        crypto = self._txn("inv-1")
+        crypto.iso_currency_code = None
+        crypto.unofficial_currency_code = "ETH"
+        self._run(get_db, [crypto])
+        assert self._currency_rows(conn) == [("inv-1", None, "ETH")]
+
+
+class TestSyncHoldingsCurrency:
+    """Holdings and securities keep Plaid's unofficial currency code instead
+    of being labelled USD (#137)."""
+
+    def _sec(self, sec_id, iso, unofficial):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            security_id=sec_id, name=sec_id, ticker_symbol=sec_id.upper(),
+            type="cryptocurrency", close_price=1.0, close_price_as_of=None,
+            iso_currency_code=iso, unofficial_currency_code=unofficial,
+            cusip=None, isin=None,
+        )
+
+    def _holding(self, sec_id, iso, unofficial, value=10.0):
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            account_id="plaid-inv-acct", security_id=sec_id,
+            institution_value=value, institution_price=1.0,
+            institution_price_as_of=None, quantity=value, cost_basis=None,
+            iso_currency_code=iso, unofficial_currency_code=unofficial,
+        )
+
+    def _setup(self):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, name, type, account_number) "
+            "VALUES ('plaid-inv-acct', 'Brokerage', 'investment', 'plaid-inv-acct')"
+        )
+        return conn, get_db
+
+    def _run(self, get_db, securities, holdings):
+        client = MagicMock()
+        resp = MagicMock()
+        resp.securities = securities
+        resp.holdings = holdings
+        client.investments_holdings_get.return_value = resp
+        page = MagicMock()
+        page.investment_transactions = []
+        page.total_investment_transactions = 0
+        client.investments_transactions_get.return_value = page
+        with patch("api.sync.get_db", get_db), \
+             patch("api.sync._get_plaid_client", return_value=client), \
+             patch.object(sync.logger, "warning") as m_warn:
+            sync._sync_investments(1, "access-sandbox-abc", "2026-11-14")
+        m_warn.assert_not_called()
+
+    def _rows(self, conn, table):
+        return [
+            tuple(r) for r in conn.execute(
+                f"SELECT security_id, iso_currency_code, unofficial_currency_code "
+                f"FROM {table} ORDER BY security_id"
+            )
+        ]
+
+    def test_saves_unofficial_codes(self):
+        conn, get_db = self._setup()
+        self._run(
+            get_db,
+            [self._sec("btc", None, "BTC"), self._sec("vti", "USD", None),
+             self._sec("odd", None, None)],
+            [self._holding("btc", None, "BTC"), self._holding("vti", "USD", None),
+             self._holding("odd", None, None)],
+        )
+        expected = [("btc", None, "BTC"), ("odd", "USD", None), ("vti", "USD", None)]
+        assert self._rows(conn, "plaid_securities") == expected
+        assert self._rows(conn, "plaid_holdings") == expected
+
+    def test_same_day_resync_refreshes_currency_codes(self):
+        """Holdings upsert refreshes the currency columns, not only values."""
+        conn, get_db = self._setup()
+        self._run(get_db, [self._sec("btc", "USD", None)], [self._holding("btc", "USD", None)])
+        self._run(get_db, [self._sec("btc", None, "BTC")], [self._holding("btc", None, "BTC", 12.0)])
+        assert self._rows(conn, "plaid_securities") == [("btc", None, "BTC")]
+        assert self._rows(conn, "plaid_holdings") == [("btc", None, "BTC")]
+        assert conn.execute("SELECT institution_value FROM plaid_holdings").fetchone()[0] == 12.0

@@ -23,6 +23,22 @@ def _get_plaid_client():
     return get_plaid_client()
 
 
+def _currency_codes(obj) -> tuple[str | None, str | None]:
+    """Return (iso_currency_code, unofficial_currency_code) for a Plaid
+    security, holding or investment transaction (#137).
+
+    Plaid sets exactly one of the two: crypto and some other currencies come
+    with iso_currency_code null and unofficial_currency_code set. Both are
+    saved as sent, so those rows are no longer labelled USD. "USD" is assumed
+    only when Plaid sends neither.
+    """
+    iso = obj.iso_currency_code
+    unofficial = obj.unofficial_currency_code
+    if not iso and not unofficial:
+        iso = "USD"
+    return iso, unofficial
+
+
 def _extract_plaid_error_code(exc: Exception) -> str | None:
     """Pull Plaid's `error_code` (e.g. ITEM_LOGIN_REQUIRED) out of an exception.
 
@@ -363,16 +379,18 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
             conn.execute("""
                 INSERT INTO plaid_securities
                     (security_id, name, ticker_symbol, type, close_price,
-                     close_price_as_of, iso_currency_code, cusip, isin, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                     close_price_as_of, iso_currency_code, unofficial_currency_code,
+                     cusip, isin, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(security_id) DO UPDATE SET
-                    name               = excluded.name,
-                    ticker_symbol      = excluded.ticker_symbol,
-                    type               = excluded.type,
-                    close_price        = excluded.close_price,
-                    close_price_as_of  = excluded.close_price_as_of,
-                    iso_currency_code  = excluded.iso_currency_code,
-                    updated_at         = CURRENT_TIMESTAMP
+                    name                     = excluded.name,
+                    ticker_symbol            = excluded.ticker_symbol,
+                    type                     = excluded.type,
+                    close_price              = excluded.close_price,
+                    close_price_as_of        = excluded.close_price_as_of,
+                    iso_currency_code        = excluded.iso_currency_code,
+                    unofficial_currency_code = excluded.unofficial_currency_code,
+                    updated_at               = CURRENT_TIMESTAMP
             """, (
                 sec.security_id,
                 sec.name,
@@ -380,7 +398,7 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                 sec.type,
                 sec.close_price,
                 str(sec.close_price_as_of) if sec.close_price_as_of else None,
-                sec.iso_currency_code or "USD",
+                *_currency_codes(sec),
                 sec.cusip,
                 sec.isin,
             ))
@@ -396,15 +414,17 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                 INSERT INTO plaid_holdings
                     (account_id, security_id, institution_value, institution_price,
                      institution_price_as_of, quantity, cost_basis, iso_currency_code,
-                     snapped_at, account_number)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     unofficial_currency_code, snapped_at, account_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_number, security_id, snapped_at) DO UPDATE SET
-                    institution_value       = excluded.institution_value,
-                    institution_price       = excluded.institution_price,
-                    institution_price_as_of = excluded.institution_price_as_of,
-                    quantity                = excluded.quantity,
-                    cost_basis              = excluded.cost_basis,
-                    account_id              = excluded.account_id
+                    institution_value        = excluded.institution_value,
+                    institution_price        = excluded.institution_price,
+                    institution_price_as_of  = excluded.institution_price_as_of,
+                    quantity                 = excluded.quantity,
+                    cost_basis               = excluded.cost_basis,
+                    iso_currency_code        = excluded.iso_currency_code,
+                    unofficial_currency_code = excluded.unofficial_currency_code,
+                    account_id               = excluded.account_id
             """, (
                 acct["id"],
                 h.security_id,
@@ -413,7 +433,7 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                 str(h.institution_price_as_of) if h.institution_price_as_of else None,
                 h.quantity,
                 h.cost_basis,
-                h.iso_currency_code or "USD",
+                *_currency_codes(h),
                 today,
                 h.account_id,  # account_number = plaid_account_id
             ))
@@ -462,8 +482,8 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                     INSERT INTO plaid_investment_transactions
                         (investment_transaction_id, account_id, security_id, date, name,
                          quantity, amount, fees, type, subtype, cancel_transaction_id,
-                         iso_currency_code, account_number)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         iso_currency_code, unofficial_currency_code, account_number)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(investment_transaction_id) DO UPDATE SET
                         -- Plaid can correct any field of an existing transaction
                         -- id, so refresh every column it supplies (#124).
@@ -478,6 +498,7 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                         subtype               = excluded.subtype,
                         cancel_transaction_id = excluded.cancel_transaction_id,
                         iso_currency_code     = excluded.iso_currency_code,
+                        unofficial_currency_code = excluded.unofficial_currency_code,
                         account_number        = excluded.account_number
                 """, (
                     txn.investment_transaction_id,
@@ -494,7 +515,7 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                     txn.subtype.value if txn.subtype else None,
                     # Deprecated optional field: the SDK raises if the key is absent.
                     getattr(txn, "cancel_transaction_id", None),
-                    txn.iso_currency_code or "USD",
+                    *_currency_codes(txn),
                     txn.account_id,  # account_number = plaid_account_id
                 ))
 
