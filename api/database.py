@@ -895,13 +895,11 @@ def _migrate_plaid_account_numbers(conn):
 
 
 def _migrate_i360_account_numbers(conn):
-    """Populate account_number for I360/Parker accounts and fix masked snapshots.
+    """Populate account_number for I360/Parker accounts.
 
     1. Sets accounts.account_number from i360_account_map.account_number
     2. Backfills account_number on account_balances, i360_holdings, i360_account_balances
-    3. Fixes masked (XXXX) account numbers in manual_entry_snapshots and
-       manual_holdings_snapshots by matching last-4 digits to full numbers
-    Idempotent — skips rows that already have the correct account_number.
+    Idempotent — only fills rows whose account_number is still empty.
     """
     # Step 1: Populate accounts.account_number from i360_account_map
     conn.execute("""
@@ -923,84 +921,6 @@ def _migrate_i360_account_numbers(conn):
             WHERE account_id IN (SELECT id FROM accounts WHERE source = 'investor360')
               AND (account_number IS NULL OR account_number = '')
         """)
-
-    # Step 3: Fix masked account numbers in manual_entry_snapshots
-    # Build mapping from last-4 digits to full account number
-    acct_map = conn.execute(
-        "SELECT account_number FROM i360_account_map "
-        "WHERE account_number IS NOT NULL AND account_number != ''"
-    ).fetchall()
-    for row in acct_map:
-        full_num = row["account_number"]
-        last4 = full_num[-4:]
-        masked = f"XXXX{last4}"
-        # Fix manual_entry_snapshots
-        conn.execute(
-            "UPDATE manual_entry_snapshots SET account_number = ? "
-            "WHERE account_number = ?",
-            (full_num, masked),
-        )
-        # Fix manual_holdings_snapshots
-        conn.execute(
-            "UPDATE manual_holdings_snapshots SET account_number = ? "
-            "WHERE account_number = ?",
-            (full_num, masked),
-        )
-
-
-def _migrate_restore_insperity(conn):
-    """Restore Insperity 401K manual entry and normalize account_number.
-
-    Re-creates the manual_entries row with account_number = '105001401K'.
-    Renames old 'insperity_401k' references across all tables.
-    Fixes NULL account_number on orphaned snapshots and holdings snapshots.
-    Idempotent — skips if entry already exists.
-    """
-    # Rename old account_number to new canonical form
-    for tbl, col in [
-        ("manual_entries", "account_number"),
-        ("manual_entry_snapshots", "account_number"),
-        ("manual_holdings_snapshots", "account_number"),
-    ]:
-        conn.execute(
-            f"UPDATE {tbl} SET {col} = '105001401K' "
-            f"WHERE {col} = 'insperity_401k'"
-        )
-
-    # Check if entry already exists
-    existing = conn.execute(
-        "SELECT id FROM manual_entries "
-        "WHERE name = 'INSPERITY 401K PLAN' AND category = 'invested'"
-    ).fetchone()
-    if not existing:
-        # Try to get value from orphaned snapshot
-        snap = conn.execute(
-            "SELECT value FROM manual_entry_snapshots "
-            "WHERE name = 'INSPERITY 401K PLAN' AND category = 'invested' "
-            "ORDER BY snapped_at DESC LIMIT 1"
-        ).fetchone()
-        # Fallback: initial balance when account was first connected (2026-03)
-        value = snap["value"] if snap else 1391.66
-        conn.execute(
-            "INSERT INTO manual_entries "
-            "(name, category, value, account_number, entered_at, exclude_from_net_worth) "
-            "VALUES ('INSPERITY 401K PLAN', 'invested', ?, '105001401K', "
-            "date('now'), 0)",
-            (value,),
-        )
-        logger.info("Restored Insperity 401K manual entry (value=%.2f)", value)
-
-    # Fix NULL account_number on orphaned snapshots
-    conn.execute(
-        "UPDATE manual_entry_snapshots SET account_number = '105001401K' "
-        "WHERE name = 'INSPERITY 401K PLAN' "
-        "AND (account_number IS NULL OR account_number = '')"
-    )
-    conn.execute(
-        "UPDATE manual_holdings_snapshots SET account_number = '105001401K' "
-        "WHERE entry_name = 'INSPERITY 401K PLAN' "
-        "AND (account_number IS NULL OR account_number = '')"
-    )
 
 
 def _migrate_manual_entry_account_numbers(conn):
@@ -1054,54 +974,6 @@ def _rekey_manual_snapshots(conn, old_acct, new_acct, new_name):
         "UPDATE manual_entry_snapshots SET account_number = ?, name = ? WHERE account_number = ?",
         (new_acct, new_name, old_acct),
     )
-
-
-def _migrate_merge_duplicate_manual_entries(conn):
-    """One-shot repair: merge manual_entries that are the same account split
-    into duplicate rows because the typed account_number differed between
-    months (placeholder vs real number, leading zero, reformatting).
-
-    add_entry historically matched non-singleton categories only on an exact
-    account_number string, so any change to what was typed inserted a brand-new
-    row instead of updating. This consolidates rows sharing (LOWER(name),
-    category): the most-recently-entered row is canonical and its account_number
-    wins (per owner: the number entered most recently is the correct one).
-    Older rows' snapshots are re-keyed onto the canonical account_number/name
-    and any holdings re-parented, then the stale rows are deleted.
-
-    Idempotent — finds no work once each (name, category) maps to a single row.
-    """
-    groups = conn.execute(
-        """SELECT LOWER(name) AS lname, category
-           FROM manual_entries
-           GROUP BY LOWER(name), category
-           HAVING COUNT(*) > 1"""
-    ).fetchall()
-    merged = 0
-    for g in groups:
-        rows = conn.execute(
-            """SELECT id, name, account_number FROM manual_entries
-               WHERE LOWER(name) = ? AND category = ?
-               ORDER BY entered_at DESC, id DESC""",
-            (g["lname"], g["category"]),
-        ).fetchall()
-        if len(rows) < 2:
-            continue
-        canon = rows[0]
-        for stale in rows[1:]:
-            if canon["account_number"]:
-                _rekey_manual_snapshots(
-                    conn, stale["account_number"], canon["account_number"], canon["name"]
-                )
-            # Re-parent holdings before the FK cascade delete removes them.
-            conn.execute(
-                "UPDATE manual_holdings SET manual_entry_id = ? WHERE manual_entry_id = ?",
-                (canon["id"], stale["id"]),
-            )
-            conn.execute("DELETE FROM manual_entries WHERE id = ?", (stale["id"],))
-            merged += 1
-    if merged:
-        logger.info("Merged %d duplicate manual_entries into canonical rows", merged)
 
 
 def _migrate_deactivate_voya_plaid(conn):
@@ -1409,26 +1281,16 @@ def init_db():
             _migrate_plaid_account_numbers(conn)
         except Exception as exc:
             logger.warning("Plaid account_number migration failed: %s", exc)
-        # Populate account_number for I360 accounts + fix masked snapshots
+        # Populate account_number for I360 accounts
         try:
             _migrate_i360_account_numbers(conn)
         except Exception as exc:
             logger.warning("I360 account_number migration failed: %s", exc)
-        # Restore Insperity 401K + fix orphaned snapshot account_numbers
-        try:
-            _migrate_restore_insperity(conn)
-        except Exception as exc:
-            logger.warning("Insperity restore migration failed: %s", exc)
         # Set account_number on car/home/credit manual entries
         try:
             _migrate_manual_entry_account_numbers(conn)
         except Exception as exc:
             logger.warning("Manual entry account_number migration failed: %s", exc)
-        # Merge manual_entries duplicated by month-to-month account_number changes
-        try:
-            _migrate_merge_duplicate_manual_entries(conn)
-        except Exception as exc:
-            logger.warning("Manual entry merge migration failed: %s", exc)
         # Deactivate dead Voya Plaid accounts — Voya is sourced solely from the
         # local sync now, so the orphaned Plaid rows would double-count net worth.
         try:

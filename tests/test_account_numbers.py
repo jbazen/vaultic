@@ -4,7 +4,7 @@ Covers:
   - Coinbase: account_number populated on accounts + account_balances
   - Coinbase sync writes account_number on new accounts + balance snapshots
   - Plaid: account_number populated on accounts + all related tables
-  - I360/Parker: account_number from i360_account_map, masked snapshot fixes
+  - I360/Parker: account_number from i360_account_map
   - Migration backfills existing rows
 """
 import pytest
@@ -34,14 +34,8 @@ def _cleanup_after():
                 conn.execute("DELETE FROM i360_account_balances WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM i360_account_map WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM accounts WHERE id = ?", (acct[0],))
-        # Also clean up any securities and test snapshots we inserted
+        # Also clean up any securities we inserted
         conn.execute("DELETE FROM plaid_securities WHERE security_id = 'sec-001'")
-        conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'Test Parker Account'")
-        conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'Test Parker Account'")
-        # Clean up Insperity test data
-        conn.execute("DELETE FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'")
-        conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'INSPERITY 401K PLAN'")
-        conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'INSPERITY 401K PLAN'")
         # Clean up car/home/credit test data
         for cat in ("car_value", "home_value", "credit_score"):
             conn.execute("DELETE FROM manual_entries WHERE category = ?", (cat,))
@@ -414,52 +408,6 @@ class TestI360AccountNumbers:
             ).fetchone()
             assert i360_bal[0] == "B37705429"
 
-    def test_migration_fixes_masked_manual_entry_snapshots(self):
-        with _test_get_db() as conn:
-            self._setup_i360_account(conn)
-
-            # Insert a snapshot with masked account number
-            conn.execute("""
-                INSERT OR IGNORE INTO manual_entry_snapshots
-                    (name, category, value, snapped_at, account_number)
-                VALUES ('Test Parker Account', 'invested', 100000.0,
-                        '2026-03-31', 'XXXX5429')
-            """)
-            conn.commit()
-
-            from api.database import _migrate_i360_account_numbers
-            _migrate_i360_account_numbers(conn)
-
-            # Verify masked → full
-            snap = conn.execute(
-                "SELECT account_number FROM manual_entry_snapshots "
-                "WHERE name = 'Test Parker Account'"
-            ).fetchone()
-            assert snap[0] == "B37705429"
-
-    def test_migration_fixes_masked_manual_holdings_snapshots(self):
-        with _test_get_db() as conn:
-            self._setup_i360_account(conn)
-
-            # Insert a holdings snapshot with masked account number
-            conn.execute("""
-                INSERT OR IGNORE INTO manual_holdings_snapshots
-                    (entry_name, account_number, snapped_at, holding_name, value)
-                VALUES ('Test Parker Account', 'XXXX5429', '2026-03-31',
-                        'Vanguard S&P 500', 50000.0)
-            """)
-            conn.commit()
-
-            from api.database import _migrate_i360_account_numbers
-            _migrate_i360_account_numbers(conn)
-
-            # Verify masked → full
-            snap = conn.execute(
-                "SELECT account_number FROM manual_holdings_snapshots "
-                "WHERE entry_name = 'Test Parker Account'"
-            ).fetchone()
-            assert snap[0] == "B37705429"
-
     def test_migration_idempotent(self):
         with _test_get_db() as conn:
             from api.database import _migrate_i360_account_numbers
@@ -521,110 +469,6 @@ class TestI360AccountNumbers:
                 (acct_id,)
             ).fetchone()
             assert i360_bal[0] == "B37705429"
-
-
-class TestInsperityRestore:
-    """Insperity 401K restored with account_number = '105001401K'."""
-
-    def test_migration_restores_insperity_entry(self):
-        with _test_get_db() as conn:
-            # Clean slate — delete if init_db already created it
-            conn.execute(
-                "DELETE FROM manual_entries "
-                "WHERE name = 'INSPERITY 401K PLAN' AND category = 'invested'"
-            )
-            conn.commit()
-
-            from api.database import _migrate_restore_insperity
-            _migrate_restore_insperity(conn)
-
-            # Verify entry created
-            row = conn.execute(
-                "SELECT name, category, account_number, value "
-                "FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'"
-            ).fetchone()
-            assert row is not None
-            assert row["category"] == "invested"
-            assert row["account_number"] == "105001401K"
-            assert row["value"] == 1391.66
-
-    def test_migration_fixes_snapshot_account_number(self):
-        with _test_get_db() as conn:
-            # Insert an orphaned snapshot with NULL account_number
-            conn.execute("""
-                INSERT OR IGNORE INTO manual_entry_snapshots
-                    (name, category, value, snapped_at)
-                VALUES ('INSPERITY 401K PLAN', 'invested', 1391.66, '2026-04-01')
-            """)
-            conn.commit()
-
-            from api.database import _migrate_restore_insperity
-            _migrate_restore_insperity(conn)
-
-            snap = conn.execute(
-                "SELECT account_number FROM manual_entry_snapshots "
-                "WHERE name = 'INSPERITY 401K PLAN'"
-            ).fetchone()
-            assert snap[0] == "105001401K"
-
-    def test_migration_fixes_holdings_snapshot_account_number(self):
-        with _test_get_db() as conn:
-            # Insert an orphaned holdings snapshot with NULL account_number
-            conn.execute("""
-                INSERT OR IGNORE INTO manual_holdings_snapshots
-                    (entry_name, snapped_at, holding_name, value)
-                VALUES ('INSPERITY 401K PLAN', '2026-04-01',
-                        'Vanguard Target 2045', 1391.66)
-            """)
-            conn.commit()
-
-            from api.database import _migrate_restore_insperity
-            _migrate_restore_insperity(conn)
-
-            snap = conn.execute(
-                "SELECT account_number FROM manual_holdings_snapshots "
-                "WHERE entry_name = 'INSPERITY 401K PLAN'"
-            ).fetchone()
-            assert snap[0] == "105001401K"
-
-    def test_migration_uses_snapshot_value_if_available(self):
-        """If snapshot exists, use its value rather than hardcoded fallback."""
-        with _test_get_db() as conn:
-            # Delete any existing entry and snapshots from prior tests
-            conn.execute(
-                "DELETE FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'"
-            )
-            conn.execute(
-                "DELETE FROM manual_entry_snapshots WHERE name = 'INSPERITY 401K PLAN'"
-            )
-            # Insert snapshot with a specific value
-            conn.execute("""
-                INSERT INTO manual_entry_snapshots
-                    (name, category, value, snapped_at)
-                VALUES ('INSPERITY 401K PLAN', 'invested', 1500.00, '2026-04-02')
-            """)
-            conn.commit()
-
-            from api.database import _migrate_restore_insperity
-            _migrate_restore_insperity(conn)
-
-            row = conn.execute(
-                "SELECT value FROM manual_entries "
-                "WHERE name = 'INSPERITY 401K PLAN'"
-            ).fetchone()
-            assert row["value"] == 1500.00
-
-    def test_migration_idempotent(self):
-        with _test_get_db() as conn:
-            from api.database import _migrate_restore_insperity
-            _migrate_restore_insperity(conn)
-            _migrate_restore_insperity(conn)
-
-            count = conn.execute(
-                "SELECT COUNT(*) FROM manual_entries "
-                "WHERE name = 'INSPERITY 401K PLAN'"
-            ).fetchone()[0]
-            assert count == 1
 
 
 class TestManualEntryAccountNumbers:
