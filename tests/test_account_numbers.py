@@ -34,14 +34,8 @@ def _cleanup_after():
                 conn.execute("DELETE FROM i360_account_balances WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM i360_account_map WHERE account_id = ?", (acct[0],))
                 conn.execute("DELETE FROM accounts WHERE id = ?", (acct[0],))
-        # Also clean up any securities and test snapshots we inserted
+        # Also clean up any securities we inserted
         conn.execute("DELETE FROM plaid_securities WHERE security_id = 'sec-001'")
-        conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'Test Parker Account'")
-        conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'Test Parker Account'")
-        # Clean up Insperity test data
-        conn.execute("DELETE FROM manual_entries WHERE name = 'INSPERITY 401K PLAN'")
-        conn.execute("DELETE FROM manual_entry_snapshots WHERE name = 'INSPERITY 401K PLAN'")
-        conn.execute("DELETE FROM manual_holdings_snapshots WHERE entry_name = 'INSPERITY 401K PLAN'")
         # Clean up car/home/credit test data
         for cat in ("car_value", "home_value", "credit_score"):
             conn.execute("DELETE FROM manual_entries WHERE category = ?", (cat,))

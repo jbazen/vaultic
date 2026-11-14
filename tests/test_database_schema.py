@@ -147,11 +147,18 @@ def test_fresh_db_has_no_made_up_insperity_entry(fresh_db):
 
 
 def test_restart_does_not_bring_back_a_deleted_insperity_entry(fresh_db):
+    """The old repair rebuilt a deleted entry from its last snapshot."""
     conn, _ = fresh_db
     conn.execute(
         "INSERT INTO manual_entries (name, category, value, account_number, entered_at) "
         "VALUES ('INSPERITY 401K PLAN', 'invested', 8643.25, '105001401K', '2026-11-03')"
     )
+    conn.execute(
+        "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+        "VALUES ('INSPERITY 401K PLAN', '105001401K', 'invested', 8643.25, '2026-11-03')"
+    )
+    conn.commit()
+    db_module.init_db()
     conn.execute("DELETE FROM manual_entries WHERE account_number = '105001401K'")
     conn.commit()
 
@@ -160,6 +167,10 @@ def test_restart_does_not_bring_back_a_deleted_insperity_entry(fresh_db):
     assert conn.execute(
         "SELECT COUNT(*) FROM manual_entries WHERE account_number = '105001401K'"
     ).fetchone()[0] == 0
+    snaps = conn.execute(
+        "SELECT account_number, value FROM manual_entry_snapshots"
+    ).fetchall()
+    assert [tuple(s) for s in snaps] == [("105001401K", 8643.25)]
 
 
 def test_restart_does_not_duplicate_a_renamed_insperity_entry(fresh_db):
@@ -200,3 +211,32 @@ def test_restart_keeps_two_accounts_that_share_a_name(fresh_db):
         "SELECT account_number, value FROM manual_entry_snapshots ORDER BY snapped_at"
     ).fetchall()
     assert [tuple(s) for s in snaps] == [("1111", 100.0), ("2222", 200.0)]
+
+
+def test_restart_leaves_masked_snapshot_numbers_alone(fresh_db):
+    """Snapshots are no longer re-keyed by last-4 match on every start."""
+    conn, _ = fresh_db
+    acct_id = conn.execute(
+        "INSERT INTO accounts (plaid_account_id, name, type, subtype, source, is_active) "
+        "VALUES ('i360_9999', 'Parker Joint', 'investment', 'brokerage', 'investor360', 1)"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO i360_account_map "
+        "(account_id, i360_account_id, account_number, household_id) "
+        "VALUES (?, 9999, 'B37705429', 1)", (acct_id,)
+    )
+    conn.execute(
+        "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+        "VALUES ('Parker Joint', 'XXXX5429', 'invested', 100.0, '2026-03-31')"
+    )
+    conn.execute(
+        "INSERT INTO manual_holdings_snapshots "
+        "(entry_name, account_number, snapped_at, holding_name, value) "
+        "VALUES ('Parker Joint', 'XXXX5429', '2026-03-31', 'Index Fund', 100.0)"
+    )
+    conn.commit()
+
+    db_module.init_db()
+
+    assert conn.execute("SELECT account_number FROM manual_entry_snapshots").fetchone()[0] == "XXXX5429"
+    assert conn.execute("SELECT account_number FROM manual_holdings_snapshots").fetchone()[0] == "XXXX5429"
