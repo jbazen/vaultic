@@ -7,6 +7,8 @@ Covers the three gaps the issue lists:
   3. AUTH_USERNAME / AUTH_PASSWORD_HASH are no longer a login fallback, so a
      deactivated env user can't log in with the original password.
 """
+import time
+
 import pytest
 
 from api import auth as auth_module
@@ -354,3 +356,164 @@ class TestCutoffEdgeCases:
         assert auth_module.token_rejection_reason("react_reason", 100) == "token issued before cutoff"
         assert auth_module.token_rejection_reason("react_reason", "101") == "token issued before cutoff"
         assert auth_module.token_rejection_reason("no_such_user_126", 101) == "inactive user"
+
+
+class TestDirectDbDeactivation:
+    """Issue #136: a row switched to inactive by a hand edit gets the same
+    cutoff and refresh-token revocation as DELETE /api/auth/users/{username},
+    and refresh tokens are checked against the cutoff too."""
+
+    @staticmethod
+    def _cutoff(username):
+        with get_db() as conn:
+            return conn.execute(
+                "SELECT tokens_valid_after FROM users WHERE username = ?", (username,)
+            ).fetchone()[0]
+
+    @staticmethod
+    def _set_active(username, value):
+        with get_db() as conn:
+            conn.execute("UPDATE users SET is_active = ? WHERE username = ?", (value, username))
+
+    def test_hand_deactivation_sets_cutoff_and_revokes_refresh(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_deact", "DbDeact1")
+        create_refresh_token("db_deact")
+        create_refresh_token("db_deact")
+
+        before = int(time.time())
+        self._set_active("db_deact", 0)
+
+        cutoff = self._cutoff("db_deact")
+        assert isinstance(cutoff, int) and before <= cutoff <= int(time.time())
+        with get_db() as conn:
+            unrevoked = conn.execute(
+                "SELECT COUNT(*) FROM refresh_tokens WHERE username = ? AND revoked = 0",
+                ("db_deact",),
+            ).fetchone()[0]
+        assert unrevoked == 0
+
+    def test_hand_deactivate_then_reactivate_keeps_old_tokens_dead(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_revive", "DbDeact1")
+        data = _login(client, "db_revive", "DbDeact1", remember_me=True).json()
+        headers = {"Authorization": f"Bearer {data['token']}"}
+        assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+        self._set_active("db_revive", 0)
+        self._set_active("db_revive", 1)
+
+        res = client.get("/api/auth/me", headers=headers)
+        assert res.status_code == 401
+        assert res.headers.get("WWW-Authenticate") == "Bearer"
+        assert client.post("/api/auth/refresh",
+                           json={"refresh_token": data["refresh_token"]}).status_code == 401
+
+    def test_hand_deactivation_leaves_other_users_alone(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_other", "DbDeact1")
+        keep = create_refresh_token("testuser")
+
+        self._set_active("db_other", 0)
+
+        assert self._cutoff("testuser") is None
+        assert validate_refresh_token(keep) == "testuser"
+        assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
+
+    def test_cutoff_is_never_lowered(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_later", "DbDeact1")
+        later = int(time.time()) + 1000
+        with get_db() as conn:
+            conn.execute("UPDATE users SET is_active = 0, tokens_valid_after = ? WHERE username = ?",
+                         (later, "db_later"))
+        assert self._cutoff("db_later") == later
+
+    def test_api_deactivation_still_sets_cutoff(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_api", "DbDeact1")
+        before = int(time.time())
+        assert client.delete("/api/auth/users/db_api", headers=auth_headers).status_code == 200
+        cutoff = self._cutoff("db_api")
+        assert isinstance(cutoff, int) and before <= cutoff <= int(time.time())
+
+    def test_updates_that_do_not_deactivate_leave_cutoff_alone(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_noop", "DbDeact1")
+        raw = create_refresh_token("db_noop")
+        with get_db() as conn:
+            conn.execute("UPDATE users SET is_active = 1 WHERE username = ?", ("db_noop",))
+            conn.execute("UPDATE users SET is_admin = 0 WHERE username = ?", ("db_noop",))
+        assert self._cutoff("db_noop") is None
+        assert validate_refresh_token(raw) == "db_noop"
+
+        # Already inactive, set inactive again: the existing cutoff stays.
+        self._set_active("db_noop", 0)
+        with get_db() as conn:
+            conn.execute("UPDATE users SET tokens_valid_after = 42 WHERE username = ?", ("db_noop",))
+        self._set_active("db_noop", 0)
+        assert self._cutoff("db_noop") == 42
+
+    def test_unrevoked_refresh_token_from_before_cutoff_rejected(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_rt_old", "DbDeact1")
+        raw = create_refresh_token("db_rt_old")
+        with get_db() as conn:
+            created_ts = conn.execute(
+                "SELECT CAST(strftime('%s', created_at) AS INTEGER) FROM refresh_tokens "
+                "WHERE username = ?", ("db_rt_old",),
+            ).fetchone()[0]
+            # The cutoff's own second counts as before it, like an access token's iat.
+            conn.execute("UPDATE users SET tokens_valid_after = ? WHERE username = ?",
+                         (created_ts, "db_rt_old"))
+        assert validate_refresh_token(raw) is None
+        assert client.post("/api/auth/refresh", json={"refresh_token": raw}).status_code == 401
+
+        with get_db() as conn:
+            conn.execute("UPDATE users SET tokens_valid_after = ? WHERE username = ?",
+                         (created_ts - 1, "db_rt_old"))
+        assert validate_refresh_token(raw) == "db_rt_old"
+
+    def test_refresh_token_with_unreadable_created_at_fails_closed(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_rt_bad", "DbDeact1")
+        raw = create_refresh_token("db_rt_bad")
+        with get_db() as conn:
+            conn.execute("UPDATE refresh_tokens SET created_at = 'garbage' WHERE username = ?",
+                         ("db_rt_bad",))
+        # With no cutoff the token still works, as before #136.
+        assert validate_refresh_token(raw) == "db_rt_bad"
+        with get_db() as conn:
+            conn.execute("UPDATE users SET tokens_valid_after = 1 WHERE username = ?", ("db_rt_bad",))
+        assert validate_refresh_token(raw) is None
+
+    def test_refresh_works_after_reactivation_and_new_login(self, client, auth_headers):
+        _create_user(client, auth_headers, "db_rt_new", "DbDeact1")
+        self._set_active("db_rt_new", 0)
+        with get_db() as conn:  # step the cutoff back so the new login is after it
+            conn.execute(
+                "UPDATE users SET is_active = 1, tokens_valid_after = tokens_valid_after - 5 "
+                "WHERE username = ?", ("db_rt_new",),
+            )
+
+        refresh = _login(client, "db_rt_new", "DbDeact1", remember_me=True).json()["refresh_token"]
+        res = client.post("/api/auth/refresh", json={"refresh_token": refresh})
+        assert res.status_code == 200, res.text
+
+    def test_refresh_token_issued_to_inactive_user_is_born_revoked(self, client, auth_headers):
+        """A refresh that rotates after a deactivation commits must not leave
+        a live row that would come back on reactivation."""
+        _create_user(client, auth_headers, "db_race", "DbDeact1")
+        self._set_active("db_race", 0)
+        raw = create_refresh_token("db_race")
+        self._set_active("db_race", 1)
+
+        with get_db() as conn:
+            revoked = conn.execute(
+                "SELECT revoked FROM refresh_tokens WHERE username = ?", ("db_race",)
+            ).fetchone()[0]
+        assert revoked == 1
+        assert validate_refresh_token(raw) is None
+
+    def test_triggers_created_once_across_restarts(self):
+        from api.database import init_db
+        init_db()
+        init_db()
+        with get_db() as conn:
+            names = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            )]
+        assert names.count("users_deactivation_cutoff") == 1
+        assert names.count("refresh_tokens_inactive_user") == 1
