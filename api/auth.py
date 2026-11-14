@@ -263,9 +263,12 @@ def validate_refresh_token(raw: str) -> str | None:
     from api.database import get_db
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
+        # The JOIN means a deactivated user's refresh token stops working even if
+        # it was somehow left unrevoked (issue #99).
         row = conn.execute(
-            """SELECT username FROM refresh_tokens
-               WHERE token_hash = ? AND revoked = 0 AND expires_at > ?""",
+            """SELECT rt.username FROM refresh_tokens rt
+               JOIN users u ON u.username = rt.username AND u.is_active = 1
+               WHERE rt.token_hash = ? AND rt.revoked = 0 AND rt.expires_at > ?""",
             (_hash_token(raw), now),
         ).fetchone()
     return row["username"] if row else None
