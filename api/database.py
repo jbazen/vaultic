@@ -273,7 +273,7 @@ MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_manual_holdings_snaps_acct ON manual_holdings_snapshots(account_number)",
 
     # RBAC: admin flag for user management and security log access.
-    # Existing users (jbazen, hbazen) are set to admin; new users default to non-admin.
+    # New users default to non-admin; the env-seeded user is created as admin (auth.py).
     "ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0",
 
     # ── Refresh tokens (mobile "keep me signed in") ─────────────────────────
@@ -747,16 +747,6 @@ def _migrate_institution_order_per_page(conn):
             (r["institution_name"], r["display_order"]),
         )
     conn.execute("DROP TABLE _institution_display_order_old")
-
-
-def _migrate_set_existing_users_admin(conn):
-    """One-time migration: set all existing users as admin.
-
-    The is_admin column defaults to 0, so this promotes the original users (jbazen, hbazen)
-    who were created before the column existed. Future users created via the API will
-    default to non-admin.
-    """
-    conn.execute("UPDATE users SET is_admin = 1 WHERE is_admin = 0 AND is_active = 1")
 
 
 def _migrate_i360_per_account_tables(conn):
@@ -1404,11 +1394,6 @@ def init_db():
                 msg = str(exc).lower()
                 if not any(frag in msg for frag in _expected_msg_fragments):
                     logger.warning("Unexpected migration error: %s | SQL: %.120s", exc, migration)
-        # One-time: promote existing users to admin after is_admin column is added
-        try:
-            _migrate_set_existing_users_admin(conn)
-        except Exception as exc:
-            logger.warning("Admin promotion migration failed: %s", exc)
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)

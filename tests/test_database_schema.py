@@ -108,3 +108,22 @@ def test_push_subscriptions_has_no_device_token_column(fresh_db):
     cols = _columns(conn, "push_subscriptions")
     assert "device_token" not in cols
     assert {"endpoint", "p256dh", "auth", "username", "is_active"} <= cols
+
+
+def test_init_db_does_not_promote_non_admin_users(fresh_db):
+    """Issue #127: a restart must leave a non-admin user non-admin."""
+    conn, _ = fresh_db
+    conn.execute(
+        "INSERT INTO users (username, password_hash, is_admin, is_active) VALUES (?, ?, ?, ?)",
+        ("admin127", "x", 1, 1),
+    )
+    conn.execute(
+        "INSERT INTO users (username, password_hash, is_admin, is_active) VALUES (?, ?, ?, ?)",
+        ("viewer127", "x", 0, 1),
+    )
+    conn.commit()
+
+    db_module.init_db()
+
+    flags = {r["username"]: r["is_admin"] for r in conn.execute("SELECT username, is_admin FROM users")}
+    assert flags == {"admin127": 1, "viewer127": 0}
