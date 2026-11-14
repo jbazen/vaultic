@@ -639,6 +639,170 @@ class TestSyncUpdatesManualEntry:
         assert row["value"] == 1000.00
 
 
+class TestSyncCreatesMissingManualEntry:
+    """#131: a sync must re-create the Insperity manual entry when it is missing
+    (deleted, or a fresh database), not silently drop the 401k from net worth."""
+
+    PAYLOAD = TestSyncUpdatesManualEntry.PAYLOAD
+
+    def _delete_entry(self):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute(
+                "DELETE FROM manual_entries WHERE account_number = '105001401K'"
+            )
+
+    def _entries(self):
+        from api.database import get_db
+        with get_db() as conn:
+            return conn.execute(
+                "SELECT name, category, value, exclude_from_net_worth "
+                "FROM manual_entries WHERE account_number = '105001401K'"
+            ).fetchall()
+
+    def _snapshots_today(self):
+        from datetime import date
+        from api.database import get_db
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT name, value FROM manual_entry_snapshots "
+                "WHERE account_number = '105001401K' AND snapped_at = ?",
+                (date.today().isoformat(),),
+            ).fetchall()
+        return [(r["name"], r["value"]) for r in rows]
+
+    def test_sync_local_creates_missing_entry(self, client, auth_headers):
+        self._delete_entry()
+        resp = client.post("/api/insperity/sync-local",
+                           headers=auth_headers, json=self.PAYLOAD)
+        assert resp.status_code == 200
+        assert resp.json()["entry_created"] is True
+        rows = self._entries()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "INSPERITY 401K PLAN"
+        assert rows[0]["category"] == "invested"
+        assert rows[0]["value"] == 1500.00
+        assert rows[0]["exclude_from_net_worth"] == 0
+        assert self._snapshots_today() == [("INSPERITY 401K PLAN", 1500.00)]
+
+    def test_created_entry_counts_in_net_worth(self, client, auth_headers):
+        """End to end on a fresh database (no accounts, no manual entries):
+        the 401k balance must land in today's net worth snapshot."""
+        from datetime import date
+        from tests.conftest import make_isolated_db
+        conn, isolated_get_db = make_isolated_db()
+        with patch("api.routers.insperity.get_db", isolated_get_db), \
+             patch("api.sync.get_db", isolated_get_db):
+            resp = client.post("/api/insperity/sync-local",
+                               headers=auth_headers, json=self.PAYLOAD)
+        assert resp.status_code == 200
+        snap = conn.execute(
+            "SELECT invested, total FROM net_worth_snapshots WHERE snapped_at = ?",
+            (date.today().isoformat(),),
+        ).fetchone()
+        assert snap is not None
+        assert snap["invested"] == 1500.00
+        assert snap["total"] == 1500.00
+
+    def test_repeat_sync_does_not_duplicate(self, client, auth_headers):
+        self._delete_entry()
+        for _ in range(2):
+            client.post("/api/insperity/sync-local",
+                        headers=auth_headers, json=self.PAYLOAD)
+        rows = self._entries()
+        assert len(rows) == 1
+        assert rows[0]["value"] == 1500.00
+
+    def test_no_balance_does_not_create_entry(self, client, auth_headers):
+        self._delete_entry()
+        client.post("/api/insperity/sync-local", headers=auth_headers,
+                    json={"prices": [{"fund": "F", "asset_class": "X",
+                                      "price": 1.0, "prior_price": 1.0,
+                                      "change_pct": 0.0}]})
+        assert self._entries() == []
+
+    def test_existing_entry_keeps_name_and_flags(self, client, auth_headers):
+        """Matched on account_number only: a renamed entry, or one the user
+        excluded from net worth, is updated in place and keeps its settings."""
+        from api.database import get_db
+        self._delete_entry()
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, account_number, "
+                "entered_at, exclude_from_net_worth) VALUES "
+                "('My 401k', 'invested', 1000.00, '105001401K', '2026-04-01', 1)"
+            )
+        resp = client.post("/api/insperity/sync-local",
+                           headers=auth_headers, json=self.PAYLOAD)
+        assert resp.json()["entry_created"] is False
+        rows = self._entries()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "My 401k"
+        assert rows[0]["exclude_from_net_worth"] == 1
+        assert rows[0]["value"] == 1500.00
+
+    def test_prefers_invested_row_when_number_is_shared(self, client, auth_headers):
+        """If two rows carry the number, the invested one gets the balance."""
+        from api.database import get_db
+        self._delete_entry()
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, account_number, "
+                "entered_at) VALUES ('Old', 'other_asset', 5.00, '105001401K', "
+                "'2026-04-01')"
+            )
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, account_number, "
+                "entered_at) VALUES ('INSPERITY 401K PLAN', 'invested', 1000.00, "
+                "'105001401K', '2026-04-01')"
+            )
+        client.post("/api/insperity/sync-local",
+                    headers=auth_headers, json=self.PAYLOAD)
+        values = {r["category"]: r["value"] for r in self._entries()}
+        assert values == {"other_asset": 5.00, "invested": 1500.00}
+
+    def test_rename_then_recreate_same_day_keeps_one_snapshot(self, client, auth_headers):
+        """A renamed entry synced, deleted and re-created on the same day must
+        leave one history row for the account that day, not two."""
+        from api.database import get_db
+        self._delete_entry()
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, account_number, "
+                "entered_at) VALUES ('My 401k', 'invested', 1000.00, '105001401K', "
+                "'2026-04-01')"
+            )
+        client.post("/api/insperity/sync-local",
+                    headers=auth_headers, json=self.PAYLOAD)
+        self._delete_entry()
+        client.post("/api/insperity/sync-local",
+                    headers=auth_headers, json=self.PAYLOAD)
+        assert self._snapshots_today() == [("INSPERITY 401K PLAN", 1500.00)]
+
+    def test_curl_sync_creates_missing_entry(self, client, auth_headers):
+        """The server-side cURL sync path shares the same upsert."""
+        self._delete_entry()
+        payload = self.PAYLOAD
+        with patch("api.routers.insperity.parse_curl_cookies",
+                   return_value={"c": "v"}), \
+             patch("api.routers.insperity.InsperityClient") as mock_cls:
+            inst = mock_cls.return_value
+            inst.warnings = []
+            inst.get_summary = AsyncMock(return_value=payload["summary"])
+            inst.get_holdings = AsyncMock(return_value=payload["holdings"])
+            for name in ("get_performance", "get_contributions",
+                         "get_allocations", "get_activity", "get_prices"):
+                setattr(inst, name, AsyncMock(side_effect=ValueError("skip")))
+            resp = client.post("/api/insperity/sync", headers=auth_headers,
+                               json={"curl_command": "curl x"})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "partial"
+        assert resp.json()["entry_created"] is True
+        rows = self._entries()
+        assert len(rows) == 1
+        assert rows[0]["value"] == 1500.00
+
+
 class TestInsperitySnapshotBackfill:
     """#61: backfill manual_entry_snapshots from insperity_holdings for the
     Insperity 401K, recovering history the sync only ever wrote to holdings."""
