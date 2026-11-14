@@ -236,6 +236,8 @@ def main():
         print(f"  Server time: {result['duration_ms']}ms")
     if result.get("errors"):
         print(f"  Errors: {result['errors']}")
+    if result.get("entry_created"):
+        print("  Note: the Insperity 401K entry was missing and has been re-created.")
 
 
 if __name__ == "__main__":
