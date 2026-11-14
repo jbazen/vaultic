@@ -225,13 +225,10 @@ MIGRATIONS = [
         endpoint     TEXT NOT NULL UNIQUE,
         p256dh       TEXT NOT NULL,
         auth         TEXT NOT NULL,
-        device_token TEXT,
         is_active    INTEGER DEFAULT 1,
         created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
     )""",
-    # Add device_token to existing push_subscriptions rows (migration for existing installs)
-    "ALTER TABLE push_subscriptions ADD COLUMN device_token TEXT",
-    # Store which user subscribed so device-auth issues JWT for the correct user
+    # Store which user subscribed, so notifications go to that user's devices
     "ALTER TABLE push_subscriptions ADD COLUMN username TEXT",
 
     # manual_holdings_snapshots: append-only dated holdings snapshots.

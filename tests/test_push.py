@@ -118,7 +118,7 @@ class TestSubscribe:
 
         row = _row(endpoint)
         assert row is not None
-        assert row["device_token"] is None
+        assert "device_token" not in row.keys()
         assert row["username"] == "testuser"
         assert row["is_active"] == 1
         assert row["p256dh"] == "p256dh_key"
