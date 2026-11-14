@@ -101,3 +101,10 @@ def test_transactions_has_no_budget_deleted_column(fresh_db):
     cols = _columns(conn, "transactions")
     assert "budget_deleted" not in cols
     assert {"transaction_id", "account_id", "amount", "date", "name"} <= cols
+
+
+def test_push_subscriptions_has_no_device_token_column(fresh_db):
+    conn, _ = fresh_db
+    cols = _columns(conn, "push_subscriptions")
+    assert "device_token" not in cols
+    assert {"endpoint", "p256dh", "auth", "username", "is_active"} <= cols
