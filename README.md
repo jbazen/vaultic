@@ -122,7 +122,7 @@ vaultic/
 │   │   └── accounts.spec.js # Insperity detail card, account numbers, Plaid reconnect
 │   ├── index.html
 │   ├── package.json
-│   └── vite.config.js
+│   └── vite.config.mjs
 ├── tests/                   # 450+ unit tests (one test_*.py per router)
 │   ├── conftest.py          # In-memory SQLite test DB, TestClient, auth fixtures
 │   ├── test_auth.py         # Auth, login, JWT, health
@@ -588,7 +588,7 @@ cd ui
 npm run dev
 ```
 
-Vite runs on port 5173 and proxies `/api/*` to `localhost:8000` (configured in `vite.config.js`).
+Vite runs on port 5173 and proxies `/api/*` to `localhost:8000` (configured in `vite.config.mjs`).
 
 Open `http://localhost:5173` in your browser.
 
