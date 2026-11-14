@@ -269,3 +269,94 @@ class TestSnapshotManualEntries:
             sync.sync_all()
         assert [c[0] for c in calls] == ["manual", "nw"]
         assert calls[0][1] == calls[1][1]
+
+
+class TestSyncInvestmentTransactions:
+    """Investment transactions are saved with plain-text type/subtype (#119).
+
+    Plaid's SDK returns type/subtype as enum model objects, which SQLite cannot
+    bind; before the fix every row was rejected and the table stayed empty.
+    These tests use real SDK model objects, not mocks, for the transactions.
+    """
+
+    def _txn(self, txn_id, txn_type="buy", subtype="buy", amount=100.0):
+        from datetime import date
+        from plaid.model.investment_transaction import InvestmentTransaction
+        from plaid.model.investment_transaction_subtype import InvestmentTransactionSubtype
+        from plaid.model.investment_transaction_type import InvestmentTransactionType
+        return InvestmentTransaction(
+            investment_transaction_id=txn_id,
+            account_id="plaid-inv-acct",
+            security_id="sec-vtsax",
+            date=date(2026, 11, 3),
+            name="BUY VTSAX",
+            quantity=1.5,
+            amount=amount,
+            price=66.67,
+            fees=0.0,
+            type=InvestmentTransactionType(txn_type),
+            subtype=InvestmentTransactionSubtype(subtype),
+            iso_currency_code="USD",
+            unofficial_currency_code=None,
+            cancel_transaction_id=None,
+        )
+
+    def _setup(self):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, name, type, account_number) "
+            "VALUES ('plaid-inv-acct', 'Brokerage', 'investment', 'plaid-inv-acct')"
+        )
+        return conn, get_db
+
+    def _run(self, get_db, txns):
+        client = MagicMock()
+        holdings = MagicMock()
+        holdings.holdings = []
+        holdings.securities = []
+        client.investments_holdings_get.return_value = holdings
+        page = MagicMock()
+        page.investment_transactions = txns
+        page.total_investment_transactions = len(txns)
+        client.investments_transactions_get.return_value = page
+        with patch("api.sync.get_db", get_db), \
+             patch("api.sync._get_plaid_client", return_value=client), \
+             patch.object(sync.logger, "warning") as m_warn:
+            sync._sync_investments(1, "access-sandbox-abc", "2026-11-14")
+        return m_warn
+
+    def _rows(self, conn):
+        return [
+            tuple(r) for r in conn.execute(
+                "SELECT investment_transaction_id, type, subtype, typeof(type), typeof(subtype), "
+                "amount, account_number FROM plaid_investment_transactions ORDER BY investment_transaction_id"
+            )
+        ]
+
+    def test_saves_enum_type_and_subtype_as_text(self):
+        conn, get_db = self._setup()
+        m_warn = self._run(get_db, [
+            self._txn("inv-1"),
+            self._txn("inv-2", "cash", "dividend", amount=-12.34),
+        ])
+        m_warn.assert_not_called()
+        assert self._rows(conn) == [
+            ("inv-1", "buy", "buy", "text", "text", 100.0, "plaid-inv-acct"),
+            ("inv-2", "cash", "dividend", "text", "text", -12.34, "plaid-inv-acct"),
+        ]
+
+    def test_resync_updates_without_duplicates(self):
+        conn, get_db = self._setup()
+        self._run(get_db, [self._txn("inv-1", amount=100.0)])
+        self._run(get_db, [self._txn("inv-1", amount=101.0)])
+        rows = self._rows(conn)
+        assert len(rows) == 1
+        assert rows[0][5] == 101.0
+
+    def test_skips_transactions_for_unknown_accounts(self):
+        conn, get_db = self._setup()
+        conn.execute("DELETE FROM accounts")
+        m_warn = self._run(get_db, [self._txn("inv-1")])
+        m_warn.assert_not_called()
+        assert self._rows(conn) == []
