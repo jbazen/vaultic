@@ -1,5 +1,5 @@
-"""Tests for the Plaid sync pipeline — force-refresh (issue #72) and real
-disconnect detection via error_code (issue #73)."""
+"""Tests for the Plaid sync pipeline — no on-demand transactions/refresh
+(issue #79) and real disconnect detection via error_code (issue #73)."""
 import json
 from unittest.mock import patch, MagicMock
 
@@ -34,80 +34,33 @@ def _cleanup_item(item_id):
         conn.commit()
 
 
-class TestRefreshTransactions:
-    def test_calls_plaid_transactions_refresh(self):
-        with patch("api.sync._get_plaid_client") as m_client:
-            api = MagicMock()
-            m_client.return_value = api
-            sync._refresh_transactions("access-token-xyz")
-        assert api.transactions_refresh.called
-        req = api.transactions_refresh.call_args.args[0]
-        assert req.access_token == "access-token-xyz"
+class TestSyncNeverRefreshes:
+    """Manual sync must not call Plaid transactions/refresh (issue #79)."""
 
+    def test_refresh_helper_is_gone(self):
+        assert not hasattr(sync, "_refresh_transactions")
 
-class TestSyncItemRefreshBranch:
-    """_sync_item fires transactions/refresh only when refresh=True."""
-
-    def _run(self, refresh):
-        with patch("api.sync._refresh_transactions") as m_refresh, \
-             patch("api.sync._get_plaid_client") as m_client, \
-             patch("api.sync._sync_transactions"), \
-             patch("api.sync._sync_investments"), \
-             patch("api.sync._take_net_worth_snapshot"):
-            api = MagicMock()
-            resp = MagicMock()
-            resp.accounts = []
-            resp.item.institution_id = None
-            api.accounts_get.return_value = resp
-            m_client.return_value = api
-            sync._sync_item(1, "item-x", "tok", "2026-07-31", refresh=refresh)
-        return m_refresh
-
-    def test_refresh_true_calls_refresh(self):
-        assert self._run(True).called
-
-    def test_refresh_false_skips_refresh(self):
-        assert not self._run(False).called
-
-    def test_refresh_failure_is_non_fatal(self):
-        """A dead login makes refresh raise — sync must continue, not crash."""
-        with patch("api.sync._refresh_transactions", side_effect=Exception("ITEM_LOGIN_REQUIRED")), \
-             patch("api.sync._get_plaid_client") as m_client, \
-             patch("api.sync._sync_transactions"), \
-             patch("api.sync._sync_investments"), \
-             patch("api.sync._take_net_worth_snapshot"):
-            api = MagicMock()
-            resp = MagicMock()
-            resp.accounts = []
-            resp.item.institution_id = None
-            api.accounts_get.return_value = resp
-            m_client.return_value = api
-            # Should not raise
-            sync._sync_item(1, "item-x", "tok", "2026-07-31", refresh=True)
-
-
-class TestSyncAllRefreshThreading:
-    """sync_all threads the refresh flag to every item; cron default = no refresh."""
-
-    def _collect_refresh_flags(self, *args):
-        item_db_id = _insert_item("refresh-thread-item")
+    def test_sync_all_never_calls_transactions_refresh(self):
+        item_db_id = _insert_item("no-refresh-item")
         try:
-            with patch("api.sync._sync_item") as m_item, \
-                 patch("api.sync._take_net_worth_snapshot"), \
+            with patch("api.sync._get_plaid_client") as m_client, \
+                 patch("api.sync._sync_transactions"), \
+                 patch("api.sync._sync_investments"), \
+                 patch("api.sync._take_net_worth_snapshot") as m_snap, \
                  patch("api.coinbase_sync.sync_coinbase"), \
                  patch("api.push.notify_stale_i360"):
-                sync.sync_all(*args)
-            return [c.kwargs.get("refresh") for c in m_item.call_args_list]
+                api = MagicMock()
+                resp = MagicMock()
+                resp.accounts = []
+                resp.item.institution_id = None
+                api.accounts_get.return_value = resp
+                m_client.return_value = api
+                sync.sync_all()
+            api.transactions_refresh.assert_not_called()
+            assert api.accounts_get.called
+            assert m_snap.called
         finally:
             _cleanup_item(item_db_id)
-
-    def test_manual_refresh_true(self):
-        flags = self._collect_refresh_flags(True)
-        assert flags and all(f is True for f in flags)
-
-    def test_cron_default_no_refresh(self):
-        flags = self._collect_refresh_flags()
-        assert flags and all(f is False for f in flags)
 
 
 class TestExtractErrorCode:
