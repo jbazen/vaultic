@@ -96,3 +96,32 @@ class TestRefreshTokenAfterDeactivation:
         assert client.delete("/api/auth/users/deact_other", headers=auth_headers).status_code == 200
 
         assert validate_refresh_token(raw) == "testuser"
+
+
+class TestLoginAfterDeactivation:
+    def test_deactivated_user_cannot_log_in(self, client, auth_headers):
+        _create_user(client, auth_headers, "deact_login", "DeactPass1")
+        assert client.delete("/api/auth/users/deact_login", headers=auth_headers).status_code == 200
+
+        assert _login(client, "deact_login", "DeactPass1").status_code == 401
+
+    def test_bootstrap_fallback_blocked_for_deactivated_env_user(self, client, monkeypatch):
+        """A deactivated AUTH_USERNAME must not log in via AUTH_PASSWORD_HASH."""
+        env_hash = hash_password("BootPass1")
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_active) VALUES (?, ?, 0)",
+                ("deact_boot", env_hash),
+            )
+        monkeypatch.setenv("AUTH_USERNAME", "deact_boot")
+        monkeypatch.setenv("AUTH_PASSWORD_HASH", env_hash)
+
+        assert authenticate_user("deact_boot", "BootPass1") is False
+        assert _login(client, "deact_boot", "BootPass1").status_code == 401
+
+    def test_bootstrap_fallback_still_works_with_no_row(self, monkeypatch):
+        monkeypatch.setenv("AUTH_USERNAME", "boot_no_row")
+        monkeypatch.setenv("AUTH_PASSWORD_HASH", hash_password("BootPass1"))
+
+        assert authenticate_user("boot_no_row", "BootPass1") is True
+        assert authenticate_user("boot_no_row", "WrongPass1") is False
