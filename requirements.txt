@@ -17,4 +17,4 @@ qrcode==8.2
 plaid-python==38.4.0
 APScheduler==3.11.3
 httpx==0.28.1
-setuptools==82.0.1
+setuptools==84.1.0
