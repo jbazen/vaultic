@@ -1,4 +1,7 @@
 """Tests for user management: create, delete, change password, security log."""
+import pytest
+
+from api.auth import create_token
 
 
 class TestUserManagement:
@@ -98,4 +101,36 @@ class TestSecurityLog:
 
     def test_security_log_respects_lines_param(self, client, auth_headers):
         res = client.get("/api/auth/security-log?lines=10", headers=auth_headers)
+        assert res.status_code == 200
+
+
+class TestAdminOnlyEndpoints:
+    """A user created through the API is non-admin and stays locked out (#127)."""
+
+    @pytest.fixture(scope="class")
+    def non_admin_headers(self, client, auth_headers):
+        res = client.post("/api/auth/users", headers=auth_headers,
+                          json={"username": "viewer128", "password": "ViewPass1"})
+        assert res.status_code == 200
+        users = client.get("/api/auth/users", headers=auth_headers).json()
+        assert next(u for u in users if u["username"] == "viewer128")["is_admin"] == 0
+        yield {"Authorization": f"Bearer {create_token('viewer128')}"}
+        client.delete("/api/auth/users/viewer128", headers=auth_headers)
+
+    def test_non_admin_cannot_list_users(self, client, non_admin_headers):
+        assert client.get("/api/auth/users", headers=non_admin_headers).status_code == 403
+
+    def test_non_admin_cannot_create_user(self, client, non_admin_headers):
+        res = client.post("/api/auth/users", headers=non_admin_headers,
+                          json={"username": "sneaky128", "password": "Sneaky123"})
+        assert res.status_code == 403
+
+    def test_non_admin_cannot_delete_user(self, client, non_admin_headers):
+        assert client.delete("/api/auth/users/testuser", headers=non_admin_headers).status_code == 403
+
+    def test_non_admin_cannot_read_security_log(self, client, non_admin_headers):
+        assert client.get("/api/auth/security-log", headers=non_admin_headers).status_code == 403
+
+    def test_non_admin_can_still_use_regular_endpoints(self, client, non_admin_headers):
+        res = client.get("/api/auth/me", headers=non_admin_headers)
         assert res.status_code == 200
