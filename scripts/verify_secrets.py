@@ -11,12 +11,24 @@ length or a timestamp. It never prints a secret value:
   - response bodies and stderr are never printed;
   - an exception is reported by its class name only (httpx messages can carry
     a URL with an API key in its query string);
-  - every line passes through a redactor that masks any .env value first.
+  - every line passes through a redactor that masks any .env value first;
+  - httpx request logging is silenced (FRED takes its key in the query string
+    and httpx logs the full URL at INFO), so nothing reaches stderr either.
+
+Notes:
+  - After rotating the R2 token, run the `litestream` and `journal` checks again
+    (with --since "<restart time>") a few minutes after the restart and before
+    deleting the old token. A wrong key fails at once, but a key that can list
+    and not write only shows up as lag or journal errors after the next
+    database write.
+  - The tavily check spends one search credit per run (free tier: 1,000 a
+    month). Name the checks you need to skip it.
 
 Exit code 1 if any check fails.
 """
 import argparse
 import base64
+import logging
 import os
 import re
 import sqlite3
@@ -45,6 +57,24 @@ LITESTREAM_MAX_LAG_SECONDS = 120
 R2_ERROR_RE = re.compile(r"(\(s3\)|\bs3\b|r2\.cloudflarestorage).*(error|fail)", re.IGNORECASE)
 REDACTED = "[REDACTED]"
 MIN_SECRET_LEN = 8
+# A stalled R2 listing must not hang the run (HTTP calls have their own timeout).
+SUBPROCESS_TIMEOUT_SECONDS = 60
+# httpx logs every request URL at INFO; FRED's URL carries the API key.
+QUIET_LOGGERS = ("httpx", "httpcore")
+# Output label per check, also used when a check raises.
+LABELS = {
+    "health": "HEALTH",
+    "plaid": "PLAID_SECRET",
+    "fred": "FRED_API_KEY",
+    "coinbase": "COINBASE_API_KEY",
+    "tavily": "TAVILY_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "litestream": "LITESTREAM_R2",
+    "journal": "LITESTREAM_R2_ERRORS",
+    "jwt": "JWT_SECRET",
+    "vapid": "VAPID",
+    "encryption": "ENCRYPTION_KEY",
+}
 
 
 def read_env(path: str) -> dict[str, str]:
@@ -106,7 +136,7 @@ def _status(ctx: Ctx, name: str, resp: httpx.Response, extra: str = "") -> None:
 
 
 def check_plaid(ctx: Ctx) -> None:
-    name = "PLAID_SECRET"
+    name = LABELS["plaid"]
     if not ctx.need(name, "PLAID_CLIENT_ID", "PLAID_SECRET"):
         return
     host = PLAID_HOSTS.get(ctx.env.get("PLAID_ENV", "sandbox"))
@@ -129,7 +159,7 @@ def check_plaid(ctx: Ctx) -> None:
 
 
 def check_fred(ctx: Ctx) -> None:
-    name = "FRED_API_KEY"
+    name = LABELS["fred"]
     if not ctx.need(name, name):
         return
     resp = ctx.http.get("https://api.stlouisfed.org/fred/series/observations", params={
@@ -144,7 +174,7 @@ def check_fred(ctx: Ctx) -> None:
 def check_coinbase(ctx: Ctx) -> None:
     from api.coinbase_sync import COINBASE_API_BASE, _generate_jwt
 
-    name = "COINBASE_API_KEY"
+    name = LABELS["coinbase"]
     if not ctx.need(name, "COINBASE_API_KEY_NAME", "COINBASE_API_KEY_PRIVATE"):
         return
     key_name = ctx.env["COINBASE_API_KEY_NAME"]
@@ -159,7 +189,7 @@ def check_coinbase(ctx: Ctx) -> None:
 
 
 def check_tavily(ctx: Ctx) -> None:
-    name = "TAVILY_API_KEY"
+    name = LABELS["tavily"]
     if not ctx.need(name, name):
         return
     resp = ctx.http.post(
@@ -171,7 +201,7 @@ def check_tavily(ctx: Ctx) -> None:
 
 
 def check_anthropic(ctx: Ctx) -> None:
-    name = "ANTHROPIC_API_KEY"
+    name = LABELS["anthropic"]
     if not ctx.need(name, name):
         return
     resp = ctx.http.get("https://api.anthropic.com/v1/models", headers={
@@ -182,14 +212,23 @@ def check_anthropic(ctx: Ctx) -> None:
 
 
 def check_health(ctx: Ctx) -> None:
-    _status(ctx, "HEALTH", ctx.http.get(f"{ctx.base_url}/api/health"))
+    _status(ctx, LABELS["health"], ctx.http.get(f"{ctx.base_url}/api/health"))
 
 
 def check_jwt(ctx: Ctx) -> None:
-    name = "JWT_SECRET"
+    name = LABELS["jwt"]
+    if not ctx.need(name, name):
+        return
     mint = ctx.mint
     if mint is None:
-        from api.auth import create_token as mint
+        # api.auth parses <repo>/.env itself (setdefault), so hand it the value this
+        # script parsed and refuse to mint if it still ended up with another one.
+        os.environ.setdefault(name, ctx.env[name])
+        from api import auth
+        if auth.SECRET_KEY != ctx.env[name]:
+            ctx.emit(name, False, "api.auth loaded a different value than the .env being checked")
+            return
+        mint = auth.create_token
     user = ctx.user or ctx.env.get("AUTH_USERNAME") or "jbazen"
     token = mint(user, hours=1)
     ctx.sleep(3)  # a freshly minted token can 401 for ~1-2s on prod (clock skew)
@@ -207,7 +246,7 @@ def _public_key_from_pem(pem: str) -> str:
 
 
 def check_vapid(ctx: Ctx) -> None:
-    name = "VAPID"
+    name = LABELS["vapid"]
     if not ctx.need(name, "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY_PEM"):
         return
     env_pub = ctx.env["VAPID_PUBLIC_KEY"]
@@ -223,7 +262,7 @@ def check_vapid(ctx: Ctx) -> None:
 def check_encryption(ctx: Ctx) -> None:
     from cryptography.fernet import Fernet, InvalidToken
 
-    name = "ENCRYPTION_KEY"
+    name = LABELS["encryption"]
     if not ctx.need(name, name):
         return
     cipher = Fernet(ctx.env[name].encode())
@@ -272,14 +311,15 @@ def latest_by_replica(output: str) -> dict[str, datetime]:
 
 
 def check_litestream(ctx: Ctx) -> None:
-    name = "LITESTREAM_R2"
+    name = LABELS["litestream"]
     if not ctx.need(name, "LITESTREAM_ACCESS_KEY_ID", "LITESTREAM_SECRET_ACCESS_KEY"):
         return
     config = os.path.join(ROOT, "deploy", "litestream.yml")
     newest: dict[str, dict[str, datetime]] = {}
     for cmd in ("wal", "snapshots"):
         proc = ctx.runner(["litestream", cmd, "-config", config, ctx.db_path],
-                          env=_litestream_env(ctx), capture_output=True, text=True)
+                          env=_litestream_env(ctx), capture_output=True, text=True,
+                          timeout=SUBPROCESS_TIMEOUT_SECONDS)
         if proc.returncode != 0:
             ctx.emit(name, False, f"litestream {cmd} exit {proc.returncode}")
             return
@@ -297,9 +337,9 @@ def check_litestream(ctx: Ctx) -> None:
 
 
 def check_journal(ctx: Ctx) -> None:
-    name = "LITESTREAM_R2_ERRORS"
+    name = LABELS["journal"]
     proc = ctx.runner(["journalctl", "-u", "vaultic-api", "--since", ctx.since, "--no-pager", "-o", "cat"],
-                      capture_output=True, text=True)
+                      capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_SECONDS)
     if proc.returncode != 0:
         ctx.emit(name, False, f"journalctl exit {proc.returncode}")
         return
@@ -324,11 +364,13 @@ CHECKS: dict[str, Callable[[Ctx], None]] = {
 
 def run(names: list[str], ctx: Ctx) -> int:
     ctx.fragments = secret_fragments(ctx.env)
+    for logger_name in QUIET_LOGGERS:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
     for check in names:
         try:
             CHECKS[check](ctx)
         except Exception as exc:  # report the class only: messages can carry secrets
-            ctx.emit(check.upper(), False, f"error {type(exc).__name__}")
+            ctx.emit(LABELS[check], False, f"error {type(exc).__name__}")
     return 1 if ctx.failures else 0
 
 

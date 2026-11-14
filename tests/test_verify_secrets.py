@@ -1,7 +1,9 @@
 """Tests for scripts/verify_secrets.py (issue #91): every check reports status
 only, and no .env value ever reaches stdout, even when a vendor response,
 an exception message or litestream output echoes it back."""
+import logging
 import sqlite3
+import subprocess
 from types import SimpleNamespace
 
 import httpx
@@ -179,9 +181,23 @@ def test_exception_reports_class_name_only(secrets_env, capsys):
     rc = vs.run(["fred", "plaid"], _ctx(env, db, handler))
     out = capsys.readouterr().out
     assert rc == 1
-    assert "FRED: error ConnectError" in out
-    assert "PLAID: error ConnectError" in out
+    assert "FRED_API_KEY: error ConnectError" in out
+    assert "PLAID_SECRET: error ConnectError" in out
     _assert_no_secrets(out, env)
+
+
+def test_nothing_on_stderr_or_in_logs_with_info_logging(secrets_env, capsys, caplog):
+    """httpx logs each request URL at INFO, and FRED's URL carries the API key."""
+    env, db = secrets_env
+    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.INFO, logger="httpx")
+    caplog.set_level(logging.INFO, logger="httpcore")
+    vs.run(list(vs.CHECKS), _ctx(env, db, _echo_all(env)))
+    captured = capsys.readouterr()
+    _assert_no_secrets(captured.out, env)
+    for stream in (captured.err, caplog.text):
+        assert env["FRED_API_KEY"] not in stream
+        assert "api.stlouisfed.org" not in stream
 
 
 def test_fred_key_goes_in_query_not_output(secrets_env, capsys):
@@ -254,6 +270,68 @@ def test_litestream_gets_credentials_via_env_not_argv(secrets_env):
     for cmd, kwargs in runner.calls:
         assert env["LITESTREAM_SECRET_ACCESS_KEY"] not in " ".join(cmd)
         assert kwargs["env"]["LITESTREAM_SECRET_ACCESS_KEY"] == env["LITESTREAM_SECRET_ACCESS_KEY"]
+
+
+def test_subprocess_calls_have_a_timeout(secrets_env, capsys):
+    env, db = secrets_env
+    runner = _fake_runner(env)
+    vs.run(["litestream", "journal"], _ctx(env, db, _echo_all(env), runner=runner))
+    assert len(runner.calls) == 3
+    for _, kwargs in runner.calls:
+        assert kwargs["timeout"] == vs.SUBPROCESS_TIMEOUT_SECONDS
+
+    def hung(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"], stderr=env["LITESTREAM_SECRET_ACCESS_KEY"])
+    capsys.readouterr()
+    assert vs.run(["litestream", "journal"], _ctx(env, db, _echo_all(env), runner=hung)) == 1
+    out = capsys.readouterr().out
+    assert "LITESTREAM_R2: error TimeoutExpired" in out
+    assert "LITESTREAM_R2_ERRORS: error TimeoutExpired" in out
+    _assert_no_secrets(out, env)
+
+
+def test_jwt_mints_with_the_checked_env_value(secrets_env, capsys, monkeypatch):
+    """With no injected mint, the real create_token is used, and only when
+    api.auth holds the same JWT_SECRET as the .env being checked."""
+    import jwt as pyjwt
+    from api import auth
+
+    env, db = secrets_env
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers["authorization"].removeprefix("Bearer "))
+        return httpx.Response(200, json={"echo": " ".join(env.values())})
+
+    ctx = _ctx(env, db, handler)
+    ctx.mint = None
+    assert auth.SECRET_KEY != env["JWT_SECRET"]
+    assert vs.run(["jwt"], ctx) == 1
+    out = capsys.readouterr().out
+    assert "JWT_SECRET: api.auth loaded a different value than the .env being checked" in out
+    assert seen == []  # no token was minted or sent
+    _assert_no_secrets(out, env)
+
+    monkeypatch.setattr(auth, "SECRET_KEY", env["JWT_SECRET"])
+    ctx = _ctx(env, db, handler)
+    ctx.mint = None
+    assert vs.run(["jwt"], ctx) == 0
+    out = capsys.readouterr().out
+    assert "JWT_SECRET: HTTP 200 (/api/auth/me)" in out
+    assert pyjwt.decode(seen[0], env["JWT_SECRET"], algorithms=["HS256"])["sub"] == "jbazen"
+    _assert_no_secrets(out, env)
+    assert seen[0] not in out
+
+
+def test_jwt_secret_missing_is_reported(secrets_env, capsys):
+    env, db = secrets_env
+    env.pop("JWT_SECRET")
+    assert vs.run(["jwt"], _ctx(env, db, _echo_all(env))) == 1
+    assert "JWT_SECRET: not set (JWT_SECRET)" in capsys.readouterr().out
+
+
+def test_every_check_has_a_label():
+    assert set(vs.LABELS) == set(vs.CHECKS)
 
 
 def test_journal_counts_r2_errors(secrets_env, capsys):
