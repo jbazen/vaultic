@@ -714,6 +714,12 @@ MIGRATIONS = [
     # the column logs nobody out. Rerun-safe: a second ADD COLUMN fails with
     # "duplicate column name", which init_db ignores.
     "ALTER TABLE users ADD COLUMN tokens_valid_after INTEGER",
+    # Plaid's code for currencies with no ISO code, e.g. crypto (#137). Plaid
+    # sets exactly one of iso_currency_code / unofficial_currency_code; rows
+    # synced before this column existed have NULL here.
+    "ALTER TABLE plaid_securities ADD COLUMN unofficial_currency_code TEXT",
+    "ALTER TABLE plaid_holdings ADD COLUMN unofficial_currency_code TEXT",
+    "ALTER TABLE plaid_investment_transactions ADD COLUMN unofficial_currency_code TEXT",
     # Any switch of a row between active and inactive, including a hand edit
     # in sqlite, sets the cutoff and revokes refresh tokens (#136). On
     # deactivation this matches DELETE /api/auth/users/{username}; on
