@@ -127,3 +127,76 @@ def test_init_db_does_not_promote_non_admin_users(fresh_db):
 
     flags = {r["username"]: r["is_admin"] for r in conn.execute("SELECT username, is_admin FROM users")}
     assert flags == {"admin127": 1, "viewer127": 0}
+
+
+# ── Issue #129: a restart must not rewrite manual entries ────────────────────
+
+def _manual_entries(conn) -> list[tuple]:
+    return [
+        (r["name"], r["category"], r["account_number"], r["value"])
+        for r in conn.execute(
+            "SELECT name, category, account_number, value FROM manual_entries ORDER BY id"
+        )
+    ]
+
+
+def test_fresh_db_has_no_made_up_insperity_entry(fresh_db):
+    """A fresh install must not invent a $1,391.66 Insperity balance."""
+    conn, _ = fresh_db
+    assert _manual_entries(conn) == []
+
+
+def test_restart_does_not_bring_back_a_deleted_insperity_entry(fresh_db):
+    conn, _ = fresh_db
+    conn.execute(
+        "INSERT INTO manual_entries (name, category, value, account_number, entered_at) "
+        "VALUES ('INSPERITY 401K PLAN', 'invested', 8643.25, '105001401K', '2026-11-03')"
+    )
+    conn.execute("DELETE FROM manual_entries WHERE account_number = '105001401K'")
+    conn.commit()
+
+    db_module.init_db()
+
+    assert conn.execute(
+        "SELECT COUNT(*) FROM manual_entries WHERE account_number = '105001401K'"
+    ).fetchone()[0] == 0
+
+
+def test_restart_does_not_duplicate_a_renamed_insperity_entry(fresh_db):
+    """Renaming the 401k must not add a second row with the same account number."""
+    conn, _ = fresh_db
+    conn.execute(
+        "INSERT INTO manual_entries (name, category, value, account_number, entered_at) "
+        "VALUES ('Insperity 401k', 'invested', 8643.25, '105001401K', '2026-11-03')"
+    )
+    conn.commit()
+
+    db_module.init_db()
+
+    assert _manual_entries(conn) == [("Insperity 401k", "invested", "105001401K", 8643.25)]
+
+
+def test_restart_keeps_two_accounts_that_share_a_name(fresh_db):
+    """Same name + category but different account numbers are different accounts."""
+    conn, _ = fresh_db
+    for acct, value, day in (("1111", 100.0, "2026-10-01"), ("2222", 200.0, "2026-11-01")):
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, account_number, entered_at) "
+            "VALUES ('Joint Savings', 'liquid', ?, ?, ?)", (value, acct, day)
+        )
+        conn.execute(
+            "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+            "VALUES ('Joint Savings', ?, 'liquid', ?, ?)", (acct, value, day)
+        )
+    conn.commit()
+
+    db_module.init_db()
+
+    assert _manual_entries(conn) == [
+        ("Joint Savings", "liquid", "1111", 100.0),
+        ("Joint Savings", "liquid", "2222", 200.0),
+    ]
+    snaps = conn.execute(
+        "SELECT account_number, value FROM manual_entry_snapshots ORDER BY snapped_at"
+    ).fetchall()
+    assert [tuple(s) for s in snaps] == [("1111", 100.0), ("2222", 200.0)]
