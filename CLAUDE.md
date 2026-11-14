@@ -313,6 +313,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 - **Admin-only endpoints** (user management, security log) must also use `admin_required`
 - **JWT tokens** must include `iat` (issued-at) and `jti` (unique ID) claims for audit trail
 - **JWT_SECRET** must never be empty — `auth.py` raises `RuntimeError` on startup if it is
+- **Token cutoff**: deactivating a user sets `users.tokens_valid_after` (Unix seconds); `get_current_user` rejects any token whose `iat` is not after it, so reactivating a user never revives old tokens (#126). NULL = no cutoff
 - **Token revocation**: logout must call `POST /api/auth/logout` server-side (adds token to denylist) before clearing localStorage
 - **Scoped tokens**: 2FA pending tokens have `purpose=2fa_pending` and 5-minute expiry. `decode_token()` rejects scoped tokens for general API access
 - **2FA bypass prevention**: verify-2fa requires the scoped `pending_token` issued after password auth — never allow TOTP verification without prior password check
