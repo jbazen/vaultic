@@ -151,3 +151,107 @@ class TestLoginAfterDeactivation:
         monkeypatch.setenv("AUTH_PASSWORD_HASH", hash_password("BootPass1"))
 
         assert authenticate_user("boot_no_row", "BootPass1") is False
+
+
+class TestReactivationDoesNotReviveTokens:
+    """Issue #126: flipping a deactivated row back to is_active = 1 must not
+    bring back access tokens issued before the deactivation."""
+
+    def test_old_token_rejected_after_reactivation(self, client, auth_headers):
+        _create_user(client, auth_headers, "react_old", "ReactPass1")
+        token = _login(client, "react_old", "ReactPass1").json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+        assert client.delete("/api/auth/users/react_old", headers=auth_headers).status_code == 200
+        with get_db() as conn:  # reactivation is a direct DB edit today
+            conn.execute("UPDATE users SET is_active = 1 WHERE username = ?", ("react_old",))
+
+        res = client.get("/api/auth/me", headers=headers)
+        assert res.status_code == 401
+        assert res.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_new_login_works_after_reactivation(self, client, auth_headers):
+        _create_user(client, auth_headers, "react_new", "ReactPass1")
+        assert client.delete("/api/auth/users/react_new", headers=auth_headers).status_code == 200
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE users SET is_active = 1, tokens_valid_after = tokens_valid_after - 5 "
+                "WHERE username = ?", ("react_new",),
+            )
+
+        token = _login(client, "react_new", "ReactPass1").json()["token"]
+        assert client.get("/api/auth/me",
+                          headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+    def test_deactivation_sets_cutoff(self, client, auth_headers):
+        _create_user(client, auth_headers, "react_cutoff", "ReactPass1")
+        with get_db() as conn:
+            before = conn.execute(
+                "SELECT tokens_valid_after FROM users WHERE username = ?", ("react_cutoff",)
+            ).fetchone()[0]
+        assert before is None
+
+        assert client.delete("/api/auth/users/react_cutoff", headers=auth_headers).status_code == 200
+        with get_db() as conn:
+            after = conn.execute(
+                "SELECT tokens_valid_after FROM users WHERE username = ?", ("react_cutoff",)
+            ).fetchone()[0]
+        assert isinstance(after, int) and after > 0
+
+    def test_token_issued_in_cutoff_second_rejected(self, client, auth_headers):
+        """iat has one-second resolution, so a token from the deactivation
+        second itself must also stay dead."""
+        _create_user(client, auth_headers, "react_same_sec", "ReactPass1")
+        token = create_token("react_same_sec")
+        iat = auth_module.jwt.decode(token, options={"verify_signature": False})["iat"]
+        with get_db() as conn:
+            conn.execute("UPDATE users SET tokens_valid_after = ? WHERE username = ?",
+                         (iat, "react_same_sec"))
+
+        res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 401
+
+    def test_token_without_iat_rejected_when_cutoff_set(self, client, auth_headers):
+        _create_user(client, auth_headers, "react_no_iat", "ReactPass1")
+        token = auth_module.jwt.encode(
+            {"sub": "react_no_iat", "exp": 9999999999},
+            auth_module.SECRET_KEY, algorithm=auth_module.ALGORITHM,
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+        with get_db() as conn:
+            conn.execute("UPDATE users SET tokens_valid_after = 1 WHERE username = ?",
+                         ("react_no_iat",))
+        assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+    def test_null_cutoff_keeps_existing_tokens_working(self, client, auth_headers):
+        """Adding the column must not log anyone out: NULL means no cutoff."""
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT tokens_valid_after FROM users WHERE username = 'testuser'"
+            ).fetchone()
+        assert row[0] is None
+        assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
+
+
+class TestTokensValidAfterMigration:
+    def test_init_db_is_rerun_safe_and_keeps_cutoffs(self, client, auth_headers):
+        from api.database import init_db
+        _create_user(client, auth_headers, "mig_rerun", "ReactPass1")
+        with get_db() as conn:
+            conn.execute("UPDATE users SET tokens_valid_after = 1234 WHERE username = ?",
+                         ("mig_rerun",))
+
+        init_db()
+        init_db()
+
+        with get_db() as conn:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+            value = conn.execute(
+                "SELECT tokens_valid_after FROM users WHERE username = ?", ("mig_rerun",)
+            ).fetchone()[0]
+        assert cols.count("tokens_valid_after") == 1
+        assert value == 1234
+        assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
