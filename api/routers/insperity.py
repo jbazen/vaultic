@@ -26,6 +26,7 @@ from api.sync import _take_net_worth_snapshot
 logger = logging.getLogger(__name__)
 
 INSPERITY_ACCOUNT_NUMBER = "105001401K"
+INSPERITY_ENTRY_NAME = "INSPERITY 401K PLAN"
 router = APIRouter(prefix="/api/insperity", tags=["insperity"])
 
 
@@ -163,8 +164,13 @@ def _store_prices(conn, prices: list[dict], snapped_at: date):
         )
 
 
-def _update_manual_entry(conn, total_balance: float | None, today: date):
-    """Update the Insperity manual_entries row with latest balance.
+def _upsert_manual_entry(conn, total_balance: float | None, today: date):
+    """Insert or update the Insperity manual_entries row with latest balance.
+
+    Keyed on account_number only, matching the Voya sync, so the 401k is
+    re-created if its entry is missing (deleted, or a fresh database) instead
+    of silently dropping out of net worth (#131). An existing row keeps its
+    name, category and exclude_from_net_worth flag.
 
     Called inside the sync transaction so the balance is committed atomically
     with the insperity_* table writes. The net worth snapshot is triggered
@@ -172,20 +178,31 @@ def _update_manual_entry(conn, total_balance: float | None, today: date):
     """
     if total_balance is None:
         return
-    conn.execute(
-        "UPDATE manual_entries SET value = ?, entered_at = ? "
-        "WHERE account_number = ? AND category = 'invested'",
-        (total_balance, today.isoformat(), INSPERITY_ACCOUNT_NUMBER),
-    )
+    existing = conn.execute(
+        "SELECT id, name FROM manual_entries WHERE account_number = ? "
+        "ORDER BY id LIMIT 1",
+        (INSPERITY_ACCOUNT_NUMBER,),
+    ).fetchone()
+    name = existing["name"] if existing else INSPERITY_ENTRY_NAME
+    if existing:
+        conn.execute(
+            "UPDATE manual_entries SET value = ?, entered_at = ? WHERE id = ?",
+            (total_balance, today.isoformat(), existing["id"]),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO manual_entries "
+            "(name, category, value, entered_at, account_number) "
+            "VALUES (?, 'invested', ?, ?, ?)",
+            (name, total_balance, today.isoformat(), INSPERITY_ACCOUNT_NUMBER),
+        )
+        logger.warning(
+            "Insperity manual entry %s was missing; re-created it",
+            INSPERITY_ACCOUNT_NUMBER,
+        )
     # Record a balance-history snapshot (one row per account/day), mirroring Voya
     # so the per-account Performance chart — which reads manual_entry_snapshots
     # via getManualEntryHistory, not insperity_holdings — stays current. (#61)
-    row = conn.execute(
-        "SELECT name FROM manual_entries "
-        "WHERE account_number = ? AND category = 'invested'",
-        (INSPERITY_ACCOUNT_NUMBER,),
-    ).fetchone()
-    name = row["name"] if row else "INSPERITY 401K PLAN"
     conn.execute(
         """INSERT INTO manual_entry_snapshots
                (name, account_number, category, value, snapped_at)
@@ -298,7 +315,7 @@ async def sync(req: SyncRequest, user=Depends(get_current_user)):
         )
 
         # Update manual entry balance (inside transaction)
-        _update_manual_entry(conn, total_balance, today)
+        _upsert_manual_entry(conn, total_balance, today)
 
     # Snapshot after DB transaction closes (opens its own connection)
     if total_balance is not None:
@@ -409,7 +426,7 @@ def sync_local(req: LocalSyncRequest, user=Depends(get_current_user)):
         )
 
         # Update manual entry balance (inside transaction)
-        _update_manual_entry(conn, total_balance, today)
+        _upsert_manual_entry(conn, total_balance, today)
 
     # Snapshot after DB transaction closes (opens its own connection)
     if total_balance is not None:
