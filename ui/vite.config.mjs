@@ -10,6 +10,9 @@ export default defineConfig({
     },
   },
   build: {
+    // Keep Vite 5's browser floor (Safari/iOS 14+). Vite 8's default is Safari 16.4+,
+    // which rewrites media queries to range syntax that older iPhones ignore.
+    target: ["es2020", "edge88", "firefox78", "chrome87", "safari14"],
     rolldownOptions: {
       output: {
         // Vendor chunks that change rarely, so browsers keep them cached across deploys.
