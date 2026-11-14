@@ -108,7 +108,8 @@ class TestAdminOnlyEndpoints:
     """A user created through the API is non-admin and stays locked out (#127)."""
 
     @pytest.fixture(scope="class")
-    def non_admin_headers(self, client, auth_headers):
+    @classmethod
+    def non_admin_headers(cls, client, auth_headers):
         res = client.post("/api/auth/users", headers=auth_headers,
                           json={"username": "viewer128", "password": "ViewPass1"})
         assert res.status_code == 200
