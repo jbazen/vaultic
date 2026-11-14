@@ -73,9 +73,17 @@ class TestUserManagement:
 
 class TestChangePassword:
     def test_change_password_with_correct_current(self, client, auth_headers):
-        res = client.post("/api/auth/change-password", headers=auth_headers,
-                          json={"current_password": "testpassword", "new_password": "TestPass1"})
+        # A dedicated user: changing testuser's password would end the shared
+        # auth_headers session for every later test (issue #132).
+        client.post("/api/auth/users", headers=auth_headers,
+                    json={"username": "pwchange1", "password": "OldPass12"})
+        token = client.post("/api/auth/login", json={
+            "username": "pwchange1", "password": "OldPass12"}).json()["token"]
+        res = client.post("/api/auth/change-password",
+                          headers={"Authorization": f"Bearer {token}"},
+                          json={"current_password": "OldPass12", "new_password": "TestPass1"})
         assert res.status_code == 200
+        assert res.json()["ok"] is True
 
     def test_change_password_with_wrong_current_returns_error(self, client, auth_headers):
         res = client.post("/api/auth/change-password", headers=auth_headers,
