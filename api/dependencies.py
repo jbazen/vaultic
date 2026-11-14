@@ -49,10 +49,18 @@ async def get_current_user(
         )
 
     username = decode_token(token)
+    if not username:
+        security_log.log_auth_failure(ip, request.url.path)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # A validly signed token is not enough: the user must still have an active
     # row, so deactivating a user ends their access immediately (issue #99).
-    if not username or not is_active_user(username):
-        security_log.log_auth_failure(ip, request.url.path)
+    if not is_active_user(username):
+        security_log.log_auth_failure(ip, request.url.path, reason="inactive user")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
