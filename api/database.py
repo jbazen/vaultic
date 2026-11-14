@@ -743,6 +743,12 @@ MIGRATIONS = [
         BEGIN
             UPDATE refresh_tokens SET revoked = 1 WHERE id = NEW.id;
         END""",
+    # Plaid's code for currencies with no ISO code, e.g. crypto (#137). Plaid
+    # sets exactly one of iso_currency_code / unofficial_currency_code; rows
+    # synced before this column existed have NULL here.
+    "ALTER TABLE plaid_securities ADD COLUMN unofficial_currency_code TEXT",
+    "ALTER TABLE plaid_holdings ADD COLUMN unofficial_currency_code TEXT",
+    "ALTER TABLE plaid_investment_transactions ADD COLUMN unofficial_currency_code TEXT",
 ]
 
 
