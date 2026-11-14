@@ -647,3 +647,48 @@ class TestPortfolioPerformance:
         assert t3 - t2 == pytest.approx(10000.0), f"expected +10k from A; got {t3 - t2}"
         # No EKG dip: the line never falls just because an account misses a day.
         assert t2 >= t1 and t3 >= t2
+
+
+class TestInvestmentCurrencyFields:
+    """Holdings and investment-transaction endpoints return Plaid's
+    unofficial currency code alongside the ISO one (#137)."""
+
+    def _seed(self):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO accounts (plaid_account_id, name, type, is_active, account_number) "
+                "VALUES ('CUR137', 'Crypto 137', 'investment', 1, 'CUR137')"
+            )
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE account_number = 'CUR137'"
+            ).fetchone()["id"]
+            conn.execute(
+                "INSERT INTO plaid_holdings (account_id, account_number, security_id, "
+                "institution_value, quantity, iso_currency_code, unofficial_currency_code, "
+                "snapped_at) VALUES (?, 'CUR137', 'sec-btc-137', 5.0, 0.1, NULL, 'BTC', '2026-11-14')",
+                (acct_id,),
+            )
+            conn.execute(
+                "INSERT INTO plaid_investment_transactions (investment_transaction_id, "
+                "account_id, account_number, security_id, date, amount, iso_currency_code, "
+                "unofficial_currency_code) VALUES ('it-btc-137', ?, 'CUR137', 'sec-btc-137', "
+                "'2026-11-14', 5.0, NULL, 'BTC')",
+                (acct_id,),
+            )
+        return acct_id
+
+    def test_holdings_and_transactions_return_unofficial_code(self, client, auth_headers):
+        acct_id = self._seed()
+        res = client.get(f"/api/accounts/{acct_id}/holdings", headers=auth_headers)
+        assert res.status_code == 200
+        h = res.json()["holdings"][0]
+        assert (h["iso_currency_code"], h["unofficial_currency_code"]) == (None, "BTC")
+
+        res = client.get(f"/api/accounts/{acct_id}/investment-transactions", headers=auth_headers)
+        assert res.status_code == 200
+        t = res.json()[0]
+        assert (t["iso_currency_code"], t["unofficial_currency_code"]) == (None, "BTC")
+
+    def test_investment_transactions_requires_auth(self, client):
+        assert client.get("/api/accounts/1/investment-transactions").status_code == 401

@@ -337,6 +337,7 @@ async def account_holdings(
                 h.quantity,
                 h.cost_basis,
                 h.iso_currency_code,
+                h.unofficial_currency_code,
                 h.snapped_at,
                 CASE
                     WHEN h.cost_basis IS NOT NULL AND h.cost_basis > 0
@@ -408,6 +409,7 @@ def _i360_holdings(conn, account_number: str) -> dict:
         h["isin"] = None
         h["institution_price_as_of"] = None
         h["iso_currency_code"] = "USD"
+        h["unofficial_currency_code"] = None
         if total_value and h.get("institution_value"):
             h["pct_assets"] = (h["institution_value"] / total_value) * 100
         else:
@@ -472,6 +474,7 @@ async def investment_transactions(
                 it.amount,
                 it.fees,
                 it.iso_currency_code,
+                it.unofficial_currency_code,
                 it.cancel_transaction_id,
                 s.name          AS security_name,
                 s.ticker_symbol AS ticker
