@@ -1,0 +1,94 @@
+import { test, expect } from "@playwright/test";
+import { mockAllAPIs, loginOnly } from "./helpers.js";
+
+// A JWT-shaped token whose exp is far off, so the client never tries a refresh.
+function fakeJwt(tag) {
+  const payload = btoa(JSON.stringify({ sub: "testuser", exp: 4102444800, tag }));
+  return `e30.${payload}.sig`;
+}
+
+async function fillAndSubmit(page) {
+  const field = label => page.locator(".form-group")
+    .filter({ has: page.locator(".form-label", { hasText: new RegExp(`^${label}$`) }) })
+    .locator("input");
+  await field("Current password").fill("OldPass12");
+  await field("New password").fill("NewPass12");
+  await field("Confirm new password").fill("NewPass12");
+  await page.getByRole("button", { name: "Update password" }).click();
+}
+
+async function storedTokens(page) {
+  return page.evaluate(() => ({
+    token: localStorage.getItem("vaultic_token"),
+    refresh: localStorage.getItem("vaultic_refresh_token"),
+  }));
+}
+
+test.describe("Change password (issue #132)", () => {
+  // Settings mounts Plaid Link; its real CDN script throws a cross-origin
+  // "Script error." in the test browser that replaces the page.
+  test.beforeEach(async ({ page }) => {
+    await page.route("https://cdn.plaid.com/**", r =>
+      r.fulfill({ contentType: "application/javascript", body: "" }));
+  });
+
+  test("web session keeps working with the replacement token", async ({ page }) => {
+    const newToken = fakeJwt("web-after-change");
+    let sentBody = null;
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/change-password", r => {
+      sentBody = r.request().postDataJSON();
+      r.fulfill({ json: { ok: true, token: newToken } });
+    });
+    await loginOnly(page);
+    await page.getByRole("link", { name: /settings/i }).click();
+
+    await fillAndSubmit(page);
+
+    await expect(page.getByText(/other devices have been signed out/i)).toBeVisible();
+    expect(sentBody).toEqual({ current_password: "OldPass12", new_password: "NewPass12", remember_me: false });
+    expect(await storedTokens(page)).toEqual({ token: newToken, refresh: null });
+    // Still signed in: the next request carries the new token.
+    const meRequest = page.waitForRequest("**/api/auth/me");
+    await page.getByRole("link", { name: /dashboard/i }).first().click();
+    await page.getByRole("link", { name: /settings/i }).click();
+    expect((await meRequest).headers()["authorization"]).toBe(`Bearer ${newToken}`);
+    await expect(page.getByPlaceholder(/username/i)).toHaveCount(0);
+  });
+
+  test("keep-me-signed-in session gets a new refresh token", async ({ page }) => {
+    const newToken = fakeJwt("mobile-after-change");
+    let sentBody = null;
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/change-password", r => {
+      sentBody = r.request().postDataJSON();
+      r.fulfill({ json: { ok: true, token: newToken, refresh_token: "refresh-after-change" } });
+    });
+    await loginOnly(page);
+    await page.evaluate(token => {
+      localStorage.setItem("vaultic_token", token);
+      localStorage.setItem("vaultic_refresh_token", "refresh-before-change");
+    }, fakeJwt("mobile-before-change"));
+    await page.getByRole("link", { name: /settings/i }).click();
+
+    await fillAndSubmit(page);
+
+    await expect(page.getByText(/other devices have been signed out/i)).toBeVisible();
+    expect(sentBody.remember_me).toBe(true);
+    expect(await storedTokens(page)).toEqual({ token: newToken, refresh: "refresh-after-change" });
+  });
+
+  test("wrong current password shows an error and keeps the session", async ({ page }) => {
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/change-password", r =>
+      r.fulfill({ status: 401, json: { detail: "Current password is incorrect" } }));
+    await loginOnly(page);
+    await page.getByRole("link", { name: /settings/i }).click();
+    const before = await storedTokens(page);
+
+    await fillAndSubmit(page);
+
+    await expect(page.getByText("Current password is incorrect")).toBeVisible();
+    expect(await storedTokens(page)).toEqual(before);
+  });
+});

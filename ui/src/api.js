@@ -338,12 +338,21 @@ export async function deleteUser(username) {
   return res.json();
 }
 
+/**
+ * Change the password. The server signs out every session issued so far,
+ * this one included, and returns replacement tokens for this device (#132).
+ * remember_me asks for the same session type this device already has.
+ */
 export async function changePassword(current_password, new_password) {
   const res = await apiFetch("/api/auth/change-password", {
     method: "POST",
-    body: JSON.stringify({ current_password, new_password }),
+    body: JSON.stringify({ current_password, new_password, remember_me: !!getRefreshToken() }),
   });
-  return res.json();
+  const data = await res.json();
+  setToken(data.token);
+  if (data.refresh_token) setRefreshToken(data.refresh_token);
+  else clearRefreshToken();
+  return data;
 }
 
 // --- 2FA (TOTP) ---

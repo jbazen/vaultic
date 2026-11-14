@@ -51,7 +51,7 @@ function ChangePassword() {
     setLoading(true);
     try {
       await changePassword(cur, next);
-      setMsg({ text: "Password updated", type: "ok" });
+      setMsg({ text: "Password updated. Your other devices have been signed out.", type: "ok" });
       setCur(""); setNext(""); setConfirm("");
     } catch (e) {
       setMsg({ text: e.message || "Failed", type: "error" });
