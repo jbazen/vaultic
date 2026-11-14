@@ -3,9 +3,14 @@ name: Test & Deploy
 on:
   push:
     branches: [main]
+  # Pull requests run the test and e2e jobs only; the deploy job is push-only.
+  pull_request:
+    branches: [main]
 
+# Pushes to main keep the single production group. Each pull request gets its
+# own group, so a PR run can never cancel a production deploy.
 concurrency:
-  group: deploy-production
+  group: ${{ github.event_name == 'push' && 'deploy-production' || format('ci-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -55,7 +60,7 @@ jobs:
     needs: [test, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: success()
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       # Build frontend here (seconds on x86) instead of on the slow A1 ARM server
