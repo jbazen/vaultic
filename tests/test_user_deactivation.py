@@ -4,8 +4,8 @@ Covers the three gaps the issue lists:
   1. Access tokens issued before deactivation stop working.
   2. Refresh tokens are revoked on deactivation, and a deactivated user's
      refresh token is rejected even if it was left unrevoked.
-  3. The AUTH_USERNAME / AUTH_PASSWORD_HASH bootstrap fallback only applies
-     when there is no users row at all, never for a deactivated row.
+  3. AUTH_USERNAME / AUTH_PASSWORD_HASH are no longer a login fallback, so a
+     deactivated env user can't log in with the original password.
 """
 import pytest
 
@@ -119,9 +119,9 @@ class TestLoginAfterDeactivation:
         assert authenticate_user("deact_boot", "BootPass1") is False
         assert _login(client, "deact_boot", "BootPass1").status_code == 401
 
-    def test_bootstrap_fallback_still_works_with_no_row(self, monkeypatch):
+    def test_env_credentials_alone_do_not_log_in(self, monkeypatch):
+        """With no users row, AUTH_USERNAME / AUTH_PASSWORD_HASH are not a login path."""
         monkeypatch.setenv("AUTH_USERNAME", "boot_no_row")
         monkeypatch.setenv("AUTH_PASSWORD_HASH", hash_password("BootPass1"))
 
-        assert authenticate_user("boot_no_row", "BootPass1") is True
-        assert authenticate_user("boot_no_row", "WrongPass1") is False
+        assert authenticate_user("boot_no_row", "BootPass1") is False

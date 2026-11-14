@@ -123,19 +123,12 @@ def authenticate_user(username: str, password: str) -> bool:
             "SELECT password_hash, is_active FROM users WHERE username = ?",
             (username,)
         ).fetchone()
-    if row is not None:
-        # A deactivated user can't log in, and must not fall through to the
-        # AUTH_USERNAME / AUTH_PASSWORD_HASH bootstrap below (issue #99).
-        if row["is_active"] != 1:
-            return False
-        return verify_password(password, row["password_hash"])
-    # Bootstrap fallback: only when the users table has no row at all for
-    # AUTH_USERNAME (seed_user_from_env normally creates it on startup).
-    expected_username = os.environ.get("AUTH_USERNAME", "")
-    expected_hash = os.environ.get("AUTH_PASSWORD_HASH", "")
-    if username != expected_username or not expected_hash:
+    # Only an active users row can log in. There is no AUTH_PASSWORD_HASH
+    # fallback: seed_user_from_env creates the AUTH_USERNAME row on startup, and
+    # get_current_user rejects tokens for users without an active row (issue #99).
+    if row is None or row["is_active"] != 1:
         return False
-    return verify_password(password, expected_hash)
+    return verify_password(password, row["password_hash"])
 
 
 def is_active_user(username: str) -> bool:
