@@ -141,7 +141,8 @@ def test_plan_lists_every_target_with_row_counts(old_db):
     assert [t for t, _ in plan["tables"]] == list(drop.TABLES)
     counts = dict(plan["tables"])
     assert counts["budget_items"] == 1 and counts["paystubs"] == 1 and counts["w4s"] == 0
-    assert plan["columns"] == [("transactions", "budget_deleted", 2), ("push_subscriptions", "device_token", 1)]
+    # budget_deleted: t1 = 0, t2 = 1, t3 = NULL, so one row holds a real value.
+    assert plan["columns"] == [("transactions", "budget_deleted", 1), ("push_subscriptions", "device_token", 1)]
 
 
 def test_dry_run_changes_nothing(old_db, push_router_unused, capsys):
@@ -207,7 +208,7 @@ def test_failure_part_way_rolls_back_everything(old_db, push_router_unused):
     assert _rows(old_db, "SELECT COUNT(*) FROM budget_history") == [(1,)]
 
 
-def test_device_token_kept_while_push_router_still_uses_it(old_db, monkeypatch, capsys):
+def test_device_token_kept_while_code_still_uses_it(old_db, monkeypatch, capsys):
     monkeypatch.setattr(drop, "device_token_in_use", lambda: True)
     assert drop.main(["--db", str(old_db), "--apply"]) == 0
     assert "SKIP COLUMN  push_subscriptions.device_token" in capsys.readouterr().out
@@ -215,20 +216,39 @@ def test_device_token_kept_while_push_router_still_uses_it(old_db, monkeypatch, 
     assert "budget_deleted" not in _columns(old_db, "transactions")
     assert _tables(old_db) & set(drop.TABLES) == set()
 
-    # Re-run once #85 has shipped: only the column is left to drop.
+    # A re-run while the code still uses it: nothing droppable, but no
+    # misleading "already gone" message either.
+    assert drop.main(["--db", str(old_db), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "Nothing to drop" not in out
+    assert "SKIP COLUMN  push_subscriptions.device_token" in out
+    assert len(_backups(old_db)) == 1
+
+    # Re-run once the code no longer uses it: only the column is left to drop.
     monkeypatch.setattr(drop, "device_token_in_use", lambda: False)
     assert drop.main(["--db", str(old_db), "--apply"]) == 0
     assert "device_token" not in _columns(old_db, "push_subscriptions")
     assert _rows(old_db, "SELECT endpoint FROM push_subscriptions") == [("https://push.example/1",)]
 
 
-def test_device_token_in_use_reads_the_push_router(tmp_path):
-    router = tmp_path / "push.py"
-    router.write_text("def subscribe():\n    device_token = make()\n")
-    assert drop.device_token_in_use(router) is True
+def test_device_token_in_use_checks_router_and_schema(tmp_path):
+    router, schema = tmp_path / "push.py", tmp_path / "database.py"
     router.write_text("def subscribe():\n    pass\n")
-    assert drop.device_token_in_use(router) is False
-    assert drop.device_token_in_use(tmp_path / "missing.py") is False
+    schema.write_text('MIGRATIONS = ["ALTER TABLE push_subscriptions ADD COLUMN device_token TEXT"]\n')
+    assert drop.device_token_in_use((router, schema)) is True  # schema would re-add it
+
+    schema.write_text("MIGRATIONS = []\n")
+    assert drop.device_token_in_use((router, schema)) is False
+
+    router.write_text("def subscribe():\n    device_token = make()\n")
+    assert drop.device_token_in_use((router, schema)) is True
+
+    assert drop.device_token_in_use((tmp_path / "missing.py",)) is False
+
+
+def test_device_token_not_in_use_in_this_checkout():
+    """#85 removed it from the router and #84 from the schema, so the real run drops it."""
+    assert drop.device_token_in_use() is False
 
 
 def test_missing_database_is_refused(tmp_path):

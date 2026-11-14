@@ -27,6 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = REPO_ROOT / "data" / "vaultic.db"
 PUSH_ROUTER = REPO_ROOT / "api" / "routers" / "push.py"
+DATABASE_MODULE = REPO_ROOT / "api" / "database.py"
 
 # Children before parents, so no DROP fires an ON DELETE action on another
 # table: budget_amounts / budget_auto_rules / budget_history /
@@ -65,9 +66,16 @@ COLUMNS = (
 BUSY_TIMEOUT_MS = 30_000
 
 
-def device_token_in_use(push_router: Path = PUSH_ROUTER) -> bool:
-    """True while the deployed push router still reads/writes device_token (#85 not shipped)."""
-    return push_router.exists() and "device_token" in push_router.read_text()
+def device_token_in_use(sources: tuple = ()) -> bool:
+    """True while the deployed code still mentions device_token.
+
+    Checks the push router (which wrote it until #85) and api/database.py
+    (whose migrations would re-add the column, empty, on the next restart).
+    """
+    for path in sources or (PUSH_ROUTER, DATABASE_MODULE):
+        if path.exists() and "device_token" in path.read_text():
+            return True
+    return False
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -107,22 +115,24 @@ def build_plan(conn, skip_columns: tuple = ()) -> dict:
         if (table, column) in skip_columns:
             skipped.append((table, column))
             continue
+        # Rows holding a real value: not NULL, 0 or empty (budget_deleted
+        # defaults to 0, so a plain non-NULL count would be every row).
         filled = conn.execute(
-            f'SELECT COUNT(*) FROM "{table}" WHERE "{column}" IS NOT NULL'
+            f'SELECT COUNT(*) FROM "{table}" WHERE "{column}" IS NOT NULL AND "{column}" NOT IN (0, \'\')'
         ).fetchone()[0]
         columns.append((table, column, filled))
     return {"tables": tables, "columns": columns, "skipped": skipped}
 
 
 def print_plan(plan: dict) -> None:
-    if not plan["tables"] and not plan["columns"]:
+    if not plan["tables"] and not plan["columns"] and not plan["skipped"]:
         print("Nothing to drop: every target table and column is already gone.")
     for table, rows in plan["tables"]:
         print(f"  DROP TABLE   {table:<26} {rows:>7} rows")
     for table, column, filled in plan["columns"]:
-        print(f"  DROP COLUMN  {table}.{column:<{25 - len(table)}} {filled:>7} non-null values")
+        print(f"  DROP COLUMN  {table}.{column:<{25 - len(table)}} {filled:>7} rows with a value")
     for table, column in plan["skipped"]:
-        print(f"  SKIP COLUMN  {table}.{column} (still used by api/routers/push.py; re-run after #85 ships)")
+        print(f"  SKIP COLUMN  {table}.{column} (still in the deployed code; re-run once it is gone)")
 
 
 def backup_and_verify(conn, db_path: Path, backup_path: Path) -> None:
@@ -168,7 +178,10 @@ def apply_plan(conn, db_path: Path, plan: dict, backup_path: Path) -> None:
             raise RuntimeError(f"foreign_key_check found {len(violations)} violation(s)")
         conn.execute("COMMIT")
     except Exception:
-        conn.execute("ROLLBACK")
+        # SQLite may already have rolled back on its own (e.g. SQLITE_FULL);
+        # a second ROLLBACK would then raise and hide the real error.
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
         raise
 
 
