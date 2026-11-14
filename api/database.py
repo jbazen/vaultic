@@ -714,6 +714,30 @@ MIGRATIONS = [
     # the column logs nobody out. Rerun-safe: a second ADD COLUMN fails with
     # "duplicate column name", which init_db ignores.
     "ALTER TABLE users ADD COLUMN tokens_valid_after INTEGER",
+    # Any switch of a row from active to inactive, including a hand edit in
+    # sqlite, sets the cutoff and revokes refresh tokens, the same as
+    # DELETE /api/auth/users/{username} (#136). MAX keeps a cutoff the UPDATE
+    # itself set (or a later one) instead of lowering it.
+    """CREATE TRIGGER IF NOT EXISTS users_deactivation_cutoff
+        AFTER UPDATE OF is_active ON users
+        WHEN OLD.is_active IS 1 AND NEW.is_active IS NOT 1
+        BEGIN
+            UPDATE users
+               SET tokens_valid_after = MAX(COALESCE(NEW.tokens_valid_after, 0),
+                                            CAST(strftime('%s', 'now') AS INTEGER))
+             WHERE username = NEW.username;
+            UPDATE refresh_tokens SET revoked = 1
+             WHERE username = NEW.username AND revoked = 0;
+        END""",
+    # A refresh token inserted for a user who isn't active (a refresh racing a
+    # deactivation) is born revoked, so it can't come back on reactivation (#136).
+    """CREATE TRIGGER IF NOT EXISTS refresh_tokens_inactive_user
+        AFTER INSERT ON refresh_tokens
+        WHEN NOT EXISTS (SELECT 1 FROM users
+                          WHERE username = NEW.username AND is_active = 1)
+        BEGIN
+            UPDATE refresh_tokens SET revoked = 1 WHERE id = NEW.id;
+        END""",
 ]
 
 
