@@ -98,6 +98,32 @@ class TestRefreshTokenAfterDeactivation:
         assert validate_refresh_token(raw) == "testuser"
 
 
+class TestPushAfterDeactivation:
+    def test_deactivation_disables_push_subscriptions(self, client, auth_headers):
+        _create_user(client, auth_headers, "deact_push", "DeactPass1")
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO push_subscriptions (endpoint, p256dh, auth, username) VALUES (?, ?, ?, ?)",
+                ("https://push.example/deact_push", "p", "a", "deact_push"),
+            )
+            conn.execute(
+                "INSERT INTO push_subscriptions (endpoint, p256dh, auth, username) VALUES (?, ?, ?, ?)",
+                ("https://push.example/testuser_keep", "p", "a", "testuser"),
+            )
+
+        assert client.delete("/api/auth/users/deact_push", headers=auth_headers).status_code == 200
+
+        with get_db() as conn:
+            rows = dict(conn.execute(
+                "SELECT endpoint, is_active FROM push_subscriptions WHERE endpoint LIKE 'https://push.example/%'"
+            ).fetchall())
+        assert rows["https://push.example/deact_push"] == 0
+        assert rows["https://push.example/testuser_keep"] == 1
+
+        with get_db() as conn:  # don't leave rows behind for the push tests
+            conn.execute("DELETE FROM push_subscriptions WHERE endpoint LIKE 'https://push.example/%'")
+
+
 class TestLoginAfterDeactivation:
     def test_deactivated_user_cannot_log_in(self, client, auth_headers):
         _create_user(client, auth_headers, "deact_login", "DeactPass1")
