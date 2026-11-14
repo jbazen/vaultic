@@ -1,6 +1,6 @@
 from fastapi import Request, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from api.auth import decode_token
+from api.auth import decode_token, is_active_user
 from api import security_log
 
 _bearer = HTTPBearer(auto_error=False)
@@ -49,7 +49,9 @@ async def get_current_user(
         )
 
     username = decode_token(token)
-    if not username:
+    # A validly signed token is not enough: the user must still have an active
+    # row, so deactivating a user ends their access immediately (issue #99).
+    if not username or not is_active_user(username):
         security_log.log_auth_failure(ip, request.url.path)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

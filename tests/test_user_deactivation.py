@@ -37,6 +37,29 @@ def _login(client, username, password, remember_me=False):
     })
 
 
+class TestAccessTokenAfterDeactivation:
+    def test_existing_access_token_rejected_after_deactivation(self, client, auth_headers):
+        _create_user(client, auth_headers, "deact_access", "DeactPass1")
+        token = _login(client, "deact_access", "DeactPass1").json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+        assert client.delete("/api/auth/users/deact_access", headers=auth_headers).status_code == 200
+
+        res = client.get("/api/auth/me", headers=headers)
+        assert res.status_code == 401
+        # The header tells the frontend this is a real auth failure → force re-login.
+        assert res.headers.get("WWW-Authenticate") == "Bearer"
+
+    def test_token_for_user_with_no_row_rejected(self, client):
+        token = create_token("ghost_user_never_created")
+        res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert res.status_code == 401
+
+    def test_active_user_token_still_works(self, client, auth_headers):
+        assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
+
+
 class TestRefreshTokenAfterDeactivation:
     def test_deactivation_revokes_refresh_tokens(self, client, auth_headers):
         _create_user(client, auth_headers, "deact_refresh", "DeactPass1")

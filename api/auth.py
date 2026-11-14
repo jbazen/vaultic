@@ -132,6 +132,17 @@ def authenticate_user(username: str, password: str) -> bool:
     return verify_password(password, row["password_hash"])
 
 
+def is_active_user(username: str) -> bool:
+    """True if the users table has an active row for this username."""
+    from api.database import get_db
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE username = ? AND is_active = 1",
+            (username,)
+        ).fetchone()
+    return row is not None
+
+
 def get_user_2fa(username: str) -> dict | None:
     from api.database import get_db
     with get_db() as conn:
