@@ -10,9 +10,9 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-plaid-link": "^3.5.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-plaid-link": "^5.0.0",
     "react-router-dom": "^6.26.2",
     "recharts": "^2.12.7"
   },
