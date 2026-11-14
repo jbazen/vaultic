@@ -611,8 +611,9 @@ All variables go in `.env` at the project root. `load_dotenv()` reads this file 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 AUTH_USERNAME=your_username
 AUTH_PASSWORD_HASH=<bcrypt hash>
-# Bootstrap only: seeds the AUTH_USERNAME user row on first start, then unused
-# (remove it from .env; change passwords in Settings).
+# Bootstrap only: seeds the AUTH_USERNAME user row on first start. Remove it from
+# .env once that user has an active row (until then it stays a fallback login),
+# and change passwords in Settings.
 # Generate: python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
 
 JWT_SECRET=<64-char hex string>
