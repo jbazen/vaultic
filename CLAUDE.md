@@ -352,7 +352,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 
 - **Never commit** `.env`, credentials, API keys, or TOTP secrets. Use `.env.example` for templates
 - **Plaid access tokens** encrypted with Fernet at rest (`encryption.py`)
-- **Push subscriptions** store username — device-auth JWT must be issued for the correct subscribing user, never hardcoded
+- **Push subscriptions** store `username`. There is no passwordless or device-token login. Every token is issued by `/api/auth/*` after the password and 2FA.
 
 ### Logging & Audit
 
