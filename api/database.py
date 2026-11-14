@@ -708,6 +708,12 @@ MIGRATIONS = [
     # that day rather than today's. NULL on rows written before the column
     # existed and not backfilled; readers fall back to the current mortgage.
     "ALTER TABLE net_worth_snapshots ADD COLUMN mortgage REAL",
+    # Token cutoff in Unix seconds (#126): access tokens whose iat is not after
+    # it are rejected. Set on deactivation so a later reactivation doesn't
+    # revive old tokens. NULL (every existing row) means no cutoff, so adding
+    # the column logs nobody out. Rerun-safe: a second ADD COLUMN fails with
+    # "duplicate column name", which init_db ignores.
+    "ALTER TABLE users ADD COLUMN tokens_valid_after INTEGER",
 ]
 
 
@@ -1266,6 +1272,12 @@ def init_db():
                 msg = str(exc).lower()
                 if not any(frag in msg for frag in _expected_msg_fragments):
                     logger.warning("Unexpected migration error: %s | SQL: %.120s", exc, migration)
+        # Every authenticated request reads users.tokens_valid_after (#126), so
+        # starting without it would 500 every call while /api/health passes.
+        # Fail startup instead, so the deploy health check catches it.
+        user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "tokens_valid_after" not in user_cols:
+            raise RuntimeError("users.tokens_valid_after migration did not apply")
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)
