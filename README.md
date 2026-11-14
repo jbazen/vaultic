@@ -611,7 +611,10 @@ All variables go in `.env` at the project root. `load_dotenv()` reads this file 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 AUTH_USERNAME=your_username
 AUTH_PASSWORD_HASH=<bcrypt hash>
-# Generate: python -c "from passlib.hash import bcrypt; print(bcrypt.hash('yourpassword'))"
+# Bootstrap only: seeds the AUTH_USERNAME user row on first start. Remove it from
+# .env once that user has an active row (until then it stays a fallback login),
+# and change passwords in Settings.
+# Generate: python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
 
 JWT_SECRET=<64-char hex string>
 # Generate: python -c "import secrets; print(secrets.token_hex(32))"
@@ -633,7 +636,31 @@ ANTHROPIC_API_KEY=sk-ant-...
 # ── News feed ─────────────────────────────────────────────────────────────────
 TAVILY_API_KEY=tvly-...
 # Free tier: 1,000 searches/month. Sign up at app.tavily.com
+
+# ── Market rates ──────────────────────────────────────────────────────────────
+FRED_API_KEY=your_fred_api_key
+# Free key at fred.stlouisfed.org
+
+# ── Coinbase (Advanced Trade API, CDP key: ECDSA, view-only) ──────────────────
+COINBASE_API_KEY_NAME=organizations/<org-id>/apiKeys/<key-id>
+COINBASE_API_KEY_PRIVATE=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_HERE\n-----END EC PRIVATE KEY-----\n
+# One line, literal \n between PEM lines
+
+# ── Web Push (VAPID) ──────────────────────────────────────────────────────────
+VAPID_PUBLIC_KEY=<base64url public key, 87 chars>
+VAPID_PRIVATE_KEY_PEM=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_HERE\n-----END EC PRIVATE KEY-----
+VAPID_EMAIL=mailto:you@example.com
+# Generate the pair: python scripts/generate_vapid_keys.py
+
+# ── Backups (Litestream → Cloudflare R2; read by deploy/start.sh) ─────────────
+LITESTREAM_ACCESS_KEY_ID=your_r2_access_key_id
+LITESTREAM_SECRET_ACCESS_KEY=your_r2_secret_access_key
+# R2 API token with Object Read & Write on the backup bucket only
 ```
+
+After changing any of these on the server, check them with
+`.venv/bin/python scripts/verify_secrets.py` (run from the repo root). It prints
+only each credential's name plus an HTTP status, count or timestamp, never a value.
 
 ---
 
@@ -952,4 +979,4 @@ Items marked *(removed in #82)* were built and later removed; see tag `full-app-
 - [x] **Insperity data integration** — HTML scraper for 7 data types (holdings, performance, contributions, activity, transactions, allocations, prices); local sync script; detail view with 5 tabs in the Dashboard's account list; auto-updates net worth on sync
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen; push notifications for reconnect and stale-sync alerts
-- [ ] **Plaid compliance** — Dependabot, privacy policy, Information Security Policy (due 2026-09-18)
+- [ ] **Plaid compliance (#6)** — `dependabot.yml`, [privacy policy](https://jbazen.github.io/vaultic/privacy.html) and [Information Security Policy](https://jbazen.github.io/vaultic/security.html) are in `docs/`; remaining: owner enables Dependabot alerts/security updates in repo settings and completes the Plaid attestation (was due 2026-09-18)

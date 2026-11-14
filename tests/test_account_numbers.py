@@ -1076,3 +1076,221 @@ class TestMigrateHoldingsHistory:
             finally:
                 conn.execute("DELETE FROM manual_holdings_snapshots WHERE account_number = 'UNMAPPED_XYZ'")
                 conn.commit()
+
+
+def _nw_row(conn, snapped_at, mortgage=None):
+    conn.execute(
+        "INSERT INTO net_worth_snapshots (snapped_at, total, liabilities, mortgage) "
+        "VALUES (?, 0, 0, ?)",
+        (snapped_at, mortgage),
+    )
+
+
+def _mes_row(conn, name, acct, value, snapped_at, category="other_liability"):
+    conn.execute(
+        "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (name, acct, category, value, snapped_at),
+    )
+
+
+def _mortgages(conn):
+    return {
+        str(r["snapped_at"]): r["mortgage"]
+        for r in conn.execute("SELECT snapped_at, mortgage FROM net_worth_snapshots")
+    }
+
+
+class TestBackfillNetWorthMortgage:
+    """_migrate_backfill_nw_mortgage sets each net worth row's mortgage from the
+    liability snapshot history as of that date (#9). Isolated DB per test."""
+
+    def _conn(self):
+        from tests.conftest import make_isolated_db
+        return make_isolated_db()[0]
+
+    def test_picks_latest_snapshot_on_or_before_date_with_abs(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "704931286", -200000.0, "2026-03-17")  # PDF sign
+        _mes_row(conn, "Mortgage", "704931286", 198700.0, "2026-04-02")
+        _mes_row(conn, "Mortgage", "704931286", 197400.0, "2026-05-02")
+        for d in ("2026-03-18", "2026-04-02", "2026-04-30", "2026-05-15"):
+            _nw_row(conn, d)
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {
+            "2026-03-18": 200000.0,
+            "2026-04-02": 198700.0,  # same-day snapshot counts as "on or before"
+            "2026-04-30": 198700.0,
+            "2026-05-15": 197400.0,
+        }
+
+    def test_sums_two_liability_accounts(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-01-01")
+        _mes_row(conn, "HELOC", "222", 20000.0, "2026-01-10")
+        _mes_row(conn, "HELOC", "222", 18000.0, "2026-02-10")
+        _nw_row(conn, "2026-01-05")
+        _nw_row(conn, "2026-02-15")
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {"2026-01-05": 150000.0, "2026-02-15": 168000.0}
+
+    def test_ignores_non_liability_accounts(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-01-01")
+        _mes_row(conn, "Home", "home_1", 650000.0, "2026-01-01", category="home_value")
+        _nw_row(conn, "2026-01-05")
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {"2026-01-05": 150000.0}
+
+    def test_leaves_null_when_no_prior_snapshot(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-02-01")
+        _nw_row(conn, "2026-01-15")
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == {"2026-01-15": None}
+
+    def test_never_overwrites_stored_value_and_is_idempotent(self):
+        from api.database import _migrate_backfill_nw_mortgage
+        conn = self._conn()
+        _mes_row(conn, "Mortgage", "111", 150000.0, "2026-01-01")
+        _nw_row(conn, "2026-01-05", mortgage=149000.0)  # written by the sync
+        _nw_row(conn, "2026-01-06")
+        _migrate_backfill_nw_mortgage(conn)
+        first = _mortgages(conn)
+        _migrate_backfill_nw_mortgage(conn)
+        assert _mortgages(conn) == first == {"2026-01-05": 149000.0, "2026-01-06": 150000.0}
+
+
+class TestSeedManualEntrySnapshots:
+    """_migrate_seed_manual_entry_snapshots gives entries with no history one
+    snapshot dated entered_at (#20 via #9). Isolated DB per test."""
+
+    def _conn(self):
+        from tests.conftest import make_isolated_db
+        conn = make_isolated_db()[0]
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Kia Carnival', 'car_value', 40000, '2026-03-18', 'vehicle_2025_kia_carnival')"
+        )
+        return conn
+
+    def _snaps(self, conn):
+        return [
+            (r["name"], r["account_number"], r["category"], r["value"], str(r["snapped_at"]))
+            for r in conn.execute(
+                "SELECT * FROM manual_entry_snapshots ORDER BY account_number, snapped_at"
+            )
+        ]
+
+    def test_seeds_entry_without_history_dated_entered_at(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert self._snaps(conn) == [
+            ("Kia Carnival", "vehicle_2025_kia_carnival", "car_value", 40000.0, "2026-03-18"),
+        ]
+
+    def test_leaves_entries_with_history_alone(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Mortgage', 'other_liability', 180000, '2026-11-03', '704931286')"
+        )
+        # Existing history under a different name still counts (exact account_number match)
+        _mes_row(conn, "Old Mortgage Name", "704931286", 190000.0, "2026-03-17")
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert self._snaps(conn) == [
+            ("Old Mortgage Name", "704931286", "other_liability", 190000.0, "2026-03-17"),
+            ("Kia Carnival", "vehicle_2025_kia_carnival", "car_value", 40000.0, "2026-03-18"),
+        ]
+
+    def test_skips_entries_without_account_number(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at) "
+            "VALUES ('Unkeyed', 'other_asset', 5, '2026-03-18')"
+        )
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert [s[0] for s in self._snaps(conn)] == ["Kia Carnival"]
+
+    def test_idempotent(self):
+        from api.database import _migrate_seed_manual_entry_snapshots
+        conn = self._conn()
+        _migrate_seed_manual_entry_snapshots(conn)
+        first = self._snaps(conn)
+        conn.execute("UPDATE manual_entries SET value = 41000")  # value changes later
+        _migrate_seed_manual_entry_snapshots(conn)
+        assert self._snaps(conn) == first
+
+
+class TestRekeyOrphanManualSnapshots:
+    """_migrate_rekey_orphan_manual_snapshots moves the two known orphan rows
+    onto their entries by exact account_number (#9). Isolated DB per test."""
+
+    def _conn(self):
+        from tests.conftest import make_isolated_db
+        conn = make_isolated_db()[0]
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Home', 'home_value', 655000, '2026-11-04', '16623S17THDRPHOENIXAZ850456')"
+        )
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Optum HSA', 'invested', 3000, '2026-11-04', '430941440')"
+        )
+        _mes_row(conn, "Home", "16623S17THDRPHOENIXAZ850456", 650000.0, "2026-05-01", "home_value")
+        _mes_row(conn, "16623 S 17th Dr", "16623S17THDRPHOENIXAZ85045", 647600.0, "2026-06-01", "home_value")
+        _mes_row(conn, "Optum HSA", "430941440", 2800.0, "2026-08-02", "invested")
+        _mes_row(conn, "Optum Bank HSA", "4309414404", 2895.33, "2026-09-02", "invested")
+        return conn
+
+    def _by_acct(self, conn, acct):
+        return [
+            (r["name"], r["value"], str(r["snapped_at"]))
+            for r in conn.execute(
+                "SELECT * FROM manual_entry_snapshots WHERE account_number = ? ORDER BY snapped_at",
+                (acct,),
+            )
+        ]
+
+    def test_moves_orphans_onto_entries(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        assert self._by_acct(conn, "16623S17THDRPHOENIXAZ850456") == [
+            ("Home", 650000.0, "2026-05-01"), ("Home", 647600.0, "2026-06-01"),
+        ]
+        assert self._by_acct(conn, "430941440") == [
+            ("Optum HSA", 2800.0, "2026-08-02"), ("Optum HSA", 2895.33, "2026-09-02"),
+        ]
+        assert self._by_acct(conn, "16623S17THDRPHOENIXAZ85045") == []
+        assert self._by_acct(conn, "4309414404") == []
+
+    def test_idempotent(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        first = conn.execute("SELECT * FROM manual_entry_snapshots ORDER BY id").fetchall()
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        again = conn.execute("SELECT * FROM manual_entry_snapshots ORDER BY id").fetchall()
+        assert [tuple(r) for r in again] == [tuple(r) for r in first]
+
+    def test_only_exact_literals_move(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        _mes_row(conn, "Other", "43094144", 1.0, "2026-09-03", "invested")  # near-miss
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        assert self._by_acct(conn, "43094144") == [("Other", 1.0, "2026-09-03")]
+
+    def test_skips_when_target_entry_missing(self):
+        from api.database import _migrate_rekey_orphan_manual_snapshots
+        conn = self._conn()
+        conn.execute("DELETE FROM manual_entries WHERE account_number = '430941440'")
+        _migrate_rekey_orphan_manual_snapshots(conn)
+        assert self._by_acct(conn, "4309414404") == [("Optum Bank HSA", 2895.33, "2026-09-02")]

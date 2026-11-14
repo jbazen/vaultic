@@ -359,27 +359,40 @@ class TestPlaidRemoveItem:
             self._cleanup()
 
 
-class TestPlaidSyncRefresh:
-    """Manual /sync forces a Plaid transactions/refresh (issue #72); the
-    follow-up poll passes refresh=false to avoid a second on-demand charge."""
+class TestPlaidSync:
+    """Manual /sync runs the normal sync only — no transactions/refresh (issue #79)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_rate_limit(self):
+        from api import rate_limit
+        rate_limit._sync_calls.clear()
+        yield
+        rate_limit._sync_calls.clear()
 
     def test_sync_requires_auth(self, client):
         res = client.post("/api/plaid/sync")
         assert res.status_code == 401
 
-    def test_sync_defaults_to_refresh_true(self, client, auth_headers):
+    def test_sync_calls_sync_all_without_args(self, client, auth_headers):
         with patch("api.sync.sync_all") as mock_sync:
             res = client.post("/api/plaid/sync", headers=auth_headers)
         assert res.status_code == 200
-        assert res.json()["refreshed"] is True
-        mock_sync.assert_called_once_with(True)
+        assert res.json() == {"status": "ok"}
+        mock_sync.assert_called_once_with()
 
-    def test_sync_refresh_false_skips_refresh(self, client, auth_headers):
+    def test_sync_ignores_legacy_refresh_param(self, client, auth_headers):
+        """An old cached frontend may still send ?refresh=true — harmless."""
         with patch("api.sync.sync_all") as mock_sync:
-            res = client.post("/api/plaid/sync?refresh=false", headers=auth_headers)
+            res = client.post("/api/plaid/sync?refresh=true", headers=auth_headers)
         assert res.status_code == 200
-        assert res.json()["refreshed"] is False
-        mock_sync.assert_called_once_with(False)
+        mock_sync.assert_called_once_with()
+
+    def test_sync_rate_limited_after_five_calls(self, client, auth_headers):
+        with patch("api.sync.sync_all"):
+            for _ in range(5):
+                assert client.post("/api/plaid/sync", headers=auth_headers).status_code == 200
+            res = client.post("/api/plaid/sync", headers=auth_headers)
+        assert res.status_code == 429
 
 
 class TestPlaidItems:

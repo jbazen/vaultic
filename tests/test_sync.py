@@ -1,5 +1,5 @@
-"""Tests for the Plaid sync pipeline — force-refresh (issue #72) and real
-disconnect detection via error_code (issue #73)."""
+"""Tests for the Plaid sync pipeline — no on-demand transactions/refresh
+(issue #79) and real disconnect detection via error_code (issue #73)."""
 import json
 from unittest.mock import patch, MagicMock
 
@@ -34,80 +34,33 @@ def _cleanup_item(item_id):
         conn.commit()
 
 
-class TestRefreshTransactions:
-    def test_calls_plaid_transactions_refresh(self):
-        with patch("api.sync._get_plaid_client") as m_client:
-            api = MagicMock()
-            m_client.return_value = api
-            sync._refresh_transactions("access-token-xyz")
-        assert api.transactions_refresh.called
-        req = api.transactions_refresh.call_args.args[0]
-        assert req.access_token == "access-token-xyz"
+class TestSyncNeverRefreshes:
+    """Manual sync must not call Plaid transactions/refresh (issue #79)."""
 
+    def test_refresh_helper_is_gone(self):
+        assert not hasattr(sync, "_refresh_transactions")
 
-class TestSyncItemRefreshBranch:
-    """_sync_item fires transactions/refresh only when refresh=True."""
-
-    def _run(self, refresh):
-        with patch("api.sync._refresh_transactions") as m_refresh, \
-             patch("api.sync._get_plaid_client") as m_client, \
-             patch("api.sync._sync_transactions"), \
-             patch("api.sync._sync_investments"), \
-             patch("api.sync._take_net_worth_snapshot"):
-            api = MagicMock()
-            resp = MagicMock()
-            resp.accounts = []
-            resp.item.institution_id = None
-            api.accounts_get.return_value = resp
-            m_client.return_value = api
-            sync._sync_item(1, "item-x", "tok", "2026-07-31", refresh=refresh)
-        return m_refresh
-
-    def test_refresh_true_calls_refresh(self):
-        assert self._run(True).called
-
-    def test_refresh_false_skips_refresh(self):
-        assert not self._run(False).called
-
-    def test_refresh_failure_is_non_fatal(self):
-        """A dead login makes refresh raise — sync must continue, not crash."""
-        with patch("api.sync._refresh_transactions", side_effect=Exception("ITEM_LOGIN_REQUIRED")), \
-             patch("api.sync._get_plaid_client") as m_client, \
-             patch("api.sync._sync_transactions"), \
-             patch("api.sync._sync_investments"), \
-             patch("api.sync._take_net_worth_snapshot"):
-            api = MagicMock()
-            resp = MagicMock()
-            resp.accounts = []
-            resp.item.institution_id = None
-            api.accounts_get.return_value = resp
-            m_client.return_value = api
-            # Should not raise
-            sync._sync_item(1, "item-x", "tok", "2026-07-31", refresh=True)
-
-
-class TestSyncAllRefreshThreading:
-    """sync_all threads the refresh flag to every item; cron default = no refresh."""
-
-    def _collect_refresh_flags(self, *args):
-        item_db_id = _insert_item("refresh-thread-item")
+    def test_sync_all_never_calls_transactions_refresh(self):
+        item_db_id = _insert_item("no-refresh-item")
         try:
-            with patch("api.sync._sync_item") as m_item, \
-                 patch("api.sync._take_net_worth_snapshot"), \
+            with patch("api.sync._get_plaid_client") as m_client, \
+                 patch("api.sync._sync_transactions"), \
+                 patch("api.sync._sync_investments"), \
+                 patch("api.sync._take_net_worth_snapshot") as m_snap, \
                  patch("api.coinbase_sync.sync_coinbase"), \
                  patch("api.push.notify_stale_i360"):
-                sync.sync_all(*args)
-            return [c.kwargs.get("refresh") for c in m_item.call_args_list]
+                api = MagicMock()
+                resp = MagicMock()
+                resp.accounts = []
+                resp.item.institution_id = None
+                api.accounts_get.return_value = resp
+                m_client.return_value = api
+                sync.sync_all()
+            api.transactions_refresh.assert_not_called()
+            assert api.accounts_get.called
+            assert m_snap.called
         finally:
             _cleanup_item(item_db_id)
-
-    def test_manual_refresh_true(self):
-        flags = self._collect_refresh_flags(True)
-        assert flags and all(f is True for f in flags)
-
-    def test_cron_default_no_refresh(self):
-        flags = self._collect_refresh_flags()
-        assert flags and all(f is False for f in flags)
 
 
 class TestExtractErrorCode:
@@ -200,3 +153,119 @@ class TestSyncAllErrorTracking:
             assert row["last_error_at"] is None
         finally:
             _cleanup_item(item_db_id)
+
+
+class TestNetWorthSnapshotMortgage:
+    """_take_net_worth_snapshot stores the manual liability it adds to
+    liabilities in the mortgage column (#9)."""
+
+    def _snapshot(self, liabilities_rows):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        for name, value in liabilities_rows:
+            conn.execute(
+                "INSERT INTO manual_entries (name, category, value, entered_at) "
+                "VALUES (?, 'other_liability', ?, '2026-01-01')",
+                (name, value),
+            )
+        with patch("api.sync.get_db", get_db):
+            sync._take_net_worth_snapshot("2026-05-01")
+        row = conn.execute(
+            "SELECT liabilities, mortgage FROM net_worth_snapshots WHERE snapped_at = '2026-05-01'"
+        ).fetchone()
+        conn.close()
+        return row
+
+    def test_writes_manual_liability_total(self):
+        row = self._snapshot([("Mortgage", 180000.0)])
+        assert row["mortgage"] == 180000.0
+        assert row["liabilities"] == 180000.0
+
+    def test_zero_when_no_liability(self):
+        row = self._snapshot([])
+        assert row["mortgage"] == 0.0
+
+    def test_negative_stored_liability_written_positive(self):
+        row = self._snapshot([("Mortgage", -187121.85)])
+        assert row["mortgage"] == 187121.85
+        assert row["liabilities"] == 187121.85
+
+
+class TestSnapshotManualEntries:
+    """snapshot_manual_entries records a manual entry's value only when it
+    changed (#9). Isolated DB per test."""
+
+    def _setup(self, value=40000.0, account_number="vehicle_kia"):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        conn.execute(
+            "INSERT INTO manual_entries (name, category, value, entered_at, account_number) "
+            "VALUES ('Kia Carnival', 'car_value', ?, '2026-03-18', ?)",
+            (value, account_number),
+        )
+        return conn, get_db
+
+    def _run(self, get_db, today):
+        with patch("api.sync.get_db", get_db):
+            sync.snapshot_manual_entries(today)
+
+    def _snaps(self, conn):
+        return [
+            (r["name"], r["account_number"], r["value"], str(r["snapped_at"]))
+            for r in conn.execute("SELECT * FROM manual_entry_snapshots ORDER BY snapped_at, id")
+        ]
+
+    def _add_snap(self, conn, name, value, snapped_at, acct="vehicle_kia"):
+        conn.execute(
+            "INSERT INTO manual_entry_snapshots (name, account_number, category, value, snapped_at) "
+            "VALUES (?, ?, 'car_value', ?, ?)",
+            (name, acct, value, snapped_at),
+        )
+
+    def test_writes_row_when_entry_has_none(self):
+        conn, get_db = self._setup()
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == [("Kia Carnival", "vehicle_kia", 40000.0, "2026-11-13")]
+
+    def test_writes_row_when_value_changed(self):
+        conn, get_db = self._setup(value=38500.0)
+        self._add_snap(conn, "Kia Carnival", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn)[-1] == ("Kia Carnival", "vehicle_kia", 38500.0, "2026-11-13")
+        assert len(self._snaps(conn)) == 2
+
+    def test_writes_nothing_when_unchanged(self):
+        conn, get_db = self._setup(value=40000.004)  # within half a cent
+        self._add_snap(conn, "Kia Carnival", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        assert len(self._snaps(conn)) == 1
+
+    def test_second_run_same_day_is_noop(self):
+        conn, get_db = self._setup(value=38500.0)
+        self._add_snap(conn, "Kia Carnival", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        first = self._snaps(conn)
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == first
+
+    def test_skips_entries_without_account_number(self):
+        conn, get_db = self._setup(account_number=None)
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == []
+
+    def test_matches_by_account_number_not_name(self):
+        conn, get_db = self._setup()
+        self._add_snap(conn, "Old Kia Name", 40000.0, "2026-03-18")
+        self._run(get_db, "2026-11-13")
+        assert self._snaps(conn) == [("Old Kia Name", "vehicle_kia", 40000.0, "2026-03-18")]
+
+    def test_sync_all_runs_it_before_net_worth_snapshot(self):
+        calls = []
+        with patch("api.sync.get_db", self._setup()[1]), \
+             patch("api.sync.snapshot_manual_entries", side_effect=lambda d: calls.append(("manual", d))), \
+             patch("api.sync._take_net_worth_snapshot", side_effect=lambda d: calls.append(("nw", d))), \
+             patch("api.coinbase_sync.sync_coinbase"), \
+             patch("api.push.notify_stale_i360"):
+            sync.sync_all()
+        assert [c[0] for c in calls] == ["manual", "nw"]
+        assert calls[0][1] == calls[1][1]
