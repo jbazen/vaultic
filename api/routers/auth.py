@@ -296,6 +296,15 @@ async def delete_user(username: str, current_user: str = Depends(admin_required)
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
     with get_db() as conn:
         conn.execute("UPDATE users SET is_active = 0 WHERE username = ?", (username,))
+        # End their mobile "keep me signed in" sessions in the same transaction
+        # (issue #99). Their access tokens stop working via get_current_user.
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE username = ?", (username,)
+        )
+        # Stop push notifications to their devices too.
+        conn.execute(
+            "UPDATE push_subscriptions SET is_active = 0 WHERE username = ?", (username,)
+        )
     security_log.log_server_event(f"USER_DEACTIVATED  username={username}  by={current_user}")
     return {"status": "deactivated"}
 

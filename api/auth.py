@@ -120,16 +120,26 @@ def authenticate_user(username: str, password: str) -> bool:
     from api.database import get_db
     with get_db() as conn:
         row = conn.execute(
-            "SELECT password_hash FROM users WHERE username = ? AND is_active = 1",
+            "SELECT password_hash, is_active FROM users WHERE username = ?",
             (username,)
         ).fetchone()
-    if not row:
-        expected_username = os.environ.get("AUTH_USERNAME", "")
-        expected_hash = os.environ.get("AUTH_PASSWORD_HASH", "")
-        if username != expected_username or not expected_hash:
-            return False
-        return verify_password(password, expected_hash)
+    # Only an active users row can log in. There is no AUTH_PASSWORD_HASH
+    # fallback: seed_user_from_env creates the AUTH_USERNAME row on startup, and
+    # get_current_user rejects tokens for users without an active row (issue #99).
+    if row is None or row["is_active"] != 1:
+        return False
     return verify_password(password, row["password_hash"])
+
+
+def is_active_user(username: str) -> bool:
+    """True if the users table has an active row for this username."""
+    from api.database import get_db
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE username = ? AND is_active = 1",
+            (username,)
+        ).fetchone()
+    return row is not None
 
 
 def get_user_2fa(username: str) -> dict | None:
@@ -263,9 +273,12 @@ def validate_refresh_token(raw: str) -> str | None:
     from api.database import get_db
     now = datetime.now(timezone.utc).isoformat()
     with get_db() as conn:
+        # The JOIN means a deactivated user's refresh token stops working even if
+        # it was somehow left unrevoked (issue #99).
         row = conn.execute(
-            """SELECT username FROM refresh_tokens
-               WHERE token_hash = ? AND revoked = 0 AND expires_at > ?""",
+            """SELECT rt.username FROM refresh_tokens rt
+               JOIN users u ON u.username = rt.username AND u.is_active = 1
+               WHERE rt.token_hash = ? AND rt.revoked = 0 AND rt.expires_at > ?""",
             (_hash_token(raw), now),
         ).fetchone()
     return row["username"] if row else None
