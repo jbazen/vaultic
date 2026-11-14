@@ -279,11 +279,12 @@ class TestSyncInvestmentTransactions:
     These tests use real SDK model objects, not mocks, for the transactions.
     """
 
-    def _txn(self, txn_id, txn_type="buy", subtype="buy", amount=100.0):
+    def _txn(self, txn_id, txn_type="buy", subtype="buy", amount=100.0, with_cancel_id=True):
         from datetime import date
         from plaid.model.investment_transaction import InvestmentTransaction
         from plaid.model.investment_transaction_subtype import InvestmentTransactionSubtype
         from plaid.model.investment_transaction_type import InvestmentTransactionType
+        extra = {"cancel_transaction_id": None} if with_cancel_id else {}
         return InvestmentTransaction(
             investment_transaction_id=txn_id,
             account_id="plaid-inv-acct",
@@ -298,7 +299,7 @@ class TestSyncInvestmentTransactions:
             subtype=InvestmentTransactionSubtype(subtype),
             iso_currency_code="USD",
             unofficial_currency_code=None,
-            cancel_transaction_id=None,
+            **extra,
         )
 
     def _setup(self):
@@ -360,3 +361,17 @@ class TestSyncInvestmentTransactions:
         m_warn = self._run(get_db, [self._txn("inv-1")])
         m_warn.assert_not_called()
         assert self._rows(conn) == []
+
+    def test_saves_transaction_without_cancel_transaction_id_key(self):
+        """cancel_transaction_id is deprecated and optional; when Plaid omits
+        the key, reading the attribute raises and would roll back the batch."""
+        conn, get_db = self._setup()
+        txn = self._txn("inv-1", with_cancel_id=False)
+        assert "cancel_transaction_id" not in txn
+        m_warn = self._run(get_db, [txn, self._txn("inv-2")])
+        m_warn.assert_not_called()
+        assert [r[0] for r in self._rows(conn)] == ["inv-1", "inv-2"]
+        assert conn.execute(
+            "SELECT cancel_transaction_id FROM plaid_investment_transactions "
+            "WHERE investment_transaction_id = 'inv-1'"
+        ).fetchone()[0] is None

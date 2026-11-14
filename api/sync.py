@@ -482,7 +482,8 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                     # bind their plain string value (#119).
                     txn.type.value if txn.type else None,
                     txn.subtype.value if txn.subtype else None,
-                    txn.cancel_transaction_id,
+                    # Deprecated optional field: the SDK raises if the key is absent.
+                    getattr(txn, "cancel_transaction_id", None),
                     txn.iso_currency_code or "USD",
                     txn.account_id,  # account_number = plaid_account_id
                 ))
