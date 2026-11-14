@@ -1272,6 +1272,12 @@ def init_db():
                 msg = str(exc).lower()
                 if not any(frag in msg for frag in _expected_msg_fragments):
                     logger.warning("Unexpected migration error: %s | SQL: %.120s", exc, migration)
+        # Every authenticated request reads users.tokens_valid_after (#126), so
+        # starting without it would 500 every call while /api/health passes.
+        # Fail startup instead, so the deploy health check catches it.
+        user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "tokens_valid_after" not in user_cols:
+            raise RuntimeError("users.tokens_valid_after migration did not apply")
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)

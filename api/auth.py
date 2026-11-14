@@ -131,13 +131,15 @@ def authenticate_user(username: str, password: str) -> bool:
     return verify_password(password, row["password_hash"])
 
 
-def is_active_user(username: str, issued_at: int | None = None) -> bool:
-    """True if the users table has an active row for this username and, when
-    the row has a token cutoff, the token was issued after it.
+def token_rejection_reason(username: str, issued_at: object) -> str | None:
+    """Why a validly signed token must be refused for this user, or None if
+    it is still good.
 
-    users.tokens_valid_after (Unix seconds) is set when a user is deactivated,
-    so tokens issued before then stay dead even if the row is later switched
-    back to is_active = 1 (issue #126). NULL means no cutoff.
+    The user needs an active users row (issue #99). When the row has a
+    tokens_valid_after cutoff (Unix seconds, set on deactivation), the token's
+    iat must be after it, so reactivating a user doesn't revive tokens issued
+    before the deactivation (issue #126). NULL means no cutoff. Anything that
+    isn't an integer on either side fails closed.
     """
     from api.database import get_db
     with get_db() as conn:
@@ -146,11 +148,13 @@ def is_active_user(username: str, issued_at: int | None = None) -> bool:
             (username,)
         ).fetchone()
     if row is None:
-        return False
+        return "inactive user"
     cutoff = row["tokens_valid_after"]
     if cutoff is None:
-        return True
-    return issued_at is not None and issued_at > cutoff
+        return None
+    if not isinstance(cutoff, int) or not isinstance(issued_at, int) or issued_at <= cutoff:
+        return "token issued before cutoff"
+    return None
 
 
 def get_user_2fa(username: str) -> dict | None:

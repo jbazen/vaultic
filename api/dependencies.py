@@ -1,6 +1,6 @@
 from fastapi import Request, HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from api.auth import decode_token_claims, is_active_user
+from api.auth import decode_token_claims, token_rejection_reason
 from api import security_log
 
 _bearer = HTTPBearer(auto_error=False)
@@ -62,8 +62,9 @@ async def get_current_user(
     # row, so deactivating a user ends their access immediately (issue #99),
     # and the token must postdate the row's tokens_valid_after cutoff, so
     # reactivating a user doesn't revive their old tokens (issue #126).
-    if not is_active_user(username, claims.get("iat")):
-        security_log.log_auth_failure(ip, request.url.path, reason="inactive user")
+    rejection = token_rejection_reason(username, claims.get("iat"))
+    if rejection:
+        security_log.log_auth_failure(ip, request.url.path, reason=rejection)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
