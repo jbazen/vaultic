@@ -952,4 +952,4 @@ Items marked *(removed in #82)* were built and later removed; see tag `full-app-
 - [x] **Insperity data integration** — HTML scraper for 7 data types (holdings, performance, contributions, activity, transactions, allocations, prices); local sync script; detail view with 5 tabs on Accounts page; auto-updates net worth on sync
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen; push notifications for reconnect and stale-sync alerts
-- [ ] **Plaid compliance** — Dependabot, privacy policy, Information Security Policy (due 2026-09-18)
+- [ ] **Plaid compliance (#6)** — `dependabot.yml`, [privacy policy](https://jbazen.github.io/vaultic/privacy.html) and [Information Security Policy](https://jbazen.github.io/vaultic/security.html) are in `docs/`; remaining: owner enables Dependabot alerts/security updates in repo settings and completes the Plaid attestation (was due 2026-09-18)

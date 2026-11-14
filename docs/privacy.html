@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vaultic — Privacy Policy</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      line-height: 1.7;
+      padding: 2rem 1rem 3rem;
+    }
+    main { max-width: 760px; margin: 0 auto; }
+    .logo { font-size: 1.6rem; font-weight: 700; color: #4f8ef7; }
+    .logo a { color: inherit; text-decoration: none; }
+    h1 { font-size: 1.9rem; margin: 1rem 0 0.25rem; line-height: 1.3; }
+    .updated { color: #8b92a8; font-size: 0.9rem; margin-bottom: 2rem; }
+    h2 { font-size: 1.2rem; margin: 2rem 0 0.5rem; color: #e6edf3; }
+    p, li { font-size: 1rem; color: #c9d1d9; }
+    p { margin-bottom: 0.9rem; }
+    ul { margin: 0 0 0.9rem 1.4rem; }
+    li { margin-bottom: 0.35rem; }
+    a { color: #4f8ef7; }
+    table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 1rem; font-size: 0.92rem; }
+    th, td { text-align: left; padding: 0.55rem 0.7rem; border: 1px solid #21262d; vertical-align: top; color: #c9d1d9; }
+    th { background: #161b22; color: #e6edf3; }
+    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #21262d; font-size: 0.85rem; color: #8b92a8; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="logo"><a href="index.html">Vaultic</a></div>
+  <h1>Privacy Policy</h1>
+  <div class="updated">Last updated: November 13, 2026</div>
+
+  <h2>1. Who we are and scope</h2>
+  <p>
+    Vaultic is a personal, self-hosted net worth dashboard run by one individual
+    (the "owner") for the owner's household. It is not a commercial service. There
+    is no public sign-up: user accounts are created only by the owner, and the app
+    has two household users. This policy describes what data the app collects, why,
+    who receives it, and how it is protected and removed.
+  </p>
+
+  <h2>2. Data we collect</h2>
+  <ul>
+    <li>
+      <strong>Financial data from Plaid</strong> (only for institutions a user chooses to connect):
+      institution name, account names and types, balances, investment holdings and securities,
+      investment transactions, and bank transactions.
+    </li>
+    <li>
+      <strong>Financial data from other sources:</strong> holdings, balances, performance and activity
+      from the household's investment and retirement account providers (imported by the owner's own
+      scripts or by uploading statements), Coinbase balances via its API, and values users enter
+      manually (for example home, vehicle or credit score values).
+    </li>
+    <li>
+      <strong>Uploaded PDF statements.</strong> Text is extracted on the server. Statements in a format
+      the app parses natively are processed entirely on the server. For other formats, the extracted
+      text (not the PDF file itself, and capped at the first 30,000 characters) is sent to
+      Anthropic's Claude API to be converted into structured data (see section 4).
+    </li>
+    <li>
+      <strong>Account and security data:</strong> username, a bcrypt hash of the password (never the
+      password itself), an encrypted two-factor (TOTP) secret, session and refresh tokens, and a
+      security log containing login attempts (time, IP address, user agent), authentication failures
+      and request metadata.
+    </li>
+    <li>
+      <strong>Browser push subscription details</strong>, if a user turns on notifications.
+    </li>
+  </ul>
+  <p>This documentation site sets no cookies and uses no analytics or advertising trackers. It is hosted on GitHub Pages, which may log visits under GitHub's own privacy policy.</p>
+
+  <h2>3. How Plaid is used</h2>
+  <p>
+    Vaultic uses <a href="https://plaid.com">Plaid</a> to connect financial accounts, only with the
+    user's consent through Plaid Link. Bank login credentials are entered into Plaid's interface and are
+    never seen or stored by Vaultic; the app stores only an access token, which is encrypted at rest.
+    A user can disconnect an institution at any time; doing so calls Plaid's item-removal endpoint,
+    deletes the stored access token and deactivates the linked accounts. Plaid's handling of data is
+    described in the <a href="https://plaid.com/legal/#end-user-privacy-policy">Plaid End User Privacy Policy</a>.
+  </p>
+
+  <h2>4. Third parties that receive data</h2>
+  <p>We do not sell or share personal or financial data. The services below receive only what is needed for the stated purpose.</p>
+  <table>
+    <thead><tr><th scope="col">Service</th><th scope="col">Purpose</th><th scope="col">Data received</th></tr></thead>
+    <tbody>
+      <tr><td>Plaid</td><td>Connecting and syncing financial accounts</td><td>Data users authorize through Plaid Link</td></tr>
+      <tr><td>Oracle Cloud</td><td>Hosting the application and database</td><td>All application data, stored on the host</td></tr>
+      <tr><td>Cloudflare R2</td><td>Continuous database backup</td><td>Backup copies of the database</td></tr>
+      <tr><td>Anthropic (Claude API)</td><td>Parsing uploaded PDF statements the app cannot parse natively</td><td>Extracted statement text for that upload only</td></tr>
+      <tr><td>Coinbase, CoinGecko, Yahoo Finance</td><td>Market prices</td><td>Ticker or coin symbols only</td></tr>
+      <tr><td>Tavily</td><td>Market news</td><td>Search queries built from ticker symbols and topics; no balances or account details</td></tr>
+      <tr><td>GitHub</td><td>Source code hosting, automated testing, this documentation site</td><td>No user financial data</td></tr>
+    </tbody>
+  </table>
+  <p>
+    News thumbnails on the dashboard are loaded directly by the viewer's browser from the news publisher's
+    image host or from Google's favicon service, so those hosts can see the viewer's IP address. No account
+    or financial data is included in those requests.
+  </p>
+  <p>Data may also be disclosed if required by law.</p>
+
+  <h2>5. Storage and security</h2>
+  <p>
+    Traffic is encrypted in transit with HTTPS. Plaid access tokens and two-factor secrets are encrypted
+    at rest with Fernet (AES-based) encryption, and passwords are stored as bcrypt hashes. Every account
+    is required to use a password plus two-factor authentication, and access is limited to the household's users and the owner as
+    administrator. Other application data, such as balances and transactions, is stored in the application
+    database without separate application-level encryption and relies on access controls and the hosting
+    and backup providers' storage protections. See the <a href="security.html">Information Security Policy</a>
+    for details.
+  </p>
+
+  <h2>6. Retention and deletion</h2>
+  <ul>
+    <li>Net worth history and account data are kept for as long as the account is in use, because history is the purpose of the product.</li>
+    <li>Database backups are kept for 7 days in cloud storage and 72 hours on the local backup replica.</li>
+    <li>Security logs rotate automatically and server logs are kept for 7 days.</li>
+    <li>Disconnecting an institution removes the Plaid item and its access token.</li>
+    <li>On request, the owner deletes a user's data manually. Deleted data may remain in backups until they expire as described above.</li>
+  </ul>
+
+  <h2>7. No sale, no advertising</h2>
+  <p>We do not sell personal or financial data, we do not use it for advertising, and the app contains no third-party analytics or tracking scripts (the news thumbnail requests above are the only content the browser fetches from other sites).</p>
+
+  <h2>8. Your rights and how to contact us</h2>
+  <p>
+    Users may ask to see, correct or delete their data, or to disconnect any connected institution. Contact the
+    owner through the <a href="https://github.com/jbazen">owner's GitHub profile</a>. Please do not post account
+    or financial details in a public issue.
+  </p>
+
+  <h2>9. Changes to this policy</h2>
+  <p>We will update this page and its "last updated" date when the app's data practices change.</p>
+
+  <footer>
+    <a href="index.html">Home</a> · <a href="security.html">Information Security Policy</a>
+  </footer>
+</main>
+</body>
+</html>
