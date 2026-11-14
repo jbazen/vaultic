@@ -714,6 +714,35 @@ MIGRATIONS = [
     # the column logs nobody out. Rerun-safe: a second ADD COLUMN fails with
     # "duplicate column name", which init_db ignores.
     "ALTER TABLE users ADD COLUMN tokens_valid_after INTEGER",
+    # Any switch of a row between active and inactive, including a hand edit
+    # in sqlite, sets the cutoff and revokes refresh tokens (#136). On
+    # deactivation this matches DELETE /api/auth/users/{username}; on
+    # reactivation it also kills a token minted by a request that raced the
+    # deactivation (its iat can land a second after the first cutoff). MAX
+    # keeps a cutoff the UPDATE itself set (or a later one) instead of
+    # lowering it.
+    # IF NOT EXISTS never replaces an existing trigger: to change either body,
+    # add a DROP TRIGGER IF EXISTS before its CREATE.
+    """CREATE TRIGGER IF NOT EXISTS users_active_change_cutoff
+        AFTER UPDATE OF is_active ON users
+        WHEN (OLD.is_active IS 1) IS NOT (NEW.is_active IS 1)
+        BEGIN
+            UPDATE users
+               SET tokens_valid_after = MAX(COALESCE(NEW.tokens_valid_after, 0),
+                                            CAST(strftime('%s', 'now') AS INTEGER))
+             WHERE username = NEW.username;
+            UPDATE refresh_tokens SET revoked = 1
+             WHERE username = NEW.username AND revoked = 0;
+        END""",
+    # A refresh token inserted for a user who isn't active (a refresh racing a
+    # deactivation) is born revoked, so it can't come back on reactivation (#136).
+    """CREATE TRIGGER IF NOT EXISTS refresh_tokens_inactive_user
+        AFTER INSERT ON refresh_tokens
+        WHEN NOT EXISTS (SELECT 1 FROM users
+                          WHERE username = NEW.username AND is_active = 1)
+        BEGIN
+            UPDATE refresh_tokens SET revoked = 1 WHERE id = NEW.id;
+        END""",
 ]
 
 
@@ -1278,6 +1307,14 @@ def init_db():
         user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "tokens_valid_after" not in user_cols:
             raise RuntimeError("users.tokens_valid_after migration did not apply")
+        # The #136 triggers keep hand-edited deactivations from reviving tokens;
+        # refuse to start without them, the same as the column above.
+        triggers = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall()}
+        for name in ("users_active_change_cutoff", "refresh_tokens_inactive_user"):
+            if name not in triggers:
+                raise RuntimeError(f"trigger {name} migration did not apply")
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)

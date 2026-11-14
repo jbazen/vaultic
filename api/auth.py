@@ -291,12 +291,20 @@ def validate_refresh_token(raw: str) -> str | None:
         # The JOIN means a deactivated user's refresh token stops working even if
         # it was somehow left unrevoked (issue #99).
         row = conn.execute(
-            """SELECT rt.username FROM refresh_tokens rt
+            """SELECT rt.username,
+                      CAST(strftime('%s', rt.created_at) AS INTEGER) AS created_ts
+               FROM refresh_tokens rt
                JOIN users u ON u.username = rt.username AND u.is_active = 1
                WHERE rt.token_hash = ? AND rt.revoked = 0 AND rt.expires_at > ?""",
             (_hash_token(raw), now),
         ).fetchone()
-    return row["username"] if row else None
+    if row is None:
+        return None
+    # A refresh token created before the user's cutoff is refused the same way
+    # an access token issued before it is, even if it was left unrevoked (#136).
+    if token_rejection_reason(row["username"], row["created_ts"]):
+        return None
+    return row["username"]
 
 
 def rotate_refresh_token(old_raw: str, username: str) -> str:
