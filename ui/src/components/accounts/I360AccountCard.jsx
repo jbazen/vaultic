@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { renameAccount, updateAccountNotes, getBalanceHistory } from "../../api.js";
+import { renameAccount, updateAccountNotes } from "../../api.js";
 import { i360AccountHoldings, i360Performance, i360ActivitySummary, i360AssetAllocation } from "../../api.js";
 import { isRetirementAccount } from "../../utils/accounts.js";
 import { fmt, fmtDate } from "../../utils/format.js";
@@ -8,17 +8,8 @@ import I360HoldingsTable from "./I360HoldingsTable.jsx";
 import I360ActivitySummary from "./I360ActivitySummary.jsx";
 import I360PerformanceTable from "./I360PerformanceTable.jsx";
 import I360AssetAllocation from "./I360AssetAllocation.jsx";
-
-function tabBtn(active) {
-  return {
-    background: active ? "var(--accent)" : "var(--bg)",
-    color: active ? "#fff" : "var(--text2)",
-    border: "1px solid var(--border)",
-    borderRadius: 6, padding: "4px 14px",
-    fontSize: 12, fontWeight: active ? 700 : 400,
-    cursor: "pointer",
-  };
-}
+import AccountBalanceChart from "./AccountBalanceChart.jsx";
+import { tabBtn } from "./accountsUtils.jsx";
 
 function MetaTag({ label }) {
   return (
@@ -29,7 +20,7 @@ function MetaTag({ label }) {
   );
 }
 
-export default function I360AccountCard({ account, onRenamed, BalanceChart }) {
+export default function I360AccountCard({ account, onRenamed }) {
   const [expanded, setExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState("holdings");
   const [holdings, setHoldings] = useState(null);
@@ -142,7 +133,7 @@ export default function I360AccountCard({ account, onRenamed, BalanceChart }) {
             ))}
           </div>
           {activeTab === "history" ? (
-            <BalanceChart accountId={account.id} />
+            <AccountBalanceChart accountId={account.id} />
           ) : loading ? (
             <div style={{ color: "var(--text2)", fontSize: 13, padding: "8px 0" }}>Loading…</div>
           ) : activeTab === "holdings" ? (

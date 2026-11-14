@@ -406,7 +406,7 @@ Cached market quotes and Tavily news articles for the personalized ticker feed. 
 | `i360_market_summary` | Market index quotes (S&P, Dow, Nasdaq, 10Y Treasury) |
 
 ### `institution_display_order`
-User-controlled ordering of institution groups on the Dashboard and Accounts pages. Composite primary key `(page, institution_name)` — each page has its own independent ordering, so reordering on the Dashboard does not affect the Accounts page and vice versa. Also stores pseudo-keys for manual sections (e.g. `__sec_investment_imported__`, `__sec_property_vehicles__`) alongside real Plaid/I360 institution names in the same table.
+User-controlled ordering of the account blocks (institutions and manual sections) in the Dashboard's account list. Composite primary key `(page, institution_name)`; the UI only uses `page = 'dashboard'` since the Accounts page was merged into the Dashboard (#86). Rows from the old `accounts` page are no longer read. Also stores pseudo-keys for manual sections (e.g. `__sec_investment_imported__`, `__sec_property_vehicles__`) alongside real Plaid/I360 institution names in the same table.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -849,10 +849,10 @@ Tests use an in-memory SQLite database — no `.env` required, no external servi
 - `test_rate_limit.py` — Sliding window rate limit behavior
 - `test_insperity.py` — Insperity 401K integration including the layout-agnostic performance parser (full horizontal, limited-history single-column, and partial-section variants via HTML fixture at `tests/fixtures/insperity_investment_return_limited.html`)
 
-**Playwright E2E — 23 tests:**
+**Playwright E2E — 27 tests:**
 - `tests/e2e/auth.spec.js` — Login, wrong password, 2FA step, logout
-- `tests/e2e/dashboard.spec.js` — Net worth display, accounts, manual entries, navigation
-- `tests/e2e/accounts.spec.js` — Insperity account detail card, manual entry account numbers, Plaid reconnect and disconnect
+- `tests/e2e/dashboard.spec.js` — Net worth display, account list (expandable investment rows, Property & Vehicles, Other Assets, empty state, Coinbase status), manual entry account numbers, navigation, the `/accounts` redirect
+- `tests/e2e/dashboard-accounts.spec.js` — Insperity account detail card, Plaid reconnect and disconnect
 
 All E2E tests use mocked API routes (catch-all + specific overrides) — no live backend required.
 
@@ -949,7 +949,7 @@ Items marked *(removed in #82)* were built and later removed; see tag `full-app-
 - [x] **Peer review** — 45+ code quality findings addressed; major component extractions (Budget, Taxes, Dashboard, sage.py)
 
 ### In Progress / Upcoming
-- [x] **Insperity data integration** — HTML scraper for 7 data types (holdings, performance, contributions, activity, transactions, allocations, prices); local sync script; detail view with 5 tabs on Accounts page; auto-updates net worth on sync
+- [x] **Insperity data integration** — HTML scraper for 7 data types (holdings, performance, contributions, activity, transactions, allocations, prices); local sync script; detail view with 5 tabs in the Dashboard's account list; auto-updates net worth on sync
 - [ ] **Connect remaining accounts** — Voya, Insperity, Robinhood (non-OAuth Plaid); Optum Bank HSA; Chase/Rocket Mortgage/Health Equity OAuth (waiting on Plaid approval)
 - [ ] **Mobile PWA** — installable on iPhone/Android home screen; push notifications for reconnect and stale-sync alerts
 - [ ] **Plaid compliance** — Dependabot, privacy policy, Information Security Policy (due 2026-09-18)
