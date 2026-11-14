@@ -174,9 +174,9 @@ background: "#1e2330"
 
 ---
 
-## Frontend (React 18)
+## Frontend (React 19)
 
-### React 18 StrictMode
+### React StrictMode
 
 StrictMode double-invokes effects in development. This means:
 
@@ -350,6 +350,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 ### Secrets & Configuration
 
 - **Never commit** `.env`, credentials, API keys, or TOTP secrets. Use `.env.example` for templates
+- **Never read or print `.env` or other secret files** — no script, test harness, subagent or reviewer may open, cat, parse or echo `.env*`, private keys or credential files, even to print "only the header". Check secrets only with `scripts/verify_secrets.py` run by the owner on the server. A review script once printed a private key this way (#145)
 - **Plaid access tokens** encrypted with Fernet at rest (`encryption.py`)
 - **Push subscriptions** store `username`. There is no passwordless or device-token login. Every token is issued by `/api/auth/*` after the password and 2FA.
 
