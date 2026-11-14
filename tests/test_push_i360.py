@@ -55,6 +55,8 @@ class TestNotifyStaleI360:
             mock_send.assert_called_once()
             title = mock_send.call_args.args[1]
             assert "Parker" in title
+            # Opens the account list on the Dashboard (the /accounts page was merged into it)
+            assert mock_send.call_args.kwargs["url"] == "/#accounts"
 
     def test_once_per_day_guard(self):
         """Second call on the same day should not send again."""
@@ -78,3 +80,21 @@ class TestNotifyStaleI360:
              patch.object(push_module, "send_push_notification") as mock_send:
             push_module.notify_stale_i360()
             mock_send.assert_not_called()
+
+
+class TestNotifyItemDisconnected:
+    """The login-expired alert opens the Dashboard's account list (issue #86)."""
+
+    def test_links_to_dashboard_account_list(self):
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO push_subscriptions (endpoint, p256dh, auth, username, is_active) "
+                "VALUES ('https://push.example.com/sub-disc', 'fake_key', 'fake_auth', 'testuser', 1)"
+            )
+
+        with patch.object(push_module, "is_configured", return_value=True), \
+             patch.object(push_module, "send_push_notification", return_value=True) as mock_send:
+            push_module.notify_item_disconnected("Chase")
+            mock_send.assert_called()
+            assert mock_send.call_args.kwargs["url"] == "/#accounts"
+            assert "Chase" in mock_send.call_args.args[2]

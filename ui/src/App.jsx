@@ -1,56 +1,18 @@
 import { useState, useEffect } from "react";
-import { Routes, Route, NavLink, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, NavLink, Navigate } from "react-router-dom";
 import { isAuthed, logout } from "./api.js";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
-import Accounts from "./pages/Accounts.jsx";
 import Import from "./pages/Import.jsx";
 import Settings from "./pages/Settings.jsx";
 import "./App.css";
 
 // ── Navigation structure ──────────────────────────────────────────────────────
-// Top-level items have a `to` property; group items have a `children` array.
 const NAV = [
-  { to: "/", label: "Dashboard", icon: "◈", end: true },
-  {
-    label: "Finance", icon: "⬡",
-    children: [
-      { to: "/accounts",     label: "Accounts" },
-      { to: "/import",       label: "Import" },
-    ],
-  },
-  { to: "/settings", label: "Settings", icon: "⚙" },
+  { to: "/",         label: "Dashboard", icon: "◈", end: true },
+  { to: "/import",   label: "Import",    icon: "📄" },
+  { to: "/settings", label: "Settings",  icon: "⚙" },
 ];
-
-// ── Collapsible nav group ─────────────────────────────────────────────────────
-function NavGroup({ item }) {
-  const location = useLocation();
-  // Auto-expand if the current route is a child of this group
-  const isActive = item.children.some(c => location.pathname.startsWith(c.to));
-  const [open, setOpen] = useState(isActive);
-
-  // Re-open if user navigates to a child route from elsewhere
-  useEffect(() => { if (isActive) setOpen(true); }, [isActive]);
-
-  return (
-    <div>
-      <button className="nav-group-header" onClick={() => setOpen(o => !o)}>
-        <span className="nav-icon">{item.icon}</span>
-        <span style={{ flex: 1 }}>{item.label}</span>
-        <span className="nav-chevron">{open ? "▾" : "▸"}</span>
-      </button>
-      {open && (
-        <div className="nav-group-children">
-          {item.children.map(child => (
-            <NavLink key={child.to} to={child.to} className="nav-child-link">
-              {child.label}
-            </NavLink>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ── App shell ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -79,16 +41,12 @@ export default function App() {
         </div>
 
         <nav className="sidebar-nav">
-          {NAV.map((item) =>
-            item.children ? (
-              <NavGroup key={item.label} item={item} />
-            ) : (
-              <NavLink key={item.to} to={item.to} end={item.end}>
-                <span className="nav-icon">{item.icon}</span>
-                {item.label}
-              </NavLink>
-            )
-          )}
+          {NAV.map((item) => (
+            <NavLink key={item.to} to={item.to} end={item.end}>
+              <span className="nav-icon">{item.icon}</span>
+              {item.label}
+            </NavLink>
+          ))}
         </nav>
 
         <div className="sidebar-footer">
@@ -100,10 +58,11 @@ export default function App() {
       <main className="main-content">
         <Routes>
           <Route path="/"             element={<Dashboard />} />
-          <Route path="/accounts"     element={<Accounts />} />
           <Route path="/import"       element={<Import />} />
           <Route path="/settings"     element={<Settings />} />
-          {/* Legacy redirects for any bookmarked or linked old routes */}
+          {/* Legacy redirects for any bookmarked, linked or already-delivered
+              push-notification URLs. /accounts was merged into the Dashboard (#86). */}
+          <Route path="/accounts"     element={<Navigate to="/#accounts" replace />} />
           <Route path="/manual"       element={<Navigate to="/import" replace />} />
           <Route path="/pdf"          element={<Navigate to="/import" replace />} />
           <Route path="*"             element={<Navigate to="/" replace />} />
@@ -112,12 +71,7 @@ export default function App() {
 
       {/* Mobile bottom nav — key destinations only */}
       <nav className="mobile-nav">
-        {[
-          { to: "/",            label: "Dashboard", icon: "◈", end: true },
-          { to: "/accounts",    label: "Accounts",  icon: "⬡" },
-          { to: "/import",      label: "Import",    icon: "📄" },
-          { to: "/settings",    label: "Settings",  icon: "⚙" },
-        ].map(({ to, label, icon, end }) => (
+        {NAV.map(({ to, label, icon, end }) => (
           <NavLink key={to} to={to} end={end} className="mobile-nav-item">
             <span className="mobile-nav-icon">{icon}</span>
             <span className="mobile-nav-label">{label}</span>

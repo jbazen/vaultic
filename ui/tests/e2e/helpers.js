@@ -25,6 +25,8 @@ export async function mockAllAPIs(page) {
     r.fulfill({ json: [] }));
 
   // ── Accounts (sub-routes first, then base) ──
+  await page.route("**/api/accounts/institutions/order*", r =>
+    r.fulfill({ json: { names: [] } }));
   await page.route("**/api/accounts/portfolio/performance*", r =>
     r.fulfill({ json: [] }));
   await page.route("**/api/accounts", r =>
@@ -39,13 +41,20 @@ export async function mockAllAPIs(page) {
     r.fulfill({ json: { rates: [] } }));
 }
 
-export async function loginMocked(page) {
-  await mockAllAPIs(page);
-  await page.goto("/");
+/**
+ * Sign in without registering any mocks. Call mockAllAPIs() first, then add
+ * test-specific overrides, then loginOnly(): the last route registered wins, so
+ * loginMocked() (which registers the base mocks itself) would hide overrides.
+ */
+export async function loginOnly(page, path = "/") {
+  await page.goto(path);
   await page.getByPlaceholder(/username/i).fill("testuser");
   await page.getByPlaceholder(/password/i).fill("testpassword");
   await page.getByRole("button", { name: /sign in|login|log in/i }).click();
-  // Wait for dashboard to appear
-  await page.waitForURL(/\//);
   await page.waitForSelector("text=Net Worth", { timeout: 8000 });
+}
+
+export async function loginMocked(page) {
+  await mockAllAPIs(page);
+  await loginOnly(page);
 }

@@ -125,7 +125,7 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
         name = body.institution_name or "This institution"
         raise HTTPException(
             status_code=409,
-            detail=f"{name} is already connected. Use Reconnect on the Accounts page instead of adding it again.",
+            detail=f"{name} is already connected. Use Reconnect in the Accounts section of the Dashboard instead of adding it again.",
         )
 
     with get_db() as conn:

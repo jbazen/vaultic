@@ -4,7 +4,7 @@ These standards apply to all contributors — human or AI. They exist to prevent
 
 ## Scope
 
-Vaultic is a net worth dashboard: Dashboard, Accounts, Import, Settings and Login, plus the data syncs behind them (Plaid, Investor360, Insperity, Voya, Coinbase, manual entries, net worth snapshots, market/news feed). Sage, Budget, Fund Financials, Taxes, Paystubs, the Document Vault, the Calendar and the standalone Transactions page were removed in #82 (Plaid transactions still sync into the `transactions` table). The full app is preserved at git tag `full-app-2026-11`; do not restore those features piecemeal.
+Vaultic is a net worth dashboard: the Dashboard (net worth, charts, and the account list at `/#accounts`), Import, Settings and Login, plus the data syncs behind them (Plaid, Investor360, Insperity, Voya, Coinbase, manual entries, net worth snapshots, market/news feed). Sage, Budget, Fund Financials, Taxes, Paystubs, the Document Vault, the Calendar and the standalone Transactions page were removed in #82 (Plaid transactions still sync into the `transactions` table). The full app is preserved at git tag `full-app-2026-11`; do not restore those features piecemeal.
 
 ---
 
@@ -23,7 +23,7 @@ All work follows this process — no exceptions. This was established after a st
 7. **Run full test suite** — `pytest --ignore=tests/e2e` for unit tests, `pytest tests/e2e/` for e2e
 8. **Commit** — format: `#N - type: description (fixes #N)` referencing the GitHub Issue
 9. **Push + CI** — CI runs unit + e2e tests automatically; deploy only if both pass
-10. **Production verification** — after deploy, check: server logs (`journalctl -u vaultic-api`), web UI (Dashboard, Accounts), net worth snapshot, Plaid sync
+10. **Production verification** — after deploy, check: server logs (`journalctl -u vaultic-api`), web UI (Dashboard and its account list), net worth snapshot, Plaid sync
 
 ### Rules:
 
@@ -46,7 +46,7 @@ ui/
   src/
     pages/            # Top-level route components (thin orchestrators)
     components/       # Shared + domain-grouped sub-components
-      accounts/       # Accounts-page components (Investor360, Insperity, Voya)
+      accounts/       # Account-list components (rows, cards, Investor360, Insperity, Voya)
       dashboard/      # Dashboard-specific components
     api.js            # All backend API call functions
     App.jsx           # Router + layout shell
@@ -269,11 +269,9 @@ r.fulfill({ json: { total: 250000, liquid: 50000, invested: 150000, snapped_at: 
 r.fulfill({ json: { rates: [] } });
 ```
 
-**Collapsible nav groups**: If a link is inside a collapsed sidebar group, expand the group first:
-```javascript
-await page.getByRole("button", { name: /finance/i }).click();
-await page.getByRole("link", { name: /accounts/i }).click();
-```
+**Login helpers**: `loginMocked(page)` registers the base mocks and signs in. To override a mock for one test, call `mockAllAPIs(page)`, register your override, then `loginOnly(page)` — the last route registered wins, so `loginMocked` would hide the override.
+
+**Account list**: it lives on the Dashboard (`/`, anchor `#accounts`); the sidebar has no groups and there is no Accounts page (`/accounts` redirects to `/#accounts`). The Dashboard has many buttons, so match tab buttons with `getByRole("button", { name: "Performance", exact: true })`.
 
 ### Test coverage expectations
 
