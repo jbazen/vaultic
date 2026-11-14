@@ -131,15 +131,26 @@ def authenticate_user(username: str, password: str) -> bool:
     return verify_password(password, row["password_hash"])
 
 
-def is_active_user(username: str) -> bool:
-    """True if the users table has an active row for this username."""
+def is_active_user(username: str, issued_at: int | None = None) -> bool:
+    """True if the users table has an active row for this username and, when
+    the row has a token cutoff, the token was issued after it.
+
+    users.tokens_valid_after (Unix seconds) is set when a user is deactivated,
+    so tokens issued before then stay dead even if the row is later switched
+    back to is_active = 1 (issue #126). NULL means no cutoff.
+    """
     from api.database import get_db
     with get_db() as conn:
         row = conn.execute(
-            "SELECT 1 FROM users WHERE username = ? AND is_active = 1",
+            "SELECT tokens_valid_after FROM users WHERE username = ? AND is_active = 1",
             (username,)
         ).fetchone()
-    return row is not None
+    if row is None:
+        return False
+    cutoff = row["tokens_valid_after"]
+    if cutoff is None:
+        return True
+    return issued_at is not None and issued_at > cutoff
 
 
 def get_user_2fa(username: str) -> dict | None:
@@ -338,13 +349,20 @@ def decode_2fa_pending_token(token: str) -> str | None:
         return None
 
 
-def decode_token(token: str) -> str | None:
+def decode_token_claims(token: str) -> dict | None:
+    """Return a general-access token's claims, or None if it is invalid,
+    expired, revoked, or scoped (e.g. 2fa_pending)."""
     try:
         if is_token_revoked(token):
             return None
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         if payload.get("purpose"):
             return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth
-        return payload.get("sub")
+        return payload
     except jwt.PyJWTError:
         return None
+
+
+def decode_token(token: str) -> str | None:
+    claims = decode_token_claims(token)
+    return claims.get("sub") if claims else None
