@@ -355,6 +355,52 @@ class TestSyncInvestmentTransactions:
         assert len(rows) == 1
         assert rows[0][5] == 101.0
 
+    def test_resync_refreshes_every_corrected_column(self):
+        """Plaid can correct any field on an existing transaction id; a
+        re-sync must refresh all of them in place, not just amount (#124)."""
+        from datetime import date
+        from plaid.model.investment_transaction_subtype import InvestmentTransactionSubtype
+        from plaid.model.investment_transaction_type import InvestmentTransactionType
+        conn, get_db = self._setup()
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, name, type, account_number) "
+            "VALUES ('plaid-inv-acct-2', 'IRA', 'investment', 'plaid-inv-acct-2')"
+        )
+        self._run(get_db, [self._txn("inv-1")])
+        before = conn.execute(
+            "SELECT id, created_at FROM plaid_investment_transactions "
+            "WHERE investment_transaction_id = 'inv-1'"
+        ).fetchone()
+
+        corrected = self._txn("inv-1")
+        corrected.account_id = "plaid-inv-acct-2"
+        corrected.security_id = "sec-vtiax"
+        corrected.date = date(2026, 11, 4)
+        corrected.name = "SELL VTIAX"
+        corrected.quantity = -2.25
+        corrected.amount = -150.5
+        corrected.fees = 1.25
+        corrected.type = InvestmentTransactionType("sell")
+        corrected.subtype = InvestmentTransactionSubtype("sell")
+        corrected.cancel_transaction_id = "inv-0"
+        corrected.iso_currency_code = "CAD"
+        m_warn = self._run(get_db, [corrected])
+        m_warn.assert_not_called()
+
+        new_acct_id = conn.execute(
+            "SELECT id FROM accounts WHERE plaid_account_id = 'plaid-inv-acct-2'"
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT id, created_at, account_id, security_id, date, name, quantity, "
+            "amount, fees, type, subtype, cancel_transaction_id, iso_currency_code, "
+            "account_number FROM plaid_investment_transactions"
+        ).fetchall()
+        assert [tuple(r) for r in rows] == [(
+            before[0], before[1], new_acct_id, "sec-vtiax", "2026-11-04",
+            "SELL VTIAX", -2.25, -150.5, 1.25, "sell", "sell", "inv-0", "CAD",
+            "plaid-inv-acct-2",
+        )]
+
     def test_skips_transactions_for_unknown_accounts(self):
         conn, get_db = self._setup()
         conn.execute("DELETE FROM accounts")

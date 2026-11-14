@@ -465,9 +465,19 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                          iso_currency_code, account_number)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(investment_transaction_id) DO UPDATE SET
+                        -- Plaid can correct any field of an existing transaction
+                        -- id, so refresh every column it supplies (#124).
+                        account_id            = excluded.account_id,
+                        security_id           = excluded.security_id,
+                        date                  = excluded.date,
+                        name                  = excluded.name,
+                        quantity              = excluded.quantity,
                         amount                = excluded.amount,
                         fees                  = excluded.fees,
+                        type                  = excluded.type,
+                        subtype               = excluded.subtype,
                         cancel_transaction_id = excluded.cancel_transaction_id,
+                        iso_currency_code     = excluded.iso_currency_code,
                         account_number        = excluded.account_number
                 """, (
                     txn.investment_transaction_id,
