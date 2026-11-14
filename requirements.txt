@@ -1,5 +1,10 @@
 python-dotenv==1.2.4
 fastapi==0.162.4
+# FastAPI's framework deps, pinned so the server's in-place pip upgrade
+# lands on the same versions CI tests (pip leaves satisfied deps alone).
+starlette==1.10.0
+pydantic==2.14.3
+anyio==4.16.0
 uvicorn[standard]==0.54.0
 PyJWT==2.15.1
 bcrypt==5.0.0
