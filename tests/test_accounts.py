@@ -678,8 +678,21 @@ class TestInvestmentCurrencyFields:
             )
         return acct_id
 
+    def _cleanup(self):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute("DELETE FROM plaid_investment_transactions WHERE account_number = 'CUR137'")
+            conn.execute("DELETE FROM plaid_holdings WHERE account_number = 'CUR137'")
+            conn.execute("DELETE FROM accounts WHERE account_number = 'CUR137'")
+
     def test_holdings_and_transactions_return_unofficial_code(self, client, auth_headers):
         acct_id = self._seed()
+        try:
+            self._check(client, auth_headers, acct_id)
+        finally:
+            self._cleanup()
+
+    def _check(self, client, auth_headers, acct_id):
         res = client.get(f"/api/accounts/{acct_id}/holdings", headers=auth_headers)
         assert res.status_code == 200
         h = res.json()["holdings"][0]
@@ -692,3 +705,6 @@ class TestInvestmentCurrencyFields:
 
     def test_investment_transactions_requires_auth(self, client):
         assert client.get("/api/accounts/1/investment-transactions").status_code == 401
+
+    def test_holdings_requires_auth(self, client):
+        assert client.get("/api/accounts/1/holdings").status_code == 401

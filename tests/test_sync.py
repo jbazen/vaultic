@@ -464,20 +464,24 @@ class TestSyncInvestmentTransactions:
 
 class TestSyncHoldingsCurrency:
     """Holdings and securities keep Plaid's unofficial currency code instead
-    of being labelled USD (#137)."""
+    of being labelled USD (#137). Uses real SDK models, like the transaction
+    tests above."""
 
     def _sec(self, sec_id, iso, unofficial):
-        from types import SimpleNamespace
-        return SimpleNamespace(
-            security_id=sec_id, name=sec_id, ticker_symbol=sec_id.upper(),
-            type="cryptocurrency", close_price=1.0, close_price_as_of=None,
-            iso_currency_code=iso, unofficial_currency_code=unofficial,
-            cusip=None, isin=None,
+        from plaid.model.security import Security
+        return Security(
+            security_id=sec_id, isin=None, cusip=None, sedol=None,
+            institution_security_id=None, institution_id=None,
+            proxy_security_id=None, name=sec_id, ticker_symbol=sec_id.upper(),
+            is_cash_equivalent=False, type="cryptocurrency", close_price=1.0,
+            close_price_as_of=None, iso_currency_code=iso,
+            unofficial_currency_code=unofficial, market_identifier_code=None,
+            sector=None, industry=None, option_contract=None, fixed_income=None,
         )
 
     def _holding(self, sec_id, iso, unofficial, value=10.0):
-        from types import SimpleNamespace
-        return SimpleNamespace(
+        from plaid.model.holding import Holding
+        return Holding(
             account_id="plaid-inv-acct", security_id=sec_id,
             institution_value=value, institution_price=1.0,
             institution_price_as_of=None, quantity=value, cost_basis=None,
@@ -538,3 +542,9 @@ class TestSyncHoldingsCurrency:
         assert self._rows(conn, "plaid_securities") == [("btc", None, "BTC")]
         assert self._rows(conn, "plaid_holdings") == [("btc", None, "BTC")]
         assert conn.execute("SELECT institution_value FROM plaid_holdings").fetchone()[0] == 12.0
+
+    def test_empty_codes_are_saved_as_null(self):
+        from api.sync import _currency_codes
+        from types import SimpleNamespace
+        assert _currency_codes(SimpleNamespace(iso_currency_code="", unofficial_currency_code="BTC")) == (None, "BTC")
+        assert _currency_codes(SimpleNamespace(iso_currency_code="", unofficial_currency_code="")) == ("USD", None)

@@ -5,6 +5,7 @@ Called on startup, on-demand via API, and daily via APScheduler.
 import json
 import logging
 from datetime import date
+from typing import Any
 
 import plaid
 from plaid.model.accounts_get_request import AccountsGetRequest
@@ -23,7 +24,7 @@ def _get_plaid_client():
     return get_plaid_client()
 
 
-def _currency_codes(obj) -> tuple[str | None, str | None]:
+def _currency_codes(obj: Any) -> tuple[str | None, str | None]:
     """Return (iso_currency_code, unofficial_currency_code) for a Plaid
     security, holding or investment transaction (#137).
 
@@ -32,8 +33,8 @@ def _currency_codes(obj) -> tuple[str | None, str | None]:
     saved as sent, so those rows are no longer labelled USD. "USD" is assumed
     only when Plaid sends neither.
     """
-    iso = obj.iso_currency_code
-    unofficial = obj.unofficial_currency_code
+    iso = obj.iso_currency_code or None
+    unofficial = obj.unofficial_currency_code or None
     if not iso and not unofficial:
         iso = "USD"
     return iso, unofficial
@@ -487,19 +488,19 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                     ON CONFLICT(investment_transaction_id) DO UPDATE SET
                         -- Plaid can correct any field of an existing transaction
                         -- id, so refresh every column it supplies (#124).
-                        account_id            = excluded.account_id,
-                        security_id           = excluded.security_id,
-                        date                  = excluded.date,
-                        name                  = excluded.name,
-                        quantity              = excluded.quantity,
-                        amount                = excluded.amount,
-                        fees                  = excluded.fees,
-                        type                  = excluded.type,
-                        subtype               = excluded.subtype,
-                        cancel_transaction_id = excluded.cancel_transaction_id,
-                        iso_currency_code     = excluded.iso_currency_code,
+                        account_id               = excluded.account_id,
+                        security_id              = excluded.security_id,
+                        date                     = excluded.date,
+                        name                     = excluded.name,
+                        quantity                 = excluded.quantity,
+                        amount                   = excluded.amount,
+                        fees                     = excluded.fees,
+                        type                     = excluded.type,
+                        subtype                  = excluded.subtype,
+                        cancel_transaction_id    = excluded.cancel_transaction_id,
+                        iso_currency_code        = excluded.iso_currency_code,
                         unofficial_currency_code = excluded.unofficial_currency_code,
-                        account_number        = excluded.account_number
+                        account_number           = excluded.account_number
                 """, (
                     txn.investment_transaction_id,
                     acct["id"],
