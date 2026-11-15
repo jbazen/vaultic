@@ -619,6 +619,6 @@ class TestSyncHoldingsOptionalFields:
         conn, get_db = self._setup()
         txn = TestSyncInvestmentTransactions()._txn("inv-1")
         self._run(get_db, [self._holding("sec-a")], [txn])
-        assert conn.execute(
+        assert [tuple(r) for r in conn.execute(
             "SELECT investment_transaction_id FROM plaid_investment_transactions"
-        ).fetchall()[0][0] == "inv-1"
+        )] == [("inv-1",)]
