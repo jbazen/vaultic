@@ -708,3 +708,156 @@ class TestInvestmentCurrencyFields:
 
     def test_holdings_requires_auth(self, client):
         assert client.get("/api/accounts/1/holdings").status_code == 401
+
+
+class TestHoldingsCurrencyTotals:
+    """GET /api/accounts/{id}/holdings never adds amounts in different
+    currencies together (#141): one total per currency, and pct_assets only
+    when every valued holding shares one currency."""
+
+    ACCT = "CUR141"
+
+    def _seed(self, holdings, source="plaid"):
+        """holdings: (security_id, value, iso, unofficial) tuples."""
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO accounts (plaid_account_id, name, type, is_active, account_number, source) "
+                "VALUES (?, 'Currency 141', 'investment', 1, ?, ?)",
+                (self.ACCT, self.ACCT, source),
+            )
+            acct_id = conn.execute(
+                "SELECT id FROM accounts WHERE account_number = ?", (self.ACCT,)
+            ).fetchone()["id"]
+            for sec, value, iso, unofficial in holdings:
+                conn.execute(
+                    "INSERT INTO plaid_holdings (account_id, account_number, security_id, "
+                    "institution_value, quantity, iso_currency_code, unofficial_currency_code, "
+                    "snapped_at) VALUES (?, ?, ?, ?, 1, ?, ?, '2026-11-14')",
+                    (acct_id, self.ACCT, sec, value, iso, unofficial),
+                )
+        return acct_id
+
+    def _cleanup(self):
+        from api.database import get_db
+        with get_db() as conn:
+            conn.execute("DELETE FROM plaid_holdings WHERE account_number = ?", (self.ACCT,))
+            conn.execute("DELETE FROM i360_holdings WHERE account_number = ?", (self.ACCT,))
+            conn.execute("DELETE FROM accounts WHERE account_number = ?", (self.ACCT,))
+
+    def _get(self, client, auth_headers, holdings):
+        acct_id = self._seed(holdings)
+        try:
+            res = client.get(f"/api/accounts/{acct_id}/holdings", headers=auth_headers)
+            assert res.status_code == 200
+            return res.json()
+        finally:
+            self._cleanup()
+
+    def test_mixed_usd_and_btc_are_totalled_separately(self, client, auth_headers):
+        """The ticket's example: $10,000 VTI plus 0.5 BTC is not $10,000.50."""
+        body = self._get(client, auth_headers, [
+            ("sec-vti-141", 10000.0, "USD", None),
+            ("sec-btc-141", 0.5, None, "BTC"),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 10000.0},
+            {"iso_currency_code": None, "unofficial_currency_code": "BTC", "total_value": 0.5},
+        ]
+        assert "total_value" not in body
+        assert [h["pct_assets"] for h in body["holdings"]] == [None, None]
+
+    def test_all_usd_is_unchanged(self, client, auth_headers):
+        """All of prod today: one USD total and pct_assets as before."""
+        body = self._get(client, auth_headers, [
+            ("sec-a-141", 7500.0, "USD", None),
+            ("sec-b-141", 2500.0, "USD", None),
+            ("sec-c-141", None, "USD", None),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 10000.0},
+        ]
+        pct = {h["security_id"]: h["pct_assets"] for h in body["holdings"]}
+        assert pct == {"sec-a-141": pytest.approx(75.0), "sec-b-141": pytest.approx(25.0),
+                       "sec-c-141": None}
+
+    def test_missing_codes_count_as_usd(self, client, auth_headers):
+        """A row with neither code is USD, the same rule sync uses (#137)."""
+        body = self._get(client, auth_headers, [
+            ("sec-a-141", 600.0, "USD", None),
+            ("sec-b-141", 400.0, None, None),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 1000.0},
+        ]
+        assert sorted(h["pct_assets"] for h in body["holdings"]) == [
+            pytest.approx(40.0), pytest.approx(60.0)]
+
+    def test_iso_code_wins_and_empty_codes_count_as_missing(self, client, auth_headers):
+        """Both codes set: ISO wins. Empty strings are treated as unset."""
+        body = self._get(client, auth_headers, [
+            ("sec-a-141", 300.0, "USD", "BTC"),
+            ("sec-b-141", 100.0, "", ""),
+            ("sec-c-141", 2.0, "", "ETH"),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 400.0},
+            {"iso_currency_code": None, "unofficial_currency_code": "ETH", "total_value": 2.0},
+        ]
+
+    def test_unvalued_holding_in_other_currency_does_not_mix(self, client, auth_headers):
+        """A holding with no value adds no currency, so pct_assets stays."""
+        body = self._get(client, auth_headers, [
+            ("sec-a-141", 1000.0, "USD", None),
+            ("sec-b-141", None, None, "BTC"),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 1000.0},
+        ]
+        pct = {h["security_id"]: h["pct_assets"] for h in body["holdings"]}
+        assert pct == {"sec-a-141": pytest.approx(100.0), "sec-b-141": None}
+
+    def test_single_non_usd_currency_keeps_pct_assets(self, client, auth_headers):
+        body = self._get(client, auth_headers, [
+            ("sec-a-141", 300.0, "CAD", None),
+            ("sec-b-141", 100.0, "CAD", None),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "CAD", "unofficial_currency_code": None, "total_value": 400.0},
+        ]
+        assert [h["pct_assets"] for h in body["holdings"]] == [
+            pytest.approx(75.0), pytest.approx(25.0)]
+
+    def test_totals_order_usd_then_iso_then_unofficial(self, client, auth_headers):
+        body = self._get(client, auth_headers, [
+            ("sec-eth-141", 2.0, None, "ETH"),
+            ("sec-eur-141", 50.0, "EUR", None),
+            ("sec-btc-141", 1.0, None, "BTC"),
+            ("sec-cad-141", 40.0, "CAD", None),
+            ("sec-usd-141", 30.0, "USD", None),
+        ])
+        assert [(t["iso_currency_code"], t["unofficial_currency_code"]) for t in body["totals"]] == [
+            ("USD", None), ("CAD", None), ("EUR", None), (None, "BTC"), (None, "ETH")]
+
+    def test_no_holdings_returns_empty_totals(self, client, auth_headers):
+        assert self._get(client, auth_headers, []) == {"holdings": [], "totals": []}
+
+    def test_investor360_holdings_return_one_usd_total(self, client, auth_headers):
+        from api.database import get_db
+        acct_id = self._seed([], source="investor360")
+        try:
+            with get_db() as conn:
+                for desc, value in (("Fund A", 900.0), ("Fund B", 100.0)):
+                    conn.execute(
+                        "INSERT INTO i360_holdings (account_id, account_number, snapped_at, "
+                        "description, value_dollars) VALUES (?, ?, '2026-11-14', ?, ?)",
+                        (acct_id, self.ACCT, desc, value),
+                    )
+            body = client.get(f"/api/accounts/{acct_id}/holdings", headers=auth_headers).json()
+        finally:
+            self._cleanup()
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 1000.0},
+        ]
+        assert [h["pct_assets"] for h in body["holdings"]] == [
+            pytest.approx(90.0), pytest.approx(10.0)]

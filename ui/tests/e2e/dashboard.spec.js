@@ -92,8 +92,8 @@ test.describe("Dashboard account list", () => {
   test("a Plaid investment row expands to Holdings / Transactions / Performance", async ({ page }) => {
     await mockAllAPIs(page);
     await page.route("**/api/accounts/2/holdings", r =>
-      r.fulfill({ json: { total_value: 12000, holdings: [
-        { name: "Vanguard Total Stock", ticker_symbol: "VTSAX", security_type: "mutual fund", quantity: 100, institution_price: 120, institution_value: 12000, cost_basis: 10000, gain_loss_dollars: 2000, gain_loss_pct: 20, pct_assets: 100 },
+      r.fulfill({ json: { totals: [{ iso_currency_code: "USD", unofficial_currency_code: null, total_value: 12000 }], holdings: [
+        { name: "Vanguard Total Stock", ticker_symbol: "VTSAX", security_type: "mutual fund", quantity: 100, institution_price: 120, institution_value: 12000, cost_basis: 10000, gain_loss_dollars: 2000, gain_loss_pct: 20, pct_assets: 100, iso_currency_code: "USD", unofficial_currency_code: null },
       ] } }));
     await page.route("**/api/accounts", r =>
       r.fulfill({ json: [{ id: 2, name: "Brokerage 401k", display_name: null, mask: "9876", type: "investment", subtype: "401k", institution_name: "Vanguard", current: 12000 }] }));
@@ -104,6 +104,58 @@ test.describe("Dashboard account list", () => {
     await expect(page.getByRole("button", { name: "Transactions", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Performance", exact: true })).toBeVisible();
     await expect(page.getByText("Vanguard Total Stock")).toBeVisible();
+    // An all-USD account looks the same as before #141: one plain Total row.
+    const footer = page.locator("tfoot tr");
+    await expect(footer).toHaveCount(1);
+    await expect(footer.locator("td").first()).toHaveText("Total");
+    await expect(footer).toContainText("$12,000.00");
+  });
+
+  test("holdings and transactions in other currencies are not shown as dollars (#141)", async ({ page }) => {
+    await mockAllAPIs(page);
+    await page.route("**/api/accounts/2/holdings", r =>
+      r.fulfill({ json: {
+        totals: [
+          { iso_currency_code: "USD", unofficial_currency_code: null, total_value: 10000 },
+          { iso_currency_code: "CAD", unofficial_currency_code: null, total_value: 1234.5 },
+          { iso_currency_code: null, unofficial_currency_code: "BTC", total_value: 0.5 },
+        ],
+        holdings: [
+          { name: "Vanguard Total Market ETF", ticker_symbol: "VTI", security_type: "etf", quantity: 40, institution_price: 250, institution_value: 10000, cost_basis: null, gain_loss_dollars: null, gain_loss_pct: null, pct_assets: null, iso_currency_code: "USD", unofficial_currency_code: null },
+          { name: "Shopify", ticker_symbol: "SHOP", security_type: "equity", quantity: 10, institution_price: 123.45, institution_value: 1234.5, cost_basis: null, gain_loss_dollars: null, gain_loss_pct: null, pct_assets: null, iso_currency_code: "CAD", unofficial_currency_code: null },
+          { name: "Bitcoin", ticker_symbol: "BTC", security_type: "cryptocurrency", quantity: 0.5, institution_price: 1, institution_value: 0.5, cost_basis: null, gain_loss_dollars: null, gain_loss_pct: null, pct_assets: null, iso_currency_code: null, unofficial_currency_code: "BTC" },
+        ],
+      } }));
+    await page.route("**/api/accounts/2/investment-transactions*", r =>
+      r.fulfill({ json: [
+        { investment_transaction_id: "it-1", date: "2026-11-01", type: "buy", subtype: "buy", name: "BUY BTC", security_name: "Bitcoin", ticker: "BTC", quantity: 0.25, amount: 0.25, fees: 0.0001, iso_currency_code: null, unofficial_currency_code: "BTC" },
+        { investment_transaction_id: "it-2", date: "2026-10-01", type: "buy", subtype: "buy", name: "BUY VTI", security_name: "Vanguard Total Market ETF", ticker: "VTI", quantity: 4, amount: 1000, fees: 0, iso_currency_code: "USD", unofficial_currency_code: null },
+      ] }));
+    await page.route("**/api/accounts", r =>
+      r.fulfill({ json: [{ id: 2, name: "Brokerage 401k", display_name: null, mask: "9876", type: "investment", subtype: "brokerage", institution_name: "Vanguard", current: 10000 }] }));
+    await loginOnly(page);
+
+    await page.getByText("Brokerage 401k").click();
+    const btcRow = page.getByRole("row").filter({ hasText: "Bitcoin" });
+    await expect(btcRow).toContainText("0.5 BTC");
+    await expect(btcRow).not.toContainText("$");
+    const footer = page.locator("tfoot tr");
+    await expect(page.getByRole("row").filter({ hasText: "Shopify" })).toContainText("CA$1,234.50");
+    await expect(footer).toHaveCount(3);
+    await expect(footer.nth(0)).toContainText("Total (USD)");
+    await expect(footer.nth(0)).toContainText("$10,000.00");
+    await expect(footer.nth(1)).toContainText("Total (CAD)");
+    await expect(footer.nth(1)).toContainText("CA$1,234.50");
+    await expect(footer.nth(2)).toContainText("Total (BTC)");
+    await expect(footer.nth(2)).toContainText("0.5 BTC");
+    await expect(page.getByText("$10,000.50")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Transactions", exact: true }).click();
+    const btcTxn = page.getByRole("row").filter({ hasText: "2026-11-01" });
+    await expect(btcTxn).toContainText("0.25 BTC");
+    await expect(btcTxn).toContainText("0.0001 BTC");
+    await expect(btcTxn).not.toContainText("$");
+    await expect(page.getByRole("row").filter({ hasText: "2026-10-01" })).toContainText("$1,000.00");
   });
 
   test("shows Property & Vehicles and Other Assets sections", async ({ page }) => {

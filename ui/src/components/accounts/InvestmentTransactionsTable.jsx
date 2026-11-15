@@ -1,4 +1,4 @@
-import { fmt, fmtNum } from "../../utils/format.js";
+import { fmtMoney, fmtNum } from "../../utils/format.js";
 
 // ── Investment Transactions Table ──────────────────────────────────────────────
 export default function InvestmentTransactionsTable({ transactions }) {
@@ -31,8 +31,8 @@ export default function InvestmentTransactionsTable({ transactions }) {
               <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={t.security_name}>{t.security_name || t.name || "—"}</td>
               <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{t.ticker || "—"}</td>
               <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(t.quantity, 4)}</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{t.amount != null ? fmt(t.amount) : "—"}</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{t.fees != null ? fmt(t.fees) : "—"}</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{fmtMoney(t.amount, t.iso_currency_code, t.unofficial_currency_code)}</td>
+              <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{fmtMoney(t.fees, t.iso_currency_code, t.unofficial_currency_code)}</td>
             </tr>
           ))}
         </tbody>

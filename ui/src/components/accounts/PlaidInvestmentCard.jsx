@@ -105,7 +105,7 @@ export default function PlaidInvestmentCard({ account, onRenamed }) {
           ) : loading ? (
             <div style={{ color: "var(--text2)", fontSize: 13, padding: "8px 0" }}>Loading…</div>
           ) : activeTab === "holdings" ? (
-            <PlaidHoldingsTable holdings={holdings?.holdings} totalValue={holdings?.total_value} />
+            <PlaidHoldingsTable holdings={holdings?.holdings} totals={holdings?.totals} />
           ) : (
             <InvestmentTransactionsTable transactions={transactions} />
           )}
