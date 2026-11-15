@@ -107,7 +107,7 @@ test.describe("Dashboard account list", () => {
     // An all-USD account looks the same as before #141: one plain Total row.
     const footer = page.locator("tfoot tr");
     await expect(footer).toHaveCount(1);
-    await expect(footer).toContainText("Total");
+    await expect(footer.locator("td").first()).toHaveText("Total");
     await expect(footer).toContainText("$12,000.00");
   });
 
@@ -117,10 +117,12 @@ test.describe("Dashboard account list", () => {
       r.fulfill({ json: {
         totals: [
           { iso_currency_code: "USD", unofficial_currency_code: null, total_value: 10000 },
+          { iso_currency_code: "CAD", unofficial_currency_code: null, total_value: 1234.5 },
           { iso_currency_code: null, unofficial_currency_code: "BTC", total_value: 0.5 },
         ],
         holdings: [
           { name: "Vanguard Total Market ETF", ticker_symbol: "VTI", security_type: "etf", quantity: 40, institution_price: 250, institution_value: 10000, cost_basis: null, gain_loss_dollars: null, gain_loss_pct: null, pct_assets: null, iso_currency_code: "USD", unofficial_currency_code: null },
+          { name: "Shopify", ticker_symbol: "SHOP", security_type: "equity", quantity: 10, institution_price: 123.45, institution_value: 1234.5, cost_basis: null, gain_loss_dollars: null, gain_loss_pct: null, pct_assets: null, iso_currency_code: "CAD", unofficial_currency_code: null },
           { name: "Bitcoin", ticker_symbol: "BTC", security_type: "cryptocurrency", quantity: 0.5, institution_price: 1, institution_value: 0.5, cost_basis: null, gain_loss_dollars: null, gain_loss_pct: null, pct_assets: null, iso_currency_code: null, unofficial_currency_code: "BTC" },
         ],
       } }));
@@ -138,11 +140,14 @@ test.describe("Dashboard account list", () => {
     await expect(btcRow).toContainText("0.5 BTC");
     await expect(btcRow).not.toContainText("$");
     const footer = page.locator("tfoot tr");
-    await expect(footer).toHaveCount(2);
+    await expect(page.getByRole("row").filter({ hasText: "Shopify" })).toContainText("CA$1,234.50");
+    await expect(footer).toHaveCount(3);
     await expect(footer.nth(0)).toContainText("Total (USD)");
     await expect(footer.nth(0)).toContainText("$10,000.00");
-    await expect(footer.nth(1)).toContainText("Total (BTC)");
-    await expect(footer.nth(1)).toContainText("0.5 BTC");
+    await expect(footer.nth(1)).toContainText("Total (CAD)");
+    await expect(footer.nth(1)).toContainText("CA$1,234.50");
+    await expect(footer.nth(2)).toContainText("Total (BTC)");
+    await expect(footer.nth(2)).toContainText("0.5 BTC");
     await expect(page.getByText("$10,000.50")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Transactions", exact: true }).click();

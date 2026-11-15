@@ -793,6 +793,30 @@ class TestHoldingsCurrencyTotals:
         assert sorted(h["pct_assets"] for h in body["holdings"]) == [
             pytest.approx(40.0), pytest.approx(60.0)]
 
+    def test_iso_code_wins_and_empty_codes_count_as_missing(self, client, auth_headers):
+        """Both codes set: ISO wins. Empty strings are treated as unset."""
+        body = self._get(client, auth_headers, [
+            ("sec-a-141", 300.0, "USD", "BTC"),
+            ("sec-b-141", 100.0, "", ""),
+            ("sec-c-141", 2.0, "", "ETH"),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 400.0},
+            {"iso_currency_code": None, "unofficial_currency_code": "ETH", "total_value": 2.0},
+        ]
+
+    def test_unvalued_holding_in_other_currency_does_not_mix(self, client, auth_headers):
+        """A holding with no value adds no currency, so pct_assets stays."""
+        body = self._get(client, auth_headers, [
+            ("sec-a-141", 1000.0, "USD", None),
+            ("sec-b-141", None, None, "BTC"),
+        ])
+        assert body["totals"] == [
+            {"iso_currency_code": "USD", "unofficial_currency_code": None, "total_value": 1000.0},
+        ]
+        pct = {h["security_id"]: h["pct_assets"] for h in body["holdings"]}
+        assert pct == {"sec-a-141": pytest.approx(100.0), "sec-b-141": None}
+
     def test_single_non_usd_currency_keeps_pct_assets(self, client, auth_headers):
         body = self._get(client, auth_headers, [
             ("sec-a-141", 300.0, "CAD", None),

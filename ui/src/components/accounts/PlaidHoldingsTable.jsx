@@ -7,6 +7,7 @@ export default function PlaidHoldingsTable({ holdings, totals }) {
   }
   // One footer row per currency: amounts in different currencies are never added together (#141).
   const shownTotals = (totals || []).filter(t => t.total_value > 0);
+  const mixed = (totals || []).length > 1;
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -51,7 +52,7 @@ export default function PlaidHoldingsTable({ holdings, totals }) {
               return (
                 <tr key={code} style={i === 0 ? { borderTop: "2px solid var(--border)" } : undefined}>
                   <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>
-                    {shownTotals.length > 1 ? `Total (${code})` : "Total"}
+                    {mixed ? `Total (${code})` : "Total"}
                   </td>
                   <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>
                     {fmtMoney(t.total_value, t.iso_currency_code, t.unofficial_currency_code)}
