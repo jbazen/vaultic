@@ -68,10 +68,6 @@ LOCKOUT_WINDOW = 15 * 60
 _SWEEP_INTERVAL = 60
 _last_sweep = 0.0
 
-# Token denylist: stores revoked tokens until they would naturally expire.
-# Key = token string, value = expiry timestamp. Cleaned up on each check.
-_token_denylist: dict[str, float] = {}
-
 
 def lockout_key(ip: str) -> str:
     """The key an IP's failures are counted under.
@@ -176,24 +172,36 @@ def clear_2fa_failures(ip: str, username: str) -> None:
     _clear(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username)
 
 
-def revoke_token(token: str):
-    """Add a token to the denylist. It will be cleaned up after its natural expiry."""
+def revoke_token(token: str) -> None:
+    """Revoke an access token at logout (#146).
+
+    Stores the token's jti in revoked_tokens until its exp, so the revocation
+    survives restarts and deploys. Rows past their exp are pruned here. A
+    token that doesn't verify, or has no string jti or numeric exp, is
+    ignored: decode_token_claims refuses such tokens anyway.
+    """
+    from api.database import get_db
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
-        exp = payload.get("exp", 0)
-        _token_denylist[token] = exp
     except jwt.PyJWTError:
-        pass  # Invalid token, nothing to revoke
+        return
+    jti, exp = payload.get("jti"), payload.get("exp")
+    if not isinstance(jti, str) or not jti or not isinstance(exp, (int, float)):
+        return
+    with get_db() as conn:
+        conn.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (int(time.time()),))
+        conn.execute(
+            "INSERT OR IGNORE INTO revoked_tokens (jti, expires_at) VALUES (?, ?)",
+            (jti, int(exp)),
+        )
 
 
-def is_token_revoked(token: str) -> bool:
-    """Check if a token has been revoked. Also cleans up expired entries."""
-    now = datetime.now(timezone.utc).timestamp()
-    # Clean up expired entries
-    expired = [t for t, exp in _token_denylist.items() if exp < now]
-    for t in expired:
-        _token_denylist.pop(t, None)
-    return token in _token_denylist
+def is_token_revoked(jti: str) -> bool:
+    """True if the access token with this jti was revoked at logout (#146)."""
+    from api.database import get_db
+    with get_db() as conn:
+        row = conn.execute("SELECT 1 FROM revoked_tokens WHERE jti = ?", (jti,)).fetchone()
+    return row is not None
 
 
 def validate_password_strength(password: str) -> str | None:
@@ -503,16 +511,22 @@ def decode_2fa_pending_token(token: str) -> str | None:
 
 def decode_token_claims(token: str) -> dict | None:
     """Return a general-access token's claims, or None if it is invalid,
-    expired, revoked, or scoped (e.g. 2fa_pending)."""
+    expired, revoked, or scoped (e.g. 2fa_pending).
+
+    exp, iat, sub and jti are required: create_token sets all four, and the
+    jti is what logout revokes (#146).
+    """
     try:
-        if is_token_revoked(token):
-            return None
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("purpose"):
-            return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth
-        return payload
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM],
+                             options={"require": ["exp", "iat", "sub", "jti"]})
     except jwt.PyJWTError:
         return None
+    if payload.get("purpose"):
+        return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth
+    jti = payload["jti"]
+    if not isinstance(jti, str) or not jti or is_token_revoked(jti):
+        return None
+    return payload
 
 
 def decode_token(token: str) -> str | None:

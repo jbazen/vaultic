@@ -778,6 +778,13 @@ MIGRATIONS = [
     "ALTER TABLE plaid_securities ADD COLUMN unofficial_currency_code TEXT",
     "ALTER TABLE plaid_holdings ADD COLUMN unofficial_currency_code TEXT",
     "ALTER TABLE plaid_investment_transactions ADD COLUMN unofficial_currency_code TEXT",
+    # Access tokens revoked at logout, by jti, kept until the token's exp
+    # (Unix seconds) so a restart or deploy doesn't forget them (#146).
+    # revoke_token prunes rows past their exp.
+    """CREATE TABLE IF NOT EXISTS revoked_tokens (
+        jti        TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+    )""",
 ]
 
 
@@ -1352,6 +1359,12 @@ def init_db():
                      "users_insert_cutoff", "users_rename_cutoff"):
             if name not in triggers:
                 raise RuntimeError(f"trigger {name} migration did not apply")
+        # Every authenticated request checks revoked_tokens (#146); without it
+        # every call would 500 while /api/health passes.
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'revoked_tokens'"
+        ).fetchone():
+            raise RuntimeError("revoked_tokens migration did not apply")
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)
