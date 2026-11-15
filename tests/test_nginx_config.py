@@ -25,6 +25,16 @@ REPO = Path(__file__).resolve().parent.parent
 NGINX_CONF = REPO / "deploy" / "vaultic-nginx.conf"
 DEPLOY_YML = REPO / ".github" / "workflows" / "deploy.yml"
 
+# https://www.cloudflare.com/ips-v4 and /ips-v6, checked 2026-11-15
+CLOUDFLARE_RANGES = {
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+    "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+}
+
 
 def _conf_text() -> str:
     return NGINX_CONF.read_text(encoding="utf-8")
@@ -41,9 +51,10 @@ def _directives(text: str) -> list[str]:
 
 
 def _proxy_locations(text: str) -> dict[str, str]:
-    """Map each location that has proxy_pass to its body."""
+    """Map each location that has proxy_pass to its body (comments removed)."""
     blocks = {}
-    for m in re.finditer(r"location\s+([^{]+?)\s*\{(.*?)\}", text, re.S):
+    stripped = "\n".join(_directives(text))
+    for m in re.finditer(r"location\s+([^{]+?)\s*\{(.*?)\}", stripped, re.S):
         if "proxy_pass" in m.group(2):
             blocks[m.group(1).strip()] = m.group(2)
     return blocks
@@ -59,22 +70,19 @@ class TestNginxConfigText:
         # Recursive mode would walk a client-supplied header chain.
         assert not any(d.startswith("real_ip_recursive") for d in _directives(_conf_text()))
 
-    def test_trusted_ranges_are_cloudflare_only(self):
+    def test_trusted_ranges_are_exactly_cloudflares(self):
         ranges = [
             d.split()[1].rstrip(";")
             for d in _directives(_conf_text())
             if d.startswith("set_real_ip_from")
         ]
+        assert len(ranges) == len(set(ranges))
+        # Adding or dropping a range must be a deliberate change in both places.
+        assert set(ranges) == CLOUDFLARE_RANGES
         nets = [ipaddress.ip_network(r) for r in ranges]
-        assert len([n for n in nets if n.version == 4]) >= 15
-        assert len([n for n in nets if n.version == 6]) >= 7
         # The Cloudflare edges seen in prod's security log must be covered.
         for edge in ("104.23.195.68", "172.69.74.196"):
             assert any(ipaddress.ip_address(edge) in n for n in nets), edge
-        # Never trust loopback, private ranges or "everything".
-        for net in nets:
-            assert not net.is_private and not net.is_loopback, net
-            assert net.prefixlen >= 13, net
 
     def test_limit_zones_key_on_real_client_ip(self):
         zones = [d for d in _directives(_conf_text()) if d.startswith("limit_req_zone")]
@@ -113,18 +121,31 @@ class TestDeployInstallsConfig:
     def _script(self) -> str:
         return DEPLOY_YML.read_text(encoding="utf-8")
 
+    # String checks: they catch the steps being dropped or reordered, not a
+    # wrong branch. The steps themselves run on every deploy.
+
     def test_sites_enabled_is_symlinked_to_installed_copy(self):
         script = self._script()
+        assert "NGINX_SITE=/etc/nginx/sites-available/vaultic" in script
+        assert "NGINX_ENABLED=/etc/nginx/sites-enabled/vaultic" in script
         assert 'sudo cp deploy/vaultic-nginx.conf "$NGINX_SITE"' in script
-        assert 'sudo ln -sfn "$NGINX_SITE" /etc/nginx/sites-enabled/vaultic' in script
+        assert 'sudo ln -sfn "$NGINX_SITE" "$NGINX_ENABLED"' in script
 
-    def test_failed_nginx_test_restores_previous_config(self):
+    def test_previous_config_is_kept_outside_sites_enabled(self):
         script = self._script()
-        backup = script.index("sudo cat /etc/nginx/sites-enabled/vaultic")
+        backup = script.index('sudo cp "$NGINX_ENABLED" "$NGINX_SITE.prev"')
         install = script.index("sudo cp deploy/vaultic-nginx.conf")
-        restore = script.index('sudo cp "$NGINX_PREV" "$NGINX_SITE"')
+        restore = script.index('sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"')
         assert backup < install < restore
+        assert 'if [ -e "$NGINX_ENABLED" ]; then' in script
         assert "if sudo nginx -t; then" in script
+
+    def test_nginx_failure_fails_deploy_after_health_check(self):
+        script = self._script()
+        flagged = script.index("NGINX_FAILED=1")
+        health = script.index('if [ "$HEALTHY" -ne 1 ]; then')
+        fail = script.index('if [ "$NGINX_FAILED" -eq 1 ]; then')
+        assert flagged < health < fail
 
 
 # ── Live checks against a real nginx ─────────────────────────────────────────
@@ -196,8 +217,8 @@ class _EchoHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-def _replace_once(text: str, old: str, new: str) -> str:
-    assert text.count(old) >= 1, f"config no longer contains {old!r}"
+def _replace_all(text: str, old: str, new: str, count: int = 1) -> str:
+    assert text.count(old) == count, f"expected {count} of {old!r} in the config"
     return text.replace(old, new)
 
 
@@ -215,17 +236,20 @@ class _Nginx:
         (workdir / "dist").mkdir()
 
         site = _conf_text()
-        site = _replace_once(site, "listen 80;", f"listen 127.0.0.1:{_free_port()};")
-        site = _replace_once(site, "listen 443 ssl;", f"listen 127.0.0.1:{self.https_port} ssl;")
-        site = _replace_once(site, "/etc/ssl/cloudflare/cert.pem", cert.as_posix())
-        site = _replace_once(site, "/etc/ssl/cloudflare/key.pem", key.as_posix())
-        site = _replace_once(site, "/home/ubuntu/vaultic/ui/dist", (workdir / "dist").as_posix())
-        site = _replace_once(
-            site, "http://127.0.0.1:8000", f"http://127.0.0.1:{self.upstream.server_address[1]}"
+        site = _replace_all(site, "listen 80;", f"listen 127.0.0.1:{_free_port()};")
+        site = _replace_all(site, "listen 443 ssl;", f"listen 127.0.0.1:{self.https_port} ssl;")
+        site = _replace_all(site, "/etc/ssl/cloudflare/cert.pem", cert.as_posix())
+        site = _replace_all(site, "/etc/ssl/cloudflare/key.pem", key.as_posix())
+        site = _replace_all(site, "/home/ubuntu/vaultic/ui/dist", (workdir / "dist").as_posix())
+        site = _replace_all(
+            site,
+            "http://127.0.0.1:8000",
+            f"http://127.0.0.1:{self.upstream.server_address[1]}",
+            count=3,
         )
         if trust_loopback_as_cloudflare:
             # Stand in for a Cloudflare edge: the test client connects from loopback.
-            site = _replace_once(
+            site = _replace_all(
                 site,
                 "real_ip_header CF-Connecting-IP;",
                 "real_ip_header CF-Connecting-IP;\nset_real_ip_from 127.0.0.1;",
@@ -322,6 +346,13 @@ class TestNginxLive:
         assert r.status_code == 200
         # The app sees only the visitor's address; the client-sent XFF is dropped.
         assert r.text == "203.0.113.7"
+
+    def test_cloudflare_connection_forwards_ipv6_visitor(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        r = server.request("GET", "/api/health", {"CF-Connecting-IP": "2001:db8::1"})
+        assert r.status_code == 200
+        assert r.text == "2001:db8::1"
 
     def test_direct_connection_ignores_forged_header(self, nginx_factory):
         server = nginx_factory(trust_loopback_as_cloudflare=False)
