@@ -39,6 +39,26 @@ export function fmtSigned(v) {
 }
 
 /**
+ * Format an amount in the currency Plaid reported it in (#141), absolute
+ * value like fmt. The ISO code wins, then the unofficial code (crypto such
+ * as BTC, shown as "0.5 BTC"); USD when neither is set.
+ * @param {number|null} v
+ * @param {string|null} iso - iso_currency_code
+ * @param {string|null} unofficial - unofficial_currency_code
+ * @returns {string}
+ */
+export function fmtMoney(v, iso, unofficial) {
+  if (v == null) return "—";
+  if (!iso && unofficial) return `${fmtCrypto(Math.abs(v))} ${unofficial}`;
+  if (!iso || iso === "USD") return fmt(v);
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: iso }).format(Math.abs(v));
+  } catch {
+    return `${fmtNum(Math.abs(v), 2)} ${iso}`;
+  }
+}
+
+/**
  * Format a date string ("YYYY-MM-DD" or full datetime) for display.
  * @param {string} s
  * @param {object} opts - toLocaleDateString options override

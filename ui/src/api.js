@@ -453,7 +453,7 @@ export async function syncCoinbase() {
 // metadata (name, ticker, type) and computed gain/loss fields.
 export async function getAccountHoldings(accountId) {
   const res = await apiFetch(`/api/accounts/${accountId}/holdings`);
-  return res.json(); // { holdings: [...], total_value: N }
+  return res.json(); // { holdings: [...], totals: [{ iso_currency_code, unofficial_currency_code, total_value }] }
 }
 
 // Fetches buy/sell/dividend/transfer history for one investment account.

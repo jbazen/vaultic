@@ -1,10 +1,12 @@
-import { fmt, fmtPercent as fmtPct, fmtNum } from "../../utils/format.js";
+import { fmtMoney, fmtPercent as fmtPct, fmtNum } from "../../utils/format.js";
 
 // ── Plaid Holdings Table ───────────────────────────────────────────────────────
-export default function PlaidHoldingsTable({ holdings, totalValue }) {
+export default function PlaidHoldingsTable({ holdings, totals }) {
   if (!holdings || holdings.length === 0) {
     return <div style={{ color: "var(--text2)", fontSize: 13, padding: "12px 0" }}>No holdings data available.</div>;
   }
+  // One footer row per currency: amounts in different currencies are never added together (#141).
+  const shownTotals = (totals || []).filter(t => t.total_value > 0);
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -21,17 +23,18 @@ export default function PlaidHoldingsTable({ holdings, totalValue }) {
             const glPos = h.gain_loss_dollars > 0;
             const glNeg = h.gain_loss_dollars < 0;
             const glColor = glPos ? "var(--green)" : glNeg ? "var(--red)" : "var(--text)";
+            const money = v => fmtMoney(v, h.iso_currency_code, h.unofficial_currency_code);
             return (
               <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                 <td style={{ padding: "8px 10px", color: "var(--text)", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={h.name}>{h.name || "—"}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", fontFamily: "monospace", color: "var(--text2)" }}>{h.ticker_symbol || "—"}</td>
                 <td style={{ padding: "8px 10px", color: "var(--text2)", fontSize: 12 }}>{h.security_type || "—"}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{fmtNum(h.quantity, 4)}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{h.institution_price != null ? fmt(h.institution_price) : "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{h.institution_value != null ? fmt(h.institution_value) : "—"}</td>
-                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{h.cost_basis != null ? fmt(h.cost_basis) : "—"}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text)" }}>{money(h.institution_price)}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "var(--text)" }}>{money(h.institution_value)}</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "var(--text2)" }}>{money(h.cost_basis)}</td>
                 <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glColor }}>
-                  {h.gain_loss_dollars != null ? (glPos ? "+" : "") + fmt(h.gain_loss_dollars) : "—"}
+                  {h.gain_loss_dollars != null ? (glPos ? "+" : "") + money(h.gain_loss_dollars) : "—"}
                 </td>
                 <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: glColor }}>
                   {h.gain_loss_pct != null ? (h.gain_loss_pct > 0 ? "+" : "") + fmtPct(h.gain_loss_pct) : "—"}
@@ -41,13 +44,22 @@ export default function PlaidHoldingsTable({ holdings, totalValue }) {
             );
           })}
         </tbody>
-        {totalValue > 0 && (
+        {shownTotals.length > 0 && (
           <tfoot>
-            <tr style={{ borderTop: "2px solid var(--border)" }}>
-              <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>Total</td>
-              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>{fmt(totalValue)}</td>
-              <td colSpan={4} />
-            </tr>
+            {shownTotals.map((t, i) => {
+              const code = t.iso_currency_code || t.unofficial_currency_code;
+              return (
+                <tr key={code} style={i === 0 ? { borderTop: "2px solid var(--border)" } : undefined}>
+                  <td colSpan={5} style={{ padding: "8px 10px", fontWeight: 700, color: "var(--text)" }}>
+                    {shownTotals.length > 1 ? `Total (${code})` : "Total"}
+                  </td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "var(--text)" }}>
+                    {fmtMoney(t.total_value, t.iso_currency_code, t.unofficial_currency_code)}
+                  </td>
+                  <td colSpan={4} />
+                </tr>
+              );
+            })}
           </tfoot>
         )}
       </table>
