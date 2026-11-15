@@ -142,27 +142,35 @@ jobs:
 
             # Install nginx config and reload (#155). sites-enabled/vaultic must be a
             # symlink to sites-available/vaultic: it used to be a separate old copy,
-            # so the config copied here never went live. The config nginx was
-            # running is kept as sites-available/vaultic.prev (outside sites-enabled,
-            # so nginx never loads it) for a manual rollback. If the new config fails
-            # nginx -t, the old one is put back and the deploy fails AFTER the API
-            # health check below, so a bad API still gets rolled back.
+            # so the config copied here never went live. When the incoming config
+            # differs from the running one, the running one is kept as
+            # sites-available/vaultic.prev (outside sites-enabled, so nginx never
+            # loads it) for a manual rollback; deploys that don't change the config
+            # leave .prev alone. If the new config fails nginx -t or the reload, the
+            # old one is put back and the deploy fails AFTER the API health check
+            # below, so a bad API still gets rolled back.
             NGINX_SITE=/etc/nginx/sites-available/vaultic
             NGINX_ENABLED=/etc/nginx/sites-enabled/vaultic
             NGINX_FAILED=0
+            NGINX_HAD_SITE=0
+            NGINX_BACKED_UP=0
             if [ -e "$NGINX_ENABLED" ]; then
-              sudo cp "$NGINX_ENABLED" "$NGINX_SITE.prev"
+              NGINX_HAD_SITE=1
+              if ! sudo cmp -s deploy/vaultic-nginx.conf "$NGINX_ENABLED"; then
+                sudo cp "$NGINX_ENABLED" "$NGINX_SITE.prev"
+                NGINX_BACKED_UP=1
+              fi
             fi
             sudo cp deploy/vaultic-nginx.conf "$NGINX_SITE"
             sudo ln -sfn "$NGINX_SITE" "$NGINX_ENABLED"
-            if sudo nginx -t; then
-              sudo systemctl reload nginx
+            if sudo nginx -t && sudo systemctl reload nginx; then
+              echo "nginx config installed and reloaded"
             else
-              echo "nginx -t failed: restoring the previous nginx config"
+              echo "nginx -t or reload failed: restoring the previous nginx config"
               NGINX_FAILED=1
-              if [ -e "$NGINX_SITE.prev" ]; then
+              if [ "$NGINX_BACKED_UP" -eq 1 ]; then
                 sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"
-              else
+              elif [ "$NGINX_HAD_SITE" -eq 0 ]; then
                 sudo rm -f "$NGINX_ENABLED"
               fi
               sudo nginx -t || true
@@ -200,10 +208,10 @@ jobs:
             # NOT || true — snapshot failure must be visible in deploy logs
             .venv/bin/python scripts/refresh_nw_snapshot.py
 
-            # A failed nginx -t (above) fails the deploy only now, after the API
+            # A failed nginx -t or reload (above) fails the deploy only now, after the API
             # health check and rollback have run (#155)
             if [ "$NGINX_FAILED" -eq 1 ]; then
-              echo "Deploy failed: the new nginx config did not pass nginx -t (previous config kept)"
+              echo "Deploy failed: the new nginx config did not pass nginx -t or reload (previous config restored)"
               exit 1
             fi
 

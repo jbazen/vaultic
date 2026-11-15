@@ -133,12 +133,13 @@ class TestDeployInstallsConfig:
 
     def test_previous_config_is_kept_outside_sites_enabled(self):
         script = self._script()
+        changed = script.index('if ! sudo cmp -s deploy/vaultic-nginx.conf "$NGINX_ENABLED"; then')
         backup = script.index('sudo cp "$NGINX_ENABLED" "$NGINX_SITE.prev"')
         install = script.index("sudo cp deploy/vaultic-nginx.conf")
         restore = script.index('sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"')
-        assert backup < install < restore
-        assert 'if [ -e "$NGINX_ENABLED" ]; then' in script
-        assert "if sudo nginx -t; then" in script
+        assert changed < backup < install < restore
+        assert 'if [ "$NGINX_BACKED_UP" -eq 1 ]; then' in script
+        assert "if sudo nginx -t && sudo systemctl reload nginx; then" in script
 
     def test_nginx_failure_fails_deploy_after_health_check(self):
         script = self._script()
