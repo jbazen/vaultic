@@ -11,6 +11,7 @@ from api.auth import (
     clear_failed_attempts, get_user_2fa, generate_totp_setup, confirm_totp_enrollment,
     verify_totp_code, revoke_token, change_password_and_end_sessions,
     is_own_password_locked, record_own_password_failure, clear_own_password_failures,
+    is_2fa_locked, record_2fa_failure, clear_2fa_failures,
     create_refresh_token, validate_refresh_token, rotate_refresh_token, revoke_refresh_token,
 )
 from api.database import get_db
@@ -94,9 +95,16 @@ async def login(body: LoginRequest, request: Request):
 
 @router.post("/verify-2fa")
 async def verify_2fa(body: Verify2FARequest, request: Request):
+    """Finish a 2FA login.
+
+    Wrong codes count on their own counters, 5 per IP (an IPv6 address counts
+    as its /64) and 10 per username in 15 minutes (#165). A correct password
+    at /login doesn't clear them (#156), and they don't lock password login.
+    """
     ip = get_client_ip(request)
 
-    if is_rate_limited(ip):
+    if is_2fa_locked(ip):
+        security_log.log_server_event(f"RATE_LIMITED  ip={ip}  action=verify_2fa")
         raise HTTPException(status_code=429, detail="Too many attempts. Try again in 15 minutes.")
 
     # Decode the pending token to verify the user passed password auth
@@ -104,14 +112,18 @@ async def verify_2fa(body: Verify2FARequest, request: Request):
     if not username:
         raise HTTPException(status_code=401, detail="Invalid or expired 2FA session — please log in again")
 
+    if is_2fa_locked(ip, username):
+        security_log.log_server_event(f"RATE_LIMITED  ip={ip}  user={username}  action=verify_2fa")
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again in 15 minutes.")
+
     ok = verify_totp_code(username, body.code)
     security_log.log_2fa_attempt(ip, username, ok)
 
     if not ok:
-        record_failed_attempt(ip)
+        record_2fa_failure(ip, username)
         raise HTTPException(status_code=401, detail="Invalid or expired code")
 
-    clear_failed_attempts(ip)
+    clear_2fa_failures(ip, username)
     security_log.log_token_event(ip, username, "ISSUED")
     return _issue_tokens(username, body.remember_me)
 

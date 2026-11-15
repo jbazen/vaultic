@@ -4,6 +4,7 @@ import re
 import time
 import uuid
 import hashlib
+import ipaddress
 import secrets
 from pathlib import Path
 from collections import defaultdict
@@ -43,14 +44,52 @@ _failed_by_username: dict[str, list[float]] = defaultdict(list)
 # sign-out-everywhere control (issue #151).
 _own_pw_failed_by_ip: dict[str, list[float]] = defaultdict(list)
 _own_pw_failed_by_username: dict[str, list[float]] = defaultdict(list)
+# Wrong codes at /verify-2fa. Own counters, so a correct password at /login
+# (which clears the login counters) can't reset them (#156), and wrong codes
+# can't lock the owner out of password login (#165).
+_2fa_failed_by_ip: dict[str, list[float]] = defaultdict(list)
+_2fa_failed_by_username: dict[str, list[float]] = defaultdict(list)
 _Counter = dict[str, list[float]]
+_ALL_COUNTERS: tuple[_Counter, ...] = (
+    _failed_attempts, _failed_by_username,
+    _own_pw_failed_by_ip, _own_pw_failed_by_username,
+    _2fa_failed_by_ip, _2fa_failed_by_username,
+)
 MAX_ATTEMPTS = 5
 MAX_ATTEMPTS_PER_USER = 20  # Per-username across all IPs
+# Wrong 2FA codes per username across all IPs. Lower than the password limit:
+# whoever reaches this step already has the password, and a 6-digit code
+# (accepted in a 3-step window) is the only thing left to guess.
+MAX_2FA_ATTEMPTS_PER_USER = 10
 LOCKOUT_WINDOW = 15 * 60
+# How often a recorded failure also sweeps every counter for keys whose
+# failures have all aged out, so keys that are never checked again (a rotated
+# IPv6 address, a made-up username) don't pile up (#165).
+_SWEEP_INTERVAL = 60
+_last_sweep = 0.0
 
 # Token denylist: stores revoked tokens until they would naturally expire.
 # Key = token string, value = expiry timestamp. Cleaned up on each check.
 _token_denylist: dict[str, float] = {}
+
+
+def lockout_key(ip: str) -> str:
+    """The key an IP's failures are counted under.
+
+    An IPv6 address counts as its /64: one host is usually handed a whole /64,
+    so counting single addresses would give it 2^64 fresh lockouts (#165).
+    An IPv4-mapped IPv6 address counts as the IPv4 address. Anything else,
+    such as IPv4 or "unknown", is used as is.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network((int(addr) >> 64 << 64, 64)))
+    return str(addr)
 
 
 def _over_limit(counter: _Counter, key: str, limit: int) -> bool:
@@ -63,20 +102,35 @@ def _over_limit(counter: _Counter, key: str, limit: int) -> bool:
     return len(counter[key]) >= limit
 
 
-def _is_locked(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> bool:
-    if _over_limit(by_ip, ip, MAX_ATTEMPTS):
+def _sweep_stale(now: float) -> None:
+    """Drop every key whose newest failure is outside the window, at most
+    once per _SWEEP_INTERVAL."""
+    global _last_sweep
+    if now - _last_sweep < _SWEEP_INTERVAL:
+        return
+    _last_sweep = now
+    for counter in _ALL_COUNTERS:
+        for key in [k for k, times in counter.items() if not times or now - times[-1] >= LOCKOUT_WINDOW]:
+            counter.pop(key, None)
+
+
+def _is_locked(by_ip: _Counter, by_username: _Counter, ip: str, username: str,
+               user_limit: int = MAX_ATTEMPTS_PER_USER) -> bool:
+    if _over_limit(by_ip, lockout_key(ip), MAX_ATTEMPTS):
         return True
-    return bool(username) and _over_limit(by_username, username, MAX_ATTEMPTS_PER_USER)
+    return bool(username) and _over_limit(by_username, username, user_limit)
 
 
 def _record(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
-    by_ip[ip].append(time.time())
+    now = time.time()
+    _sweep_stale(now)
+    by_ip[lockout_key(ip)].append(now)
     if username:
-        by_username[username].append(time.time())
+        by_username[username].append(now)
 
 
 def _clear(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
-    by_ip.pop(ip, None)
+    by_ip.pop(lockout_key(ip), None)
     if username:
         by_username.pop(username, None)
 
@@ -105,6 +159,21 @@ def record_own_password_failure(ip: str, username: str) -> None:
 
 def clear_own_password_failures(ip: str, username: str) -> None:
     _clear(_own_pw_failed_by_ip, _own_pw_failed_by_username, ip, username)
+
+
+def is_2fa_locked(ip: str, username: str = "") -> bool:
+    """verify-2fa: 5 wrong codes per IP (IPv6 /64) or 10 per username in
+    15 minutes, on counters a password login doesn't touch (#156, #165)."""
+    return _is_locked(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username,
+                      user_limit=MAX_2FA_ATTEMPTS_PER_USER)
+
+
+def record_2fa_failure(ip: str, username: str) -> None:
+    _record(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username)
+
+
+def clear_2fa_failures(ip: str, username: str) -> None:
+    _clear(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username)
 
 
 def revoke_token(token: str):
