@@ -743,6 +743,35 @@ MIGRATIONS = [
         BEGIN
             UPDATE refresh_tokens SET revoked = 1 WHERE id = NEW.id;
         END""",
+    # Tokens carry only the username, so a new row for a name whose old row
+    # was deleted by hand would accept the old tokens (#140). Every new row
+    # gets a cutoff and that name's old refresh tokens are revoked. now - 1
+    # keeps a login in the row's own creation second working; any token from
+    # an earlier second is refused. MAX keeps a later cutoff the INSERT set.
+    """CREATE TRIGGER IF NOT EXISTS users_insert_cutoff
+        AFTER INSERT ON users
+        BEGIN
+            UPDATE users
+               SET tokens_valid_after = MAX(COALESCE(NEW.tokens_valid_after, 0),
+                                            CAST(strftime('%s', 'now') AS INTEGER) - 1)
+             WHERE id = NEW.id;
+            UPDATE refresh_tokens SET revoked = 1
+             WHERE username = NEW.username AND revoked = 0;
+        END""",
+    # Same gap for a row renamed by hand onto a name with old tokens (#140).
+    # The renamed user's own tokens carry the old name and are dead anyway,
+    # so this fails closed at now. Refresh tokens of both names are revoked.
+    """CREATE TRIGGER IF NOT EXISTS users_rename_cutoff
+        AFTER UPDATE OF username ON users
+        WHEN OLD.username IS NOT NEW.username
+        BEGIN
+            UPDATE users
+               SET tokens_valid_after = MAX(COALESCE(NEW.tokens_valid_after, 0),
+                                            CAST(strftime('%s', 'now') AS INTEGER))
+             WHERE id = NEW.id;
+            UPDATE refresh_tokens SET revoked = 1
+             WHERE username IN (OLD.username, NEW.username) AND revoked = 0;
+        END""",
     # Plaid's code for currencies with no ISO code, e.g. crypto (#137). Plaid
     # sets exactly one of iso_currency_code / unofficial_currency_code; rows
     # synced before this column existed have NULL here.
@@ -1313,12 +1342,14 @@ def init_db():
         user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "tokens_valid_after" not in user_cols:
             raise RuntimeError("users.tokens_valid_after migration did not apply")
-        # The #136 triggers keep hand-edited deactivations from reviving tokens;
-        # refuse to start without them, the same as the column above.
+        # The #136 and #140 triggers keep hand edits (deactivation, a deleted
+        # and recreated or renamed user) from reviving tokens; refuse to start
+        # without them, the same as the column above.
         triggers = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'trigger'"
         ).fetchall()}
-        for name in ("users_active_change_cutoff", "refresh_tokens_inactive_user"):
+        for name in ("users_active_change_cutoff", "refresh_tokens_inactive_user",
+                     "users_insert_cutoff", "users_rename_cutoff"):
             if name not in triggers:
                 raise RuntimeError(f"trigger {name} migration did not apply")
         # One-time: encrypt any plaintext TOTP secrets still in the DB
