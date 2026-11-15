@@ -411,6 +411,8 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
             ).fetchone()
             if not acct:
                 continue
+            # Optional field: the SDK raises if Plaid omits the key (#142).
+            price_as_of = getattr(h, "institution_price_as_of", None)
             conn.execute("""
                 INSERT INTO plaid_holdings
                     (account_id, security_id, institution_value, institution_price,
@@ -431,7 +433,7 @@ def _sync_investments(item_db_id: int, access_token: str, today: str):
                 h.security_id,
                 h.institution_value,
                 h.institution_price,
-                str(h.institution_price_as_of) if h.institution_price_as_of else None,
+                str(price_as_of) if price_as_of else None,
                 h.quantity,
                 h.cost_basis,
                 *_currency_codes(h),
