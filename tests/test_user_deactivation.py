@@ -553,6 +553,8 @@ class TestDirectDbDeactivation:
 
     def test_any_non_1_is_active_counts_as_deactivation(self, client, auth_headers):
         _create_user(client, auth_headers, "db_null", "DbDeact1")
+        with get_db() as conn:  # clear the #140 new-row cutoff so only the trigger can set one
+            conn.execute("UPDATE users SET tokens_valid_after = NULL WHERE username = 'db_null'")
         self._set_active("db_null", None)
         assert isinstance(self._cutoff("db_null"), int)
 
@@ -581,7 +583,8 @@ class TestDirectDbDeactivation:
         assert client.get("/api/auth/me", headers=auth_headers).status_code == 200
 
     @pytest.mark.parametrize("trigger", [
-        "refresh_tokens_inactive_user", "users_insert_cutoff", "users_rename_cutoff",
+        "users_active_change_cutoff", "refresh_tokens_inactive_user",
+        "users_insert_cutoff", "users_rename_cutoff",
     ])
     def test_startup_fails_if_trigger_did_not_apply(self, monkeypatch, trigger):
         import sqlite3
@@ -696,6 +699,25 @@ class TestRecreatedUserDoesNotReviveTokens:
             auth_module.SECRET_KEY, algorithm=auth_module.ALGORITHM,
         )
         assert _me(client, at_cutoff).status_code == 401
+
+    @pytest.mark.parametrize("verb", ["INSERT OR REPLACE", "REPLACE"])
+    def test_old_tokens_dead_after_one_statement_replace(self, client, auth_headers, verb):
+        """REPLACE deletes the old row and inserts a new one in one statement,
+        the likeliest way to recreate a user by hand."""
+        name = "rc_repl_" + verb.replace(" ", "_").lower()
+        _create_user(client, auth_headers, name, "RcPass111")
+        old_refresh = create_refresh_token(name)
+        old_access = _old_token(name)
+        with get_db() as conn:  # the old row had no cutoff, like every pre-#140 row
+            conn.execute("UPDATE users SET tokens_valid_after = NULL WHERE username = ?", (name,))
+        assert _me(client, old_access).status_code == 200
+
+        with get_db() as conn:
+            conn.execute(f"{verb} INTO users (username, password_hash) VALUES (?, ?)",
+                         (name, hash_password("RcPass222")))
+
+        assert _me(client, old_access).status_code == 401
+        assert validate_refresh_token(old_refresh) is None
 
     def test_insert_keeps_a_later_cutoff_it_sets(self, client, auth_headers):
         later = int(time.time()) + 1000

@@ -110,7 +110,9 @@ def client():
 
 
 @pytest.fixture(scope="session")
-def valid_token():
+def valid_token(client):
+    # Mint after the TestClient lifespan seeds testuser: since #140 a new row's
+    # cutoff is one second before it, so an earlier token would be dead.
     return create_token("testuser")
 
 
