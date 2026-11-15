@@ -157,6 +157,36 @@ def token_rejection_reason(username: str, issued_at: object) -> str | None:
     return None
 
 
+def change_password_and_end_sessions(username: str, new_password: str) -> int:
+    """Save a new password and end every session issued up to now (issue #132).
+
+    In one transaction: store the new hash, move the user's tokens_valid_after
+    cutoff to now (never lowering a later cutoff, like the #136 trigger), and
+    revoke all their refresh tokens. Every access token, refresh token and 2FA
+    pending token issued at or before the cutoff second is refused from then
+    on. Returns the cutoff; a replacement token minted for the caller must
+    have an iat after it.
+    """
+    from api.database import get_db
+    new_hash = hash_password(new_password)
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE users
+                  SET password_hash = ?,
+                      tokens_valid_after = MAX(COALESCE(tokens_valid_after, 0), ?)
+                WHERE username = ?""",
+            (new_hash, int(time.time()), username),
+        )
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked = 1 WHERE username = ? AND revoked = 0",
+            (username,),
+        )
+        row = conn.execute(
+            "SELECT tokens_valid_after FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    return row["tokens_valid_after"]
+
+
 def get_user_2fa(username: str) -> dict | None:
     from api.database import get_db
     with get_db() as conn:
@@ -345,20 +375,29 @@ def create_token(username: str, hours: int | None = None) -> str:
 
 def create_2fa_pending_token(username: str) -> str:
     """Short-lived token proving user passed password auth, scoped to 2FA verification only."""
-    exp = datetime.now(timezone.utc) + timedelta(minutes=5)
-    payload = {"sub": username, "exp": exp, "purpose": "2fa_pending"}
+    now = datetime.now(timezone.utc)
+    payload = {"sub": username, "exp": now + timedelta(minutes=5), "iat": now,
+               "purpose": "2fa_pending"}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_2fa_pending_token(token: str) -> str | None:
-    """Decode a 2FA pending token. Returns username if valid, None otherwise."""
+    """Decode a 2FA pending token. Returns username if valid, None otherwise.
+
+    The token proves the password step passed, so one issued at or before the
+    user's cutoff (a password change, issue #132, or a deactivation) is refused:
+    a login that used the old password can't finish 2FA after the change.
+    """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("purpose") != "2fa_pending":
-            return None
-        return payload.get("sub")
     except jwt.PyJWTError:
         return None
+    if payload.get("purpose") != "2fa_pending":
+        return None
+    username = payload.get("sub")
+    if not isinstance(username, str) or token_rejection_reason(username, payload.get("iat")):
+        return None
+    return username
 
 
 def decode_token_claims(token: str) -> dict | None:

@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Optional
 
@@ -8,7 +9,7 @@ from api.auth import (
     authenticate_user, create_token, create_2fa_pending_token, decode_2fa_pending_token,
     hash_password, validate_password_strength, is_rate_limited, record_failed_attempt,
     clear_failed_attempts, get_user_2fa, generate_totp_setup, confirm_totp_enrollment,
-    verify_totp_code, revoke_token,
+    verify_totp_code, revoke_token, change_password_and_end_sessions,
     create_refresh_token, validate_refresh_token, rotate_refresh_token, revoke_refresh_token,
 )
 from api.database import get_db
@@ -54,6 +55,9 @@ class CreateUserRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+    # The caller's own session type, so its replacement tokens match it:
+    # True when the client holds a refresh token (mobile "keep me signed in").
+    remember_me: bool = False
 
 
 # ── Login ─────────────────────────────────────────────────────────────────────
@@ -208,20 +212,48 @@ async def me(username: str = Depends(get_current_user)):
     return dict(row) if row else {"username": username, "two_fa_enabled": 0}
 
 
+async def _wait_until_past(cutoff: int, limit: float = 3.0) -> None:
+    """Wait (under a second normally) until the clock's whole second is past
+    cutoff, so a token minted next has iat > cutoff and survives the
+    get_current_user check. Gives up after `limit` seconds (a cutoff far in
+    the future means the clock went backwards; the caller just has to sign
+    in again).
+    """
+    deadline = time.monotonic() + limit
+    while int(time.time()) <= cutoff:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(max(cutoff + 1 - time.time(), 0.01), remaining))
+
+
 @router.post("/change-password")
-async def change_password(body: ChangePasswordRequest, username: str = Depends(get_current_user)):
+async def change_password(
+    body: ChangePasswordRequest, request: Request, username: str = Depends(get_current_user),
+):
+    """Change the password and sign out every other session (issue #132).
+
+    All tokens issued up to now stop working, including this request's own,
+    so the response carries replacement tokens for the caller, shaped like a
+    login response for the session type in remember_me.
+
+    Every token-minting handler (login, verify-2fa, refresh, this one) is an
+    async def with a synchronous body, so on the single uvicorn worker none
+    can interleave with the hash + cutoff + revoke write. More workers would
+    need that write to be checked against tokens minted concurrently.
+    """
     if not authenticate_user(username, body.current_password):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     pw_err = validate_password_strength(body.new_password)
     if pw_err:
         raise HTTPException(status_code=400, detail=pw_err)
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE users SET password_hash = ? WHERE username = ?",
-            (hash_password(body.new_password), username)
-        )
-    security_log.log_server_event(f"PASSWORD_CHANGED  username={username}")
-    return {"status": "updated"}
+    cutoff = change_password_and_end_sessions(username, body.new_password)
+    ip = get_client_ip(request)
+    security_log.log_server_event(f"PASSWORD_CHANGED  ip={ip}  username={username}")
+    security_log.log_token_event(ip, username, "ALL_SESSIONS_REVOKED")
+    await _wait_until_past(cutoff)
+    security_log.log_token_event(ip, username, "ISSUED")
+    return {"ok": True, **_issue_tokens(username, body.remember_me)}
 
 
 # ── TOTP 2FA ──────────────────────────────────────────────────────────────────
