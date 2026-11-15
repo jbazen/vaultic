@@ -4,14 +4,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, status, Request, Depends
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from api.auth import (
     authenticate_user, create_token, create_2fa_pending_token, decode_2fa_pending_token,
     hash_password, validate_password_strength, is_rate_limited, record_failed_attempt,
     clear_failed_attempts, get_user_2fa, generate_totp_setup, confirm_totp_enrollment,
     verify_totp_code, revoke_token, change_password_and_end_sessions,
     is_own_password_locked, record_own_password_failure, clear_own_password_failures,
-    is_2fa_locked, record_2fa_failure, clear_2fa_failures,
+    is_2fa_locked, record_2fa_failure, clear_2fa_failures, clear_2fa_user_failures,
     create_refresh_token, validate_refresh_token, rotate_refresh_token, revoke_refresh_token,
 )
 from api.database import get_db
@@ -28,16 +28,22 @@ _MOBILE_TOKEN_HOURS = 1      # 1 hour; renewed silently by /auth/refresh
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
+# A username is a lockout-counter key and is written to security.log, so it is
+# short and has no control characters: no memory blow-up from huge names, no
+# forged log lines from a newline (#165 review).
+Username = Field(max_length=64, pattern=r"^[^\x00-\x1f\x7f]*$")
+Password = Field(max_length=1024)
+
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Username
+    password: str = Password
     remember_me: bool = False   # True → mobile "keep me signed in" (issues refresh token)
 
 
 class Verify2FARequest(BaseModel):
-    pending_token: str
-    code: str
+    pending_token: str = Field(max_length=4096)
+    code: str = Field(max_length=16)
     remember_me: bool = False   # Must match the value passed at the login step
 
 
@@ -50,13 +56,13 @@ class ConfirmTOTPRequest(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]*$")
+    password: str = Password
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Password
+    new_password: str = Password
     # The caller's own session type, so its replacement tokens match it:
     # True when the client holds a refresh token (mobile "keep me signed in").
     remember_me: bool = False
@@ -282,6 +288,9 @@ async def change_password(
     if pw_err:
         raise HTTPException(status_code=400, detail=pw_err)
     cutoff = change_password_and_end_sessions(username, body.new_password)
+    # Pending 2FA logins from before the change are dead now, so wrong codes
+    # typed against the old password no longer lock the owner out (#165).
+    clear_2fa_user_failures(username)
     ip = get_client_ip(request)
     security_log.log_server_event(f"PASSWORD_CHANGED  ip={ip}  username={username}")
     security_log.log_token_event(ip, username, "ALL_SESSIONS_REVOKED")
@@ -292,9 +301,18 @@ async def change_password(
 
 # ── TOTP 2FA ──────────────────────────────────────────────────────────────────
 
+def _refuse_if_2fa_enabled(username: str) -> None:
+    """A session alone can't swap the authenticator of an account that has 2FA:
+    turning it off first needs the password (#165 review)."""
+    info = get_user_2fa(username)
+    if info and info["two_fa_enabled"]:
+        raise HTTPException(status_code=409, detail="Two-factor authentication is already on. Turn it off first.")
+
+
 @router.post("/2fa/setup")
 async def totp_setup(username: str = Depends(get_current_user)):
     """Generate a new TOTP secret + QR code SVG. Pending until confirmed."""
+    _refuse_if_2fa_enabled(username)
     _uri, svg = generate_totp_setup(username)
     security_log.log_server_event(f"2FA_SETUP_STARTED  username={username}")
     return Response(content=svg, media_type="image/svg+xml")
@@ -303,6 +321,7 @@ async def totp_setup(username: str = Depends(get_current_user)):
 @router.post("/2fa/confirm")
 async def totp_confirm(body: ConfirmTOTPRequest, username: str = Depends(get_current_user), request: Request = None):
     ip = get_client_ip(request) if request else "unknown"
+    _refuse_if_2fa_enabled(username)
     ok = confirm_totp_enrollment(username, body.code)
     security_log.log_2fa_attempt(ip, username, ok)
     if not ok:

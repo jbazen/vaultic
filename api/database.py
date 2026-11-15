@@ -785,6 +785,9 @@ MIGRATIONS = [
         jti        TEXT PRIMARY KEY,
         expires_at INTEGER NOT NULL
     )""",
+    # Last 30-second TOTP step used to sign in, so a code works only once
+    # (#165 review). NULL means none used yet.
+    "ALTER TABLE users ADD COLUMN totp_last_step INTEGER",
 ]
 
 
@@ -1349,6 +1352,9 @@ def init_db():
         user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "tokens_valid_after" not in user_cols:
             raise RuntimeError("users.tokens_valid_after migration did not apply")
+        # verify_totp_code writes it on every 2FA login.
+        if "totp_last_step" not in user_cols:
+            raise RuntimeError("users.totp_last_step migration did not apply")
         # The #136 and #140 triggers keep hand edits (deactivation, a deleted
         # and recreated or renamed user) from reviving tokens; refuse to start
         # without them, the same as the column above.

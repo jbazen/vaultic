@@ -149,6 +149,13 @@ class TestOnlyOurHostname:
         assert len(blocks) == 1
         assert "ssl_reject_handshake on;" in blocks[0]
         assert "return 444;" in blocks[0]
+        # The TLS version is chosen from the default server, before SNI.
+        assert "ssl_protocols TLSv1.2 TLSv1.3;" in blocks[0]
+
+    def test_auth_locations_cap_the_body(self):
+        locations = _proxy_locations(_conf_text())
+        for path in ("/api/auth/login", "/api/auth/verify-2fa"):
+            assert "client_max_body_size 16k;" in locations[path]
 
     def test_site_blocks_name_only_our_hostnames(self):
         named = [b for b in _server_blocks(_conf_text()) if "default_server" not in b]

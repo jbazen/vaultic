@@ -172,6 +172,11 @@ def clear_2fa_failures(ip: str, username: str) -> None:
     _clear(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username)
 
 
+def clear_2fa_user_failures(username: str) -> None:
+    """Drop one user's wrong-code count (after a password change)."""
+    _2fa_failed_by_username.pop(username, None)
+
+
 def revoke_token(token: str) -> None:
     """Revoke an access token at logout (#146).
 
@@ -214,6 +219,8 @@ def validate_password_strength(password: str) -> str | None:
         return "Password must contain at least one lowercase letter"
     if not re.search(r"\d", password):
         return "Password must contain at least one digit"
+    if len(password.encode()) > BCRYPT_MAX_BYTES:
+        return "Password must be at most 72 bytes"
     return None
 
 
@@ -221,8 +228,14 @@ def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
+# bcrypt only uses the first 72 bytes. bcrypt 5 raises on longer input, which
+# made a long password at /login a 500; older hashes were made from the first
+# 72 bytes, so checking those bytes keeps every existing password working.
+BCRYPT_MAX_BYTES = 72
+
+
 def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    return bcrypt.checkpw(plain.encode()[:BCRYPT_MAX_BYTES], hashed.encode())
 
 
 def authenticate_user(username: str, password: str) -> bool:
@@ -348,20 +361,38 @@ def confirm_totp_enrollment(username: str, code: str) -> bool:
         return False
     # Decrypt the pending secret to verify the TOTP code
     pending_plain = decrypt(row["totp_pending_secret"])
-    totp = pyotp.TOTP(pending_plain)
-    if not totp.verify(code, valid_window=1):
+    step = _matching_step(pyotp.TOTP(pending_plain), code)
+    if step is None:
         return False
-    # Store confirmed secret encrypted; clear pending
+    # Store confirmed secret encrypted; clear pending. The enrollment code's
+    # step counts as used, so it can't also finish a login.
     with get_db() as conn:
         conn.execute(
-            "UPDATE users SET totp_secret = ?, totp_pending_secret = NULL, two_fa_enabled = 1 WHERE username = ?",
-            (encrypt(pending_plain), username)
+            "UPDATE users SET totp_secret = ?, totp_pending_secret = NULL, two_fa_enabled = 1, "
+            "totp_last_step = ? WHERE username = ?",
+            (encrypt(pending_plain), step, username)
         )
     return True
 
 
+def _matching_step(totp: pyotp.TOTP, code: str) -> int | None:
+    """The 30-second step whose code matches, checking the current step and
+    one on each side (the same window as verify(valid_window=1)), or None."""
+    now = int(time.time())
+    for offset in (-1, 0, 1):
+        at = now + offset * totp.interval
+        if pyotp.utils.strings_equal(str(code), totp.at(at)):
+            return at // totp.interval
+    return None
+
+
 def verify_totp_code(username: str, code: str) -> bool:
-    """Verify a TOTP code at login time."""
+    """Verify a TOTP code at login time.
+
+    Each code works once (#165 review): the matching step must be later than
+    the last one used, and recording it is a single conditional UPDATE, so two
+    requests with the same code can't both pass.
+    """
     from api.encryption import decrypt
     from api.database import get_db
     with get_db() as conn:
@@ -373,7 +404,16 @@ def verify_totp_code(username: str, code: str) -> bool:
         return False
     # Decrypt the stored TOTP secret before verification
     secret_plain = decrypt(row["totp_secret"])
-    return pyotp.TOTP(secret_plain).verify(code, valid_window=1)
+    step = _matching_step(pyotp.TOTP(secret_plain), code)
+    if step is None:
+        return False
+    with get_db() as conn:
+        used = conn.execute(
+            "UPDATE users SET totp_last_step = ? WHERE username = ? AND is_active = 1 "
+            "AND (totp_last_step IS NULL OR totp_last_step < ?)",
+            (step, username, step),
+        ).rowcount
+    return used == 1
 
 
 # ── Standard auth ─────────────────────────────────────────────────────────────

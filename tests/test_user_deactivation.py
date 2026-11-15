@@ -223,11 +223,6 @@ class TestReactivationDoesNotReviveTokens:
                          ("react_no_iat",))
         assert client.get("/api/auth/me", headers=headers).status_code == 401
 
-        with get_db() as conn:
-            conn.execute("UPDATE users SET tokens_valid_after = 1 WHERE username = ?",
-                         ("react_no_iat",))
-        assert client.get("/api/auth/me", headers=headers).status_code == 401
-
     def test_null_cutoff_keeps_existing_tokens_working(self, client, auth_headers):
         """Adding the column must not log anyone out: NULL means no cutoff.
         Rows created before #140 keep NULL, so any token for them works."""

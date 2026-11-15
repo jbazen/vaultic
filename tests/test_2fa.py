@@ -1,9 +1,11 @@
 """Tests for TOTP 2FA enrollment and login flow."""
+import time
+
 import pyotp
 import pytest
 from api.auth import decode_2fa_pending_token
 from api.database import get_db
-from api.encryption import decrypt
+from api.encryption import decrypt, encrypt
 
 
 def _get_totp_pending(username):
@@ -20,6 +22,28 @@ def _get_totp_secret(username):
             "SELECT totp_secret, two_fa_enabled FROM users WHERE username = ?", (username,)
         ).fetchone()
     return dict(row) if row else None
+
+
+@pytest.fixture(autouse=True)
+def _testuser_without_2fa():
+    """Each test starts with 2FA off for testuser: setup and confirm refuse to
+    replace an authenticator that is already on."""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET two_fa_enabled = 0, totp_secret = NULL, totp_pending_secret = NULL, "
+            "totp_last_step = NULL WHERE username = 'testuser'"
+        )
+    yield
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET two_fa_enabled = 0, totp_secret = NULL, totp_pending_secret = NULL, "
+            "totp_last_step = NULL WHERE username = 'testuser'"
+        )
+
+
+def _next_code(secret):
+    """A code from the next 30-second step: the enrollment code's step is used up."""
+    return pyotp.TOTP(secret).at(time.time() + 30)
 
 
 def _enable_2fa(client, auth_headers):
@@ -107,10 +131,42 @@ class TestTOTPLogin:
         res = client.post("/api/auth/login", json={"username": "testuser", "password": "testpassword"})
         pending_token = res.json()["pending_token"]
 
-        valid_code = pyotp.TOTP(plain_secret).now()
-        res = client.post("/api/auth/verify-2fa", json={"pending_token": pending_token, "code": valid_code})
+        res = client.post("/api/auth/verify-2fa",
+                          json={"pending_token": pending_token, "code": _next_code(plain_secret)})
         assert res.status_code == 200
         assert "token" in res.json()
+
+    def test_code_works_only_once(self, client, auth_headers):
+        plain_secret = _enable_2fa(client, auth_headers)
+        code = _next_code(plain_secret)
+        for expected in (200, 401):
+            pending = client.post("/api/auth/login", json={
+                "username": "testuser", "password": "testpassword"}).json()["pending_token"]
+            res = client.post("/api/auth/verify-2fa", json={"pending_token": pending, "code": code})
+            assert res.status_code == expected
+
+    def test_enrollment_code_cannot_finish_a_login(self, client, auth_headers):
+        client.post("/api/auth/2fa/setup", headers=auth_headers)
+        secret = decrypt(_get_totp_pending("testuser"))
+        code = pyotp.TOTP(secret).now()
+        assert client.post("/api/auth/2fa/confirm", headers=auth_headers,
+                           json={"code": code}).status_code == 200
+        pending = client.post("/api/auth/login", json={
+            "username": "testuser", "password": "testpassword"}).json()["pending_token"]
+        res = client.post("/api/auth/verify-2fa", json={"pending_token": pending, "code": code})
+        assert res.status_code == 401
+
+    def test_earlier_step_refused_after_later_one_used(self, client, auth_headers):
+        plain_secret = _enable_2fa(client, auth_headers)
+        totp = pyotp.TOTP(plain_secret)
+        later, earlier = totp.at(time.time() + 30), totp.at(time.time() - 30)
+        if later == earlier:
+            pytest.skip("the two steps happen to share a code")
+        for code, expected in ((later, 200), (earlier, 401)):
+            pending = client.post("/api/auth/login", json={
+                "username": "testuser", "password": "testpassword"}).json()["pending_token"]
+            res = client.post("/api/auth/verify-2fa", json={"pending_token": pending, "code": code})
+            assert res.status_code == expected
 
     def test_verify_2fa_with_invalid_code_returns_401(self, client, auth_headers):
         _enable_2fa(client, auth_headers)
@@ -132,6 +188,26 @@ class TestTOTPLogin:
         regular_token = create_token("testuser")
         res = client.post("/api/auth/verify-2fa", json={"pending_token": regular_token, "code": "123456"})
         assert res.status_code == 401
+
+
+class TestTOTPReplaceRefused:
+    """A session alone can't swap the authenticator while 2FA is on."""
+
+    def test_setup_refused_while_enabled(self, client, auth_headers):
+        secret = _enable_2fa(client, auth_headers)
+        res = client.post("/api/auth/2fa/setup", headers=auth_headers)
+        assert res.status_code == 409
+        assert decrypt(_get_totp_secret("testuser")["totp_secret"]) == secret
+
+    def test_confirm_refused_while_enabled(self, client, auth_headers):
+        secret = _enable_2fa(client, auth_headers)
+        with get_db() as conn:  # a pending secret left from before 2FA was turned on
+            conn.execute("UPDATE users SET totp_pending_secret = ? WHERE username = 'testuser'",
+                         (encrypt("JBSWY3DPEHPK3PXP"),))
+        res = client.post("/api/auth/2fa/confirm", headers=auth_headers,
+                          json={"code": pyotp.TOTP("JBSWY3DPEHPK3PXP").now()})
+        assert res.status_code == 409
+        assert decrypt(_get_totp_secret("testuser")["totp_secret"]) == secret
 
 
 class TestTOTPDisable:

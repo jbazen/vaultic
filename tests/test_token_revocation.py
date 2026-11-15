@@ -135,7 +135,11 @@ class TestRequiredClaims:
 
 
 class TestStartupCheck:
-    def test_startup_fails_without_revoked_tokens_table(self, monkeypatch):
+    @pytest.mark.parametrize("needle, message", [
+        ("revoked_tokens", "revoked_tokens"),
+        ("totp_last_step", "totp_last_step"),
+    ])
+    def test_startup_fails_without_auth_migration(self, monkeypatch, needle, message):
         import api.database as db
 
         bare = sqlite3.connect(":memory:", check_same_thread=False)
@@ -148,6 +152,6 @@ class TestStartupCheck:
 
         monkeypatch.setattr(db, "get_db", _bare_get_db)
         monkeypatch.setattr(db, "MIGRATIONS",
-                            [m for m in db.MIGRATIONS if "revoked_tokens" not in m])
-        with pytest.raises(RuntimeError, match="revoked_tokens"):
+                            [m for m in db.MIGRATIONS if needle not in m])
+        with pytest.raises(RuntimeError, match=message):
             db.init_db()

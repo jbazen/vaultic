@@ -82,11 +82,7 @@ from api import auth as auth_module
 from api.main import app
 from api.auth import create_token
 
-_LOCKOUT_COUNTERS = (
-    auth_module._failed_attempts, auth_module._failed_by_username,
-    auth_module._own_pw_failed_by_ip, auth_module._own_pw_failed_by_username,
-    auth_module._2fa_failed_by_ip, auth_module._2fa_failed_by_username,
-)
+_LOCKOUT_COUNTERS = auth_module._ALL_COUNTERS
 
 
 @pytest.fixture(autouse=True)

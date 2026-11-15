@@ -13,7 +13,7 @@ import pytest
 
 from api import auth as auth_module
 from api.auth import (
-    LOCKOUT_WINDOW, MAX_2FA_ATTEMPTS_PER_USER, MAX_ATTEMPTS, lockout_key,
+    LOCKOUT_WINDOW, MAX_2FA_ATTEMPTS_PER_USER, MAX_ATTEMPTS, create_token, lockout_key,
 )
 from api.database import get_db
 from api.encryption import encrypt
@@ -97,6 +97,31 @@ class TestVerify2FALockout:
         assert statuses[:MAX_ATTEMPTS] == [401] * MAX_ATTEMPTS
         assert set(statuses[MAX_ATTEMPTS:]) == {429}
         assert _verify(client, _login(client, user, pw), totp.now()).status_code == 429
+
+    def test_relogin_does_not_reset_the_username_lock(self, client, totp_user):
+        """#156 with rotating addresses: the per-username count survives a login."""
+        user, pw, totp = totp_user("tf_relogin_user")
+        pending = _login(client, user, pw)
+        for i in range(MAX_2FA_ATTEMPTS_PER_USER - 1):
+            assert _verify(client, pending, _wrong_code(totp),
+                           ip=f"198.51.100.{i + 1}").status_code == 401
+        pending = _login(client, user, pw, ip="192.0.2.50")
+        assert _verify(client, pending, _wrong_code(totp), ip="192.0.2.51").status_code == 401
+        assert _verify(client, pending, totp.now(), ip="192.0.2.52").status_code == 429
+
+    def test_password_change_clears_the_username_lock(self, client, totp_user):
+        user, pw, totp = totp_user("tf_pwchange")
+        pending = _login(client, user, pw)
+        for i in range(MAX_2FA_ATTEMPTS_PER_USER):
+            _verify(client, pending, _wrong_code(totp), ip=f"198.51.100.{i + 1}")
+        assert auth_module.is_2fa_locked("192.0.2.9", user)
+        token = create_token(user)
+        res = client.post("/api/auth/change-password", headers={"Authorization": f"Bearer {token}"},
+                          json={"current_password": pw, "new_password": "TwoFaPass2"})
+        assert res.status_code == 200
+        assert not auth_module.is_2fa_locked("192.0.2.9", user)
+        assert _verify(client, _login(client, user, "TwoFaPass2", ip="192.0.2.9"), totp.now(),
+                       ip="192.0.2.9").status_code == 200
 
     def test_per_username_lock_across_rotating_ips(self, client, totp_user):
         user, pw, totp = totp_user("tf_user")
@@ -190,3 +215,54 @@ class TestStaleSweep:
         clock[0] += 1
         auth_module.record_2fa_failure("192.0.2.1", "a")
         assert "old-ip" not in auth_module._2fa_failed_by_ip
+
+
+class TestRequestLimits:
+    """Usernames are lockout keys and go to security.log (#165 review)."""
+
+    def test_overlong_username_is_refused_and_not_counted(self, client):
+        res = client.post("/api/auth/login", json={"username": "u" * 65, "password": "x"})
+        assert res.status_code == 422
+        assert not auth_module._failed_by_username and not auth_module._failed_attempts
+
+    @pytest.mark.parametrize("name", ["evil\nLOGIN_SUCCESS", "tab\tname", "nul\x00"])
+    def test_control_characters_are_refused(self, client, name):
+        res = client.post("/api/auth/login", json={"username": name, "password": "x"})
+        assert res.status_code == 422
+        assert not auth_module._failed_by_username
+
+    def test_64_character_username_still_counts(self, client):
+        res = client.post("/api/auth/login", json={"username": "u" * 64, "password": "x"})
+        assert res.status_code == 401
+        assert "u" * 64 in auth_module._failed_by_username
+
+    def test_long_password_is_a_wrong_password_not_a_crash(self, client):
+        res = client.post("/api/auth/login",
+                          json={"username": "testuser", "password": "P" * 1000})
+        assert res.status_code == 401
+
+    def test_overlong_password_is_refused(self, client):
+        res = client.post("/api/auth/login",
+                          json={"username": "testuser", "password": "P" * 1025})
+        assert res.status_code == 422
+
+    def test_password_over_72_bytes_cannot_be_set(self, client, auth_headers):
+        res = client.post("/api/auth/users", headers=auth_headers,
+                          json={"username": "tf_long_pw", "password": "Aa1" + "x" * 70})
+        assert res.status_code == 400
+        assert "72 bytes" in res.json()["detail"]
+
+    def test_first_72_bytes_still_sign_in(self):
+        """Hashes made before bcrypt 5 used the first 72 bytes."""
+        import bcrypt
+        from api.auth import verify_password
+        long_pw = "Aa1" + "y" * 80
+        old_hash = bcrypt.hashpw(long_pw.encode()[:72], bcrypt.gensalt(4)).decode()
+        assert verify_password(long_pw, old_hash)
+        assert not verify_password("Aa1" + "z" * 80, old_hash)
+
+    def test_overlong_2fa_fields_are_refused(self, client):
+        assert client.post("/api/auth/verify-2fa", json={
+            "pending_token": "x" * 4097, "code": "123456"}).status_code == 422
+        assert client.post("/api/auth/verify-2fa", json={
+            "pending_token": "x", "code": "1" * 17}).status_code == 422
