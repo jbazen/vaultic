@@ -19,14 +19,6 @@ from api.auth import (
 from api.database import get_db
 
 
-@pytest.fixture(autouse=True)
-def _reset_login_rate_limits():
-    """Failed logins in these tests must not lock out later tests' logins."""
-    yield
-    auth_module._failed_attempts.clear()
-    auth_module._failed_by_username.clear()
-
-
 def _create_user(client, auth_headers, username, password):
     res = client.post("/api/auth/users", headers=auth_headers,
                       json={"username": username, "password": password})

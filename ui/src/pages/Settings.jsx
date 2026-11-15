@@ -113,12 +113,12 @@ function TwoFA({ me, onRefresh }) {
   async function handleDisable() {
     const pwd = prompt("Enter your password to disable two-factor authentication:");
     if (!pwd) return;
-    setLoading(true);
+    setLoading(true); setMsg(null);
     try {
       await disable2FA(pwd);
       onRefresh();
     } catch (err) {
-      setMsg({ text: "Incorrect password", type: "error" });
+      setMsg({ text: err.message || "Incorrect password", type: "error" });
     } finally { setLoading(false); }
   }
 
@@ -137,6 +137,7 @@ function TwoFA({ me, onRefresh }) {
         <button className="btn btn-danger" onClick={handleDisable} disabled={loading}>
           Disable 2FA
         </button>
+        <StatusMsg msg={msg?.text} type={msg?.type} />
       </div>
     );
   }

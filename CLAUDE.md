@@ -338,6 +338,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 - **Login/2FA**: 5 requests/minute via nginx rate limiting
 - **General API**: 30 requests/second via nginx
 - **Per-username rate limiting**: 20 attempts per username per 15 minutes (prevents IP rotation bypass)
+- **Signed-in password checks** (change-password, 2FA disable) go through `_check_own_password` in `api/routers/auth.py`: same 5-per-IP and 20-per-username limits, on separate counters from login so failed logins can't lock the owner out of changing their password (#151). Any new endpoint that checks a signed-in user's password must use it
 - **Memory cleanup**: empty keys in rate-limit dicts must be cleaned up to prevent memory leaks
 
 ### Network & Headers

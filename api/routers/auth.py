@@ -10,6 +10,7 @@ from api.auth import (
     hash_password, validate_password_strength, is_rate_limited, record_failed_attempt,
     clear_failed_attempts, get_user_2fa, generate_totp_setup, confirm_totp_enrollment,
     verify_totp_code, revoke_token, change_password_and_end_sessions,
+    is_own_password_locked, record_own_password_failure, clear_own_password_failures,
     create_refresh_token, validate_refresh_token, rotate_refresh_token, revoke_refresh_token,
 )
 from api.database import get_db
@@ -212,6 +213,27 @@ async def me(username: str = Depends(get_current_user)):
     return dict(row) if row else {"username": username, "two_fa_enabled": 0}
 
 
+def _check_own_password(request: Request, username: str, password: str, action: str) -> bool:
+    """Check a signed-in user's password behind a lockout (issue #151).
+
+    Same limits as login (5 per IP, 20 per username, 15 minutes) on separate
+    counters, so failed logins, which need no session, can't lock the owner
+    out of changing their password. Raises 429 while either counter is
+    locked, without checking the password. A wrong password is counted; a
+    right one clears both counters, as a successful login does.
+    """
+    ip = get_client_ip(request)
+    if is_own_password_locked(ip, username):
+        security_log.log_server_event(f"RATE_LIMITED  ip={ip}  user={username}  action={action}")
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
+    if not authenticate_user(username, password):
+        record_own_password_failure(ip, username)
+        security_log.log_server_event(f"PASSWORD_CHECK_FAILED  ip={ip}  user={username}  action={action}")
+        return False
+    clear_own_password_failures(ip, username)
+    return True
+
+
 async def _wait_until_past(cutoff: int, limit: float = 3.0) -> None:
     """Wait (under a second normally) until the clock's whole second is past
     cutoff, so a token minted next has iat > cutoff and survives the
@@ -242,7 +264,7 @@ async def change_password(
     can interleave with the hash + cutoff + revoke write. More workers would
     need that write to be checked against tokens minted concurrently.
     """
-    if not authenticate_user(username, body.current_password):
+    if not _check_own_password(request, username, body.current_password, "change_password"):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     pw_err = validate_password_strength(body.new_password)
     if pw_err:
@@ -282,9 +304,11 @@ class Disable2FARequest(BaseModel):
 
 
 @router.post("/2fa/disable")
-async def totp_disable(body: Disable2FARequest, username: str = Depends(get_current_user)):
+async def totp_disable(
+    body: Disable2FARequest, request: Request, username: str = Depends(get_current_user),
+):
     """Disable 2FA — requires current password to prevent abuse of stolen sessions."""
-    if not authenticate_user(username, body.password):
+    if not _check_own_password(request, username, body.password, "2fa_disable"):
         raise HTTPException(status_code=401, detail="Password is incorrect")
     with get_db() as conn:
         conn.execute(

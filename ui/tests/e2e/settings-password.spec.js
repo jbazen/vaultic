@@ -92,6 +92,22 @@ test.describe("Change password (issue #132)", () => {
     expect(await storedTokens(page)).toEqual(before);
   });
 
+  test("too many wrong guesses shows the lockout message and keeps the session", async ({ page }) => {
+    // Issue #151: the server answers 429 once the login lockout is hit.
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/change-password", r =>
+      r.fulfill({ status: 429, json: { detail: "Too many failed attempts. Try again in 15 minutes." } }));
+    await loginOnly(page);
+    await page.getByRole("link", { name: /settings/i }).click();
+    const before = await storedTokens(page);
+
+    await fillAndSubmit(page);
+
+    await expect(page.getByText("Too many failed attempts. Try again in 15 minutes.")).toBeVisible();
+    expect(await storedTokens(page)).toEqual(before);
+    await expect(page.getByPlaceholder(/username/i)).toHaveCount(0);
+  });
+
   test("Security Log polling during the change does not sign the user out", async ({ page }) => {
     // The server kills the old token before it answers, so any request still
     // carrying it gets a real 401, while the change is still pending. Polls
@@ -176,5 +192,38 @@ test.describe("Change password (issue #132)", () => {
     await expect(page.getByText(/other devices have been signed out/i)).toBeVisible();
     await expect(other.getByPlaceholder(/username/i)).toHaveCount(0);
     expect(await storedTokens(page)).toEqual({ token: newToken, refresh: null });
+  });
+});
+
+test.describe("Disable 2FA errors (issue #151)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("https://cdn.plaid.com/**", r =>
+      r.fulfill({ contentType: "application/javascript", body: "" }));
+  });
+
+  async function tryDisable(page, status, detail) {
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/me", r =>
+      r.fulfill({ json: { username: "testuser", two_fa_enabled: 1 } }));
+    await page.route("**/api/auth/2fa/disable", r => r.fulfill({ status, json: { detail } }));
+    await loginOnly(page);
+    await page.getByRole("link", { name: /settings/i }).click();
+    const before = await storedTokens(page);
+    page.once("dialog", d => d.accept("SomePass12"));
+    await page.getByRole("button", { name: "Disable 2FA" }).click();
+    return before;
+  }
+
+  test("too many wrong guesses shows the lockout message and keeps the session", async ({ page }) => {
+    const before = await tryDisable(page, 429, "Too many failed attempts. Try again in 15 minutes.");
+    await expect(page.getByText("Too many failed attempts. Try again in 15 minutes.")).toBeVisible();
+    expect(await storedTokens(page)).toEqual(before);
+    await expect(page.getByRole("button", { name: "Disable 2FA" })).toBeVisible();
+  });
+
+  test("wrong password shows the server's message", async ({ page }) => {
+    await tryDisable(page, 401, "Password is incorrect");
+    await expect(page.getByText("Password is incorrect")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disable 2FA" })).toBeVisible();
   });
 });

@@ -37,6 +37,13 @@ TOKEN_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
 
 _failed_attempts: dict[str, list[float]] = defaultdict(list)
 _failed_by_username: dict[str, list[float]] = defaultdict(list)
+# Wrong passwords typed by a user who is already signed in (change password,
+# turn off 2FA). Same limits as login but separate counters, so wrong guesses
+# at /login, which need no session, can't block the owner's own
+# sign-out-everywhere control (issue #151).
+_own_pw_failed_by_ip: dict[str, list[float]] = defaultdict(list)
+_own_pw_failed_by_username: dict[str, list[float]] = defaultdict(list)
+_Counter = dict[str, list[float]]
 MAX_ATTEMPTS = 5
 MAX_ATTEMPTS_PER_USER = 20  # Per-username across all IPs
 LOCKOUT_WINDOW = 15 * 60
@@ -46,33 +53,58 @@ LOCKOUT_WINDOW = 15 * 60
 _token_denylist: dict[str, float] = {}
 
 
-def is_rate_limited(ip: str, username: str = "") -> bool:
-    """Check both per-IP and per-username rate limits."""
+def _over_limit(counter: _Counter, key: str, limit: int) -> bool:
+    """Drop failures older than the window (and the key once empty), then compare."""
     now = time.time()
-    _failed_attempts[ip] = [t for t in _failed_attempts[ip] if now - t < LOCKOUT_WINDOW]
-    if not _failed_attempts[ip]:
-        _failed_attempts.pop(ip, None)
-    elif len(_failed_attempts[ip]) >= MAX_ATTEMPTS:
+    counter[key] = [t for t in counter[key] if now - t < LOCKOUT_WINDOW]
+    if not counter[key]:
+        counter.pop(key, None)
+        return False
+    return len(counter[key]) >= limit
+
+
+def _is_locked(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> bool:
+    if _over_limit(by_ip, ip, MAX_ATTEMPTS):
         return True
+    return bool(username) and _over_limit(by_username, username, MAX_ATTEMPTS_PER_USER)
+
+
+def _record(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
+    by_ip[ip].append(time.time())
     if username:
-        _failed_by_username[username] = [t for t in _failed_by_username[username] if now - t < LOCKOUT_WINDOW]
-        if not _failed_by_username[username]:
-            _failed_by_username.pop(username, None)
-        elif len(_failed_by_username[username]) >= MAX_ATTEMPTS_PER_USER:
-            return True
-    return False
+        by_username[username].append(time.time())
+
+
+def _clear(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
+    by_ip.pop(ip, None)
+    if username:
+        by_username.pop(username, None)
+
+
+def is_rate_limited(ip: str, username: str = "") -> bool:
+    """Check both per-IP and per-username login rate limits."""
+    return _is_locked(_failed_attempts, _failed_by_username, ip, username)
 
 
 def record_failed_attempt(ip: str, username: str = ""):
-    _failed_attempts[ip].append(time.time())
-    if username:
-        _failed_by_username[username].append(time.time())
+    _record(_failed_attempts, _failed_by_username, ip, username)
 
 
 def clear_failed_attempts(ip: str, username: str = ""):
-    _failed_attempts.pop(ip, None)
-    if username:
-        _failed_by_username.pop(username, None)
+    _clear(_failed_attempts, _failed_by_username, ip, username)
+
+
+def is_own_password_locked(ip: str, username: str) -> bool:
+    """Signed-in password checks: same limits as login, own counters (#151)."""
+    return _is_locked(_own_pw_failed_by_ip, _own_pw_failed_by_username, ip, username)
+
+
+def record_own_password_failure(ip: str, username: str) -> None:
+    _record(_own_pw_failed_by_ip, _own_pw_failed_by_username, ip, username)
+
+
+def clear_own_password_failures(ip: str, username: str) -> None:
+    _clear(_own_pw_failed_by_ip, _own_pw_failed_by_username, ip, username)
 
 
 def revoke_token(token: str):
