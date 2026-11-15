@@ -528,26 +528,54 @@ export function urlBase64ToUint8Array(base64String) {
 }
 
 /**
+ * True unless the browser reports that `sub` was made with a VAPID key other
+ * than `serverKey` (bytes). A browser that does not expose the key cannot be
+ * checked, so its subscription is kept.
+ */
+function hasServerKey(sub, serverKey) {
+  const key = sub.options?.applicationServerKey;
+  if (!key) return true;
+  const bytes = new Uint8Array(key);
+  return bytes.length === serverKey.length && bytes.every((b, i) => b === serverKey[i]);
+}
+
+/** Unsubscribe `sub` in the browser and deactivate its row on the server. */
+async function dropSubscription(sub) {
+  const endpoint = sub.endpoint;
+  await sub.unsubscribe();
+  await apiFetch("/api/push/unsubscribe", {
+    method: "POST",
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
+/**
  * Subscribe this browser to Web Push and register the subscription with
  * the Vaultic server. Returns the PushSubscription object on success.
  *
  * Flow:
  *   1. Fetch VAPID public key from server
- *   2. Request notification permission from the user
- *   3. Call PushManager.subscribe() with the VAPID key
+ *   2. Drop a subscription made with an older key (see below)
+ *   3. Call PushManager.subscribe() with the VAPID key (asks for permission)
  *   4. POST the subscription to /api/push/subscribe
+ *
+ * After a VAPID key rotation (issue #59) the old subscription can no longer
+ * receive pushes, and subscribe() rejects a new key while it exists.
  */
 export async function subscribePush() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
     throw new Error("Push notifications are not supported in this browser");
   }
 
-  const vapidKey = await getPushVapidKey();
-  const reg      = await navigator.serviceWorker.ready;
+  const serverKey = urlBase64ToUint8Array(await getPushVapidKey());
+  const reg       = await navigator.serviceWorker.ready;
+
+  const existing = await reg.pushManager.getSubscription();
+  if (existing && !hasServerKey(existing, serverKey)) await dropSubscription(existing);
 
   const subscription = await reg.pushManager.subscribe({
     userVisibleOnly:      true,
-    applicationServerKey: urlBase64ToUint8Array(vapidKey),
+    applicationServerKey: serverKey,
   });
 
   const json = subscription.toJSON();
@@ -570,22 +598,47 @@ export async function unsubscribePush() {
 
   const reg = await navigator.serviceWorker.ready;
   const sub = await reg.pushManager.getSubscription();
-  if (!sub) return;
-
-  const endpoint = sub.endpoint;
-  await sub.unsubscribe();
-
-  await apiFetch("/api/push/unsubscribe", {
-    method: "POST",
-    body: JSON.stringify({ endpoint }),
-  });
+  if (sub) await dropSubscription(sub);
 }
 
-/** Return the current PushSubscription, or null if not subscribed. */
+// One renewal at a time (StrictMode runs the App effect twice).
+let _pushRenewal = null;
+
+/**
+ * Return the current PushSubscription, or null if not subscribed. A
+ * subscription made with an older VAPID key counts as not subscribed: it can
+ * no longer receive pushes.
+ */
 export async function getPushSubscription() {
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) return null;
+  // Let a renewal started at sign-in finish, so Settings shows its result.
+  if (_pushRenewal) await _pushRenewal.catch(() => {});
   const reg = await navigator.serviceWorker.ready;
-  return reg.pushManager.getSubscription();
+  const sub = await reg.pushManager.getSubscription();
+  if (!sub) return null;
+  const serverKey = urlBase64ToUint8Array(await getPushVapidKey());
+  return hasServerKey(sub, serverKey) ? sub : null;
+}
+
+/**
+ * Called after sign-in. If this device had push turned on but the server's
+ * VAPID key has changed since (key rotation, issue #59), subscribe again with
+ * the new key so alerts keep arriving without a trip to Settings. Does nothing
+ * unless there is a subscription with an older key and permission is granted.
+ * If the browser refuses (some need a tap first), Settings shows push as off.
+ */
+export function renewStalePushSubscription() {
+  _pushRenewal ??= (async () => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+    if (Notification.permission !== "granted") return;
+    // getRegistration(), not .ready: .ready never settles without a worker.
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager.getSubscription();
+    if (!sub) return;
+    const serverKey = urlBase64ToUint8Array(await getPushVapidKey());
+    if (!hasServerKey(sub, serverKey)) await subscribePush();
+  })().finally(() => { _pushRenewal = null; });
+  return _pushRenewal;
 }
 
 /** Fire a test push notification to all active subscriptions. */

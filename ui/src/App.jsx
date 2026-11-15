@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Routes, Route, NavLink, Navigate } from "react-router-dom";
-import { isAuthed, logout } from "./api.js";
+import { isAuthed, logout, renewStalePushSubscription } from "./api.js";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Import from "./pages/Import.jsx";
@@ -33,6 +33,12 @@ export default function App() {
       window.removeEventListener("storage", onStorage);
     };
   }, []);
+
+  // Keep push alerts working after a VAPID key rotation (issue #59). A failure
+  // only leaves push off, which Settings then shows.
+  useEffect(() => {
+    if (authed) renewStalePushSubscription().catch(() => {});
+  }, [authed]);
 
   if (!authed) {
     return <Login onLogin={() => setAuthed(true)} />;
