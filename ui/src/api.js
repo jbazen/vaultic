@@ -76,7 +76,20 @@ async function ensureFreshToken() {
 
 // ── Core fetch wrapper ────────────────────────────────────────────────────────
 
+// Set while a password change is in flight (issue #132). The server ends every
+// session issued so far, this tab's token included, before it answers with
+// replacement tokens; requests sent meanwhile would get a 401 and sign the
+// user out. Resolves (never rejects) once the new tokens are stored.
+let _passwordChange = null;
+
 async function apiFetch(path, options = {}) {
+  // Hold new requests until a password change has stored its new tokens.
+  if (_passwordChange) await _passwordChange;
+  return sendRequest(path, options);
+}
+
+// canRetry=false: no stale-token retry (a retry itself, or the password change).
+async function sendRequest(path, options, canRetry = true) {
   // Silently refresh the access token if it's expired and we have a refresh token
   await ensureFreshToken();
 
@@ -107,6 +120,13 @@ async function apiFetch(path, options = {}) {
   // a wrong current-password — must surface as normal errors instead of
   // wiping the session and forcing a re-login with 2FA. See issue #65.
   if (res.status === 401 && res.headers.get("WWW-Authenticate")) {
+    // Sent with a token a password change has just replaced (another tab or a
+    // request already in flight): retry once with the new token instead.
+    if (canRetry) {
+      if (_passwordChange) await _passwordChange;
+      const current = getToken();
+      if (current && current !== token) return sendRequest(path, options, false);
+    }
     clearToken();
     clearRefreshToken();
     window.dispatchEvent(new Event("auth:logout"));
@@ -342,17 +362,27 @@ export async function deleteUser(username) {
  * Change the password. The server signs out every session issued so far,
  * this one included, and returns replacement tokens for this device (#132).
  * remember_me asks for the same session type this device already has.
+ * Other requests wait until the new tokens are stored (see _passwordChange).
  */
 export async function changePassword(current_password, new_password) {
-  const res = await apiFetch("/api/auth/change-password", {
-    method: "POST",
-    body: JSON.stringify({ current_password, new_password, remember_me: !!getRefreshToken() }),
-  });
-  const data = await res.json();
-  setToken(data.token);
-  if (data.refresh_token) setRefreshToken(data.refresh_token);
-  else clearRefreshToken();
-  return data;
+  let done;
+  _passwordChange = new Promise(resolve => { done = resolve; });
+  try {
+    const res = await sendRequest("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ current_password, new_password, remember_me: !!getRefreshToken() }),
+    }, false);
+    const data = await res.json();
+    if (data.token) {
+      setToken(data.token);
+      if (data.refresh_token) setRefreshToken(data.refresh_token);
+      else clearRefreshToken();
+    }
+    return data;
+  } finally {
+    _passwordChange = null;
+    done();
+  }
 }
 
 // --- 2FA (TOTP) ---

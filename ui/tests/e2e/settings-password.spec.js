@@ -91,4 +91,45 @@ test.describe("Change password (issue #132)", () => {
     await expect(page.getByText("Current password is incorrect")).toBeVisible();
     expect(await storedTokens(page)).toEqual(before);
   });
+
+  test("Security Log polling during the change does not sign the user out", async ({ page }) => {
+    // The server kills the old token before it answers, so any request still
+    // carrying it gets a real 401. Polls sent during the change must wait, and
+    // a poll already in flight must retry with the new token.
+    const oldAuth = "Bearer test-jwt-token";
+    const newToken = fakeJwt("after-poll-race");
+    let changed = false;
+    let markResponded;
+    const responded = new Promise(resolve => { markResponded = resolve; });
+    const logAuths = [];
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/security-log*", async r => {
+      const auth = r.request().headers()["authorization"];
+      logAuths.push({ auth, afterChange: changed });
+      if (!changed) await responded;            // in flight across the change
+      if (auth === oldAuth) {
+        return r.fulfill({ status: 401, headers: { "WWW-Authenticate": "Bearer" },
+                           json: { detail: "Not authenticated" } });
+      }
+      return r.fulfill({ json: { lines: [] } });
+    });
+    await page.route("**/api/auth/change-password", async r => {
+      changed = true;
+      await new Promise(resolve => setTimeout(resolve, 3500)); // spans a 3 s poll
+      await r.fulfill({ json: { ok: true, token: newToken } });
+      markResponded();
+    });
+    await loginOnly(page);
+    await page.getByRole("link", { name: /settings/i }).click();
+    await expect.poll(() => logAuths.length).toBeGreaterThan(0);
+
+    await fillAndSubmit(page);
+
+    await expect(page.getByText(/other devices have been signed out/i)).toBeVisible({ timeout: 8000 });
+    await expect.poll(() => logAuths.some(l => l.auth === `Bearer ${newToken}`)).toBe(true);
+    expect(logAuths.filter(l => l.afterChange && l.auth === oldAuth)).toEqual([]);
+    await page.waitForTimeout(500);
+    expect(await storedTokens(page)).toEqual({ token: newToken, refresh: null });
+    await expect(page.getByPlaceholder(/username/i)).toHaveCount(0);
+  });
 });
