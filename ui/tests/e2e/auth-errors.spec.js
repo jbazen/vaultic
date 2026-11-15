@@ -24,11 +24,29 @@ test.describe("Login error messages (issue #157)", () => {
     await expect(page.getByText("Invalid credentials")).toHaveCount(0);
   });
 
-  test("an nginx 429 page without JSON still says to wait", async ({ page }) => {
+  test("an nginx 429 page without JSON says to wait a minute", async ({ page }) => {
     await page.route("**/api/auth/login", r =>
       r.fulfill({ status: 429, contentType: "text/html", body: "<html>429</html>" }));
     await submitLogin(page);
-    await expect(page.getByText("Too many attempts. Try again in 15 minutes.")).toBeVisible();
+    await expect(page.getByText("Too many attempts. Wait a minute and try again.")).toBeVisible();
+  });
+
+  test("an unreachable server gets a plain message", async ({ page }) => {
+    await page.route("**/api/auth/login", r => r.abort());
+    await submitLogin(page);
+    await expect(page.getByText("Can't reach the server. Check your connection and try again."))
+      .toBeVisible();
+  });
+
+  test("an unreachable server at the 2FA step gets a plain message", async ({ page }) => {
+    await page.route("**/api/auth/login", r =>
+      r.fulfill({ json: { requires_2fa: true, pending_token: "pending" } }));
+    await page.route("**/api/auth/verify-2fa", r => r.abort());
+    await submitLogin(page);
+    await page.locator("input[maxlength='6']").fill("123456");
+    await page.getByRole("button", { name: "Verify" }).click();
+    await expect(page.getByText("Can't reach the server. Check your connection and try again."))
+      .toBeVisible();
   });
 
   test("a wrong password still says Invalid credentials", async ({ page }) => {
@@ -53,13 +71,15 @@ test.describe("Login error messages (issue #157)", () => {
 test.describe("Token refresh failures (issue #168)", () => {
   const expired = fakeJwt("expired", 1000000000);
 
-  async function openWithExpiredSession(page, refreshStatus) {
+  // reply: a status code, or a function (route) => fulfil/abort it.
+  async function openWithExpiredSession(page, reply) {
     const sentWithExpired = [];
     let refreshCalls = 0;
     await mockAllAPIs(page);
-    await page.route("**/api/auth/refresh", r => {
+    await page.route("**/api/auth/refresh", async r => {
       refreshCalls += 1;
-      r.fulfill({ status: refreshStatus, json: { detail: "nope" } });
+      if (typeof reply === "function") await reply(r);
+      else await r.fulfill({ status: reply, json: { detail: "nope" } });
     });
     page.on("request", req => {
       if (req.headers()["authorization"] === `Bearer ${expired}`) sentWithExpired.push(req.url());
@@ -76,9 +96,15 @@ test.describe("Token refresh failures (issue #168)", () => {
     return { sentWithExpired, refreshCalls: () => refreshCalls };
   }
 
-  for (const status of [429, 503]) {
-    test(`a ${status} from refresh keeps the device signed in`, async ({ page }) => {
-      const { sentWithExpired } = await openWithExpiredSession(page, status);
+  const transient = {
+    "a 429": 429,
+    "a 503": 503,
+    "a network error": r => r.abort(),
+    "a 200 without tokens": r => r.fulfill({ json: {} }),
+  };
+  for (const [name, reply] of Object.entries(transient)) {
+    test(`${name} from refresh keeps the device signed in`, async ({ page }) => {
+      const { sentWithExpired } = await openWithExpiredSession(page, reply);
       await page.waitForTimeout(500);
       await expect(page.getByPlaceholder(/username/i)).toHaveCount(0);
       expect(await page.evaluate(() => localStorage.getItem("vaultic_refresh_token")))
@@ -124,5 +150,52 @@ test.describe("Token refresh failures (issue #168)", () => {
     await openWithExpiredSession(page, 401);
     await expect(page.getByPlaceholder(/username/i)).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("vaultic_refresh_token"))).toBeNull();
+  });
+
+  test("a 401 for a token another tab already rotated keeps that tab's new tokens", async ({ page }) => {
+    const otherTab = fakeJwt("other-tab", 4102444800);
+    await openWithExpiredSession(page, async r => {
+      // The other tab stores its new pair while this tab's request is in flight.
+      await page.evaluate(token => {
+        localStorage.setItem("vaultic_token", token);
+        localStorage.setItem("vaultic_refresh_token", "refresh-other-tab");
+      }, otherTab);
+      await r.fulfill({ status: 401, json: { detail: "revoked" } });
+    });
+    await page.waitForTimeout(500);
+    await expect(page.getByPlaceholder(/username/i)).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem("vaultic_refresh_token")))
+      .toBe("refresh-other-tab");
+  });
+});
+
+test.describe("Sign out (issue #168 review)", () => {
+  test("sends the newest refresh token when a refresh is due", async ({ page }) => {
+    const longLived = fakeJwt("long", 4102444800);
+    let logoutBody = null;
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/refresh", r =>
+      r.fulfill({ json: { token: longLived, refresh_token: "refresh-2" } }));
+    await page.route("**/api/auth/logout", r => {
+      logoutBody = r.request().postDataJSON();
+      r.fulfill({ json: { status: "logged_out" } });
+    });
+    await page.addInitScript(token => {
+      if (!sessionStorage.getItem("seeded")) {
+        localStorage.setItem("vaultic_token", token);
+        localStorage.setItem("vaultic_refresh_token", "refresh-1");
+        sessionStorage.setItem("seeded", "1");
+      }
+    }, longLived);
+    await page.goto("/");
+    await page.waitForSelector("text=Net Worth", { timeout: 8000 });
+    // The access token is now within 2 minutes of expiry, so a refresh is due.
+    const nearExpiry = fakeJwt("near", Math.floor(Date.now() / 1000) + 60);
+    await page.evaluate(token => localStorage.setItem("vaultic_token", token), nearExpiry);
+
+    await page.getByRole("button", { name: "Sign out" }).click();
+
+    await expect(page.getByPlaceholder(/username/i)).toBeVisible();
+    await expect.poll(() => logoutBody).toEqual({ refresh_token: "refresh-2" });
   });
 });

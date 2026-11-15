@@ -339,7 +339,8 @@ These rules come from a full security audit (March 2026). Every finding below wa
 - **General API**: 30 requests/second per client IP via nginx
 - **Per-username rate limiting**: 20 attempts per username per 15 minutes (prevents IP rotation bypass)
 - **Signed-in password checks** (change-password, 2FA disable) go through `_check_own_password` in `api/routers/auth.py`: same 5-per-IP and 20-per-username limits, on separate counters from login so failed logins can't lock the owner out of changing their password (#151). Any new endpoint that checks a signed-in user's password must use it
-- **2FA codes**: `/verify-2fa` has its own counters, 5 wrong codes per IP and 10 per username in 15 minutes (`is_2fa_locked` in `api/auth.py`). A correct password at `/login` doesn't clear them (#156) and they don't lock password login (#165)
+- **2FA codes**: `/verify-2fa` has its own counters, 5 wrong codes per IP and 10 per username in 15 minutes (`is_2fa_locked` in `api/auth.py`). A correct password at `/login` doesn't clear them (#156) and they don't lock password login (#165). Each code works once (`users.totp_last_step`), and `/2fa/setup` and `/2fa/confirm` refuse (409) while 2FA is on, so a session alone can't swap the authenticator
+- **Login input**: usernames are at most 64 characters with no control characters (they are lockout keys and go to `security.log`); nginx caps login and verify-2fa bodies at 16k; `verify_password` checks the first 72 bytes (bcrypt 5 raises on more) and new passwords may not exceed 72 bytes
 - **IPv6**: every lockout counter keys an IPv6 address by its /64 (`lockout_key`), so one host can't rotate through its addresses for fresh lockouts (#165)
 - **Memory cleanup**: empty keys in rate-limit dicts must be cleaned up to prevent memory leaks. Recording a failure also sweeps every lockout counter for aged-out keys, at most once a minute (#165)
 
@@ -347,7 +348,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 
 - **Content-Security-Policy** header set in middleware — `default-src 'self'` with specific directives for scripts, styles, images, connections
 - **CORS**: restrict to known origins in production
-- **Origin hostname**: nginx answers only for `vaulticsage.com` / `www.vaulticsage.com`; `default_server` blocks close everything else (444 on port 80, rejected TLS handshake on 443), so another Cloudflare zone can't route to the origin and pick the client IP (#166)
+- **Origin hostname**: nginx answers only for `vaulticsage.com` / `www.vaulticsage.com`; `default_server` blocks close everything else (444 on port 80, rejected TLS handshake on 443), so another Cloudflare zone can't route to the origin and pick the client IP unless it rewrites both SNI and Host to ours, which only Cloudflare Authenticated Origin Pulls would stop (#166). The deploy also health-checks the site through nginx with our hostname
 - **Client IP** (#155): nginx's `real_ip` takes `CF-Connecting-IP` only from Cloudflare's ranges (`set_real_ip_from` in `deploy/vaultic-nginx.conf`), so `$remote_addr` is the visitor. The rate limits key on `$binary_remote_addr` (never empty) and nginx sends `X-Forwarded-For $remote_addr`, so nginx and the app's lockouts count the same client. Never key anything on `$http_cf_connecting_ip` directly: a request straight to the origin could forge it. The header is trusted from any Cloudflare peer, not only our zone, so a request routed through another Cloudflare zone can still set it. `tests/test_nginx_config.py` runs the config in a real nginx (CI has it)
 - **X-Forwarded-For**: trust rightmost entry only (set by nginx, not spoofable by client)
 - **nginx `client_max_body_size`**: set to `25m` — default 1MB blocks PDF uploads
