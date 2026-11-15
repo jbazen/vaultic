@@ -212,15 +212,19 @@ async def me(username: str = Depends(get_current_user)):
     return dict(row) if row else {"username": username, "two_fa_enabled": 0}
 
 
-async def _wait_until_past(cutoff: int) -> None:
+async def _wait_until_past(cutoff: int, limit: float = 3.0) -> None:
     """Wait (under a second normally) until the clock's whole second is past
     cutoff, so a token minted next has iat > cutoff and survives the
-    get_current_user check. Gives up after 3 s (a cutoff far in the future
-    means the clock went backwards; the caller just has to sign in again).
+    get_current_user check. Gives up after `limit` seconds (a cutoff far in
+    the future means the clock went backwards; the caller just has to sign
+    in again).
     """
-    deadline = time.monotonic() + 3
-    while int(time.time()) <= cutoff and time.monotonic() < deadline:
-        await asyncio.sleep(max(cutoff + 1 - time.time(), 0.01))
+    deadline = time.monotonic() + limit
+    while int(time.time()) <= cutoff:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(max(cutoff + 1 - time.time(), 0.01), remaining))
 
 
 @router.post("/change-password")
@@ -232,6 +236,11 @@ async def change_password(
     All tokens issued up to now stop working, including this request's own,
     so the response carries replacement tokens for the caller, shaped like a
     login response for the session type in remember_me.
+
+    Every token-minting handler (login, verify-2fa, refresh, this one) is an
+    async def with a synchronous body, so on the single uvicorn worker none
+    can interleave with the hash + cutoff + revoke write. More workers would
+    need that write to be checked against tokens minted concurrently.
     """
     if not authenticate_user(username, body.current_password):
         raise HTTPException(status_code=401, detail="Current password is incorrect")

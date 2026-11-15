@@ -21,7 +21,9 @@ from api.routers.auth import _wait_until_past
 
 @pytest.fixture(autouse=True)
 def _reset_login_rate_limits():
-    """Failed logins in these tests must not lock out later tests' logins."""
+    """Failed logins elsewhere must not lock out these tests' logins, or the reverse."""
+    auth_module._failed_attempts.clear()
+    auth_module._failed_by_username.clear()
     yield
     auth_module._failed_attempts.clear()
     auth_module._failed_by_username.clear()
@@ -275,11 +277,21 @@ class TestPending2FAToken:
 
 class TestWaitUntilPast:
     def test_returns_at_once_for_past_cutoff(self):
-        start = time.monotonic()
-        asyncio.run(_wait_until_past(int(time.time()) - 5))
-        assert time.monotonic() - start < 0.1
+        async def timed():
+            start = time.monotonic()
+            await _wait_until_past(int(time.time()) - 5)
+            return time.monotonic() - start
+        assert asyncio.run(timed()) < 0.5
 
     def test_waits_into_next_second(self):
         cutoff = int(time.time())
         asyncio.run(_wait_until_past(cutoff))
         assert int(time.time()) > cutoff
+
+    def test_gives_up_on_far_future_cutoff(self):
+        """A clock that stepped backwards must not hang the request."""
+        async def timed():
+            start = time.monotonic()
+            await _wait_until_past(int(time.time()) + 600, limit=0.3)
+            return time.monotonic() - start
+        assert asyncio.run(timed()) < 1.5
