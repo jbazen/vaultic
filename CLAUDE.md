@@ -287,7 +287,7 @@ r.fulfill({ json: { rates: [] } });
 
 - `deploy.yml` (GitHub Actions) deploys via SSH — changes are live immediately
 - Always test locally before pushing to main
-- `nginx` config changes require manual reload — CI/CD only restarts the Python process
+- `deploy.yml` installs `deploy/vaultic-nginx.conf` on every deploy: copies it to `sites-available/vaultic`, keeps `sites-enabled/vaultic` a symlink to it, runs `nginx -t` and reloads (#155). When a deploy changes the config, the one that was running is kept as `sites-available/vaultic.prev` for a manual rollback; if `nginx -t` or the reload fails it is put back and the deploy fails after the API health check. Before #155 `sites-enabled/vaultic` was a separate old copy, so repo edits never went live
 - Set `client_max_body_size 25m` in nginx for PDF uploads (default 1MB blocks them)
 
 ### Litestream backup
@@ -335,8 +335,8 @@ These rules come from a full security audit (March 2026). Every finding below wa
 ### Rate Limiting
 
 - **Manual sync**: 5 syncs per 5 minutes per user (in-memory sliding window, `rate_limit.py`)
-- **Login/2FA**: 5 requests/minute via nginx rate limiting
-- **General API**: 30 requests/second via nginx
+- **Login/2FA**: 5 requests/minute per client IP via nginx rate limiting (rejections return 429)
+- **General API**: 30 requests/second per client IP via nginx
 - **Per-username rate limiting**: 20 attempts per username per 15 minutes (prevents IP rotation bypass)
 - **Signed-in password checks** (change-password, 2FA disable) go through `_check_own_password` in `api/routers/auth.py`: same 5-per-IP and 20-per-username limits, on separate counters from login so failed logins can't lock the owner out of changing their password (#151). Any new endpoint that checks a signed-in user's password must use it
 - **Memory cleanup**: empty keys in rate-limit dicts must be cleaned up to prevent memory leaks
@@ -345,6 +345,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 
 - **Content-Security-Policy** header set in middleware — `default-src 'self'` with specific directives for scripts, styles, images, connections
 - **CORS**: restrict to known origins in production
+- **Client IP** (#155): nginx's `real_ip` takes `CF-Connecting-IP` only from Cloudflare's ranges (`set_real_ip_from` in `deploy/vaultic-nginx.conf`), so `$remote_addr` is the visitor. The rate limits key on `$binary_remote_addr` (never empty) and nginx sends `X-Forwarded-For $remote_addr`, so nginx and the app's lockouts count the same client. Never key anything on `$http_cf_connecting_ip` directly: a request straight to the origin could forge it. The header is trusted from any Cloudflare peer, not only our zone, so a request routed through another Cloudflare zone can still set it. `tests/test_nginx_config.py` runs the config in a real nginx (CI has it)
 - **X-Forwarded-For**: trust rightmost entry only (set by nginx, not spoofable by client)
 - **nginx `client_max_body_size`**: set to `25m` — default 1MB blocks PDF uploads
 
