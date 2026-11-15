@@ -92,6 +92,22 @@ test.describe("Change password (issue #132)", () => {
     expect(await storedTokens(page)).toEqual(before);
   });
 
+  test("too many wrong guesses shows the lockout message and keeps the session", async ({ page }) => {
+    // Issue #151: the server answers 429 once the login lockout is hit.
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/change-password", r =>
+      r.fulfill({ status: 429, json: { detail: "Too many failed attempts. Try again in 15 minutes." } }));
+    await loginOnly(page);
+    await page.getByRole("link", { name: /settings/i }).click();
+    const before = await storedTokens(page);
+
+    await fillAndSubmit(page);
+
+    await expect(page.getByText("Too many failed attempts. Try again in 15 minutes.")).toBeVisible();
+    expect(await storedTokens(page)).toEqual(before);
+    await expect(page.getByPlaceholder(/username/i)).toHaveCount(0);
+  });
+
   test("Security Log polling during the change does not sign the user out", async ({ page }) => {
     // The server kills the old token before it answers, so any request still
     // carrying it gets a real 401, while the change is still pending. Polls
