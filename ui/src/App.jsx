@@ -21,8 +21,17 @@ export default function App() {
   // Hooks must all be called before any conditional return (Rules of Hooks).
   useEffect(() => {
     const handler = () => setAuthed(false);
+    // Another tab stored a token (e.g. its password change replaced the one
+    // this tab had just found dead, issue #132): sign this tab back in.
+    const onStorage = e => {
+      if (e.key === "vaultic_token" && e.newValue) setAuthed(true);
+    };
     window.addEventListener("auth:logout", handler);
-    return () => window.removeEventListener("auth:logout", handler);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("auth:logout", handler);
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
   if (!authed) {

@@ -366,7 +366,8 @@ export async function deleteUser(username) {
  */
 export async function changePassword(current_password, new_password) {
   let done;
-  _passwordChange = new Promise(resolve => { done = resolve; });
+  const gate = new Promise(resolve => { done = resolve; });
+  _passwordChange = gate;
   try {
     const res = await sendRequest("/api/auth/change-password", {
       method: "POST",
@@ -380,7 +381,7 @@ export async function changePassword(current_password, new_password) {
     }
     return data;
   } finally {
-    _passwordChange = null;
+    if (_passwordChange === gate) _passwordChange = null;
     done();
   }
 }

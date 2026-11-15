@@ -94,19 +94,20 @@ test.describe("Change password (issue #132)", () => {
 
   test("Security Log polling during the change does not sign the user out", async ({ page }) => {
     // The server kills the old token before it answers, so any request still
-    // carrying it gets a real 401. Polls sent during the change must wait, and
-    // a poll already in flight must retry with the new token.
+    // carrying it gets a real 401, while the change is still pending. Polls
+    // sent during the change must wait, and a poll already in flight must wait
+    // for the change and retry with the new token.
     const oldAuth = "Bearer test-jwt-token";
     const newToken = fakeJwt("after-poll-race");
     let changed = false;
-    let markResponded;
-    const responded = new Promise(resolve => { markResponded = resolve; });
+    let markKilled;
+    const killed = new Promise(resolve => { markKilled = resolve; });
     const logAuths = [];
     await mockAllAPIs(page);
     await page.route("**/api/auth/security-log*", async r => {
       const auth = r.request().headers()["authorization"];
       logAuths.push({ auth, afterChange: changed });
-      if (!changed) await responded;            // in flight across the change
+      if (!changed) await killed;               // in flight across the change
       if (auth === oldAuth) {
         return r.fulfill({ status: 401, headers: { "WWW-Authenticate": "Bearer" },
                            json: { detail: "Not authenticated" } });
@@ -115,9 +116,10 @@ test.describe("Change password (issue #132)", () => {
     });
     await page.route("**/api/auth/change-password", async r => {
       changed = true;
-      await new Promise(resolve => setTimeout(resolve, 3500)); // spans a 3 s poll
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      markKilled();                             // 401s land before the response
+      await new Promise(resolve => setTimeout(resolve, 2500)); // spans a 3 s poll
       await r.fulfill({ json: { ok: true, token: newToken } });
-      markResponded();
     });
     await loginOnly(page);
     await page.getByRole("link", { name: /settings/i }).click();
@@ -131,5 +133,48 @@ test.describe("Change password (issue #132)", () => {
     await page.waitForTimeout(500);
     expect(await storedTokens(page)).toEqual({ token: newToken, refresh: null });
     await expect(page.getByPlaceholder(/username/i)).toHaveCount(0);
+  });
+
+  test("another tab signed out by the change signs back in when the new token lands", async ({ page, context }) => {
+    const newToken = fakeJwt("cross-tab");
+    let changed = false;
+    let release;
+    const respond = new Promise(resolve => { release = resolve; });
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/change-password", async r => {
+      changed = true;
+      await respond;
+      await r.fulfill({ json: { ok: true, token: newToken } });
+    });
+    await loginOnly(page);
+    // A JWT-shaped token, so a freshly opened tab counts as signed in.
+    await page.evaluate(token => localStorage.setItem("vaultic_token", token), fakeJwt("before"));
+    await page.getByRole("link", { name: /settings/i }).click();
+
+    // A second tab on Settings: its Security Log poll still carries the old token.
+    const other = await context.newPage();
+    await other.route("https://cdn.plaid.com/**", r =>
+      r.fulfill({ contentType: "application/javascript", body: "" }));
+    await mockAllAPIs(other);
+    await other.route("**/api/auth/security-log*", r => {
+      const auth = r.request().headers()["authorization"];
+      if (changed && auth !== `Bearer ${newToken}`) {
+        return r.fulfill({ status: 401, headers: { "WWW-Authenticate": "Bearer" },
+                           json: { detail: "Not authenticated" } });
+      }
+      return r.fulfill({ json: { lines: [] } });
+    });
+    await other.goto("/settings");
+    await expect(other.getByRole("heading", { name: "Settings" })).toBeVisible();
+
+    await fillAndSubmit(page);
+    // Its next poll hits the dead token before this tab has the new one.
+    await expect(other.getByPlaceholder(/username/i)).toBeVisible({ timeout: 8000 });
+
+    release();
+
+    await expect(page.getByText(/other devices have been signed out/i)).toBeVisible();
+    await expect(other.getByPlaceholder(/username/i)).toHaveCount(0);
+    expect(await storedTokens(page)).toEqual({ token: newToken, refresh: null });
   });
 });
