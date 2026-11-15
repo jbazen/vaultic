@@ -429,7 +429,7 @@ All endpoints except `/api/auth/login`, `/api/auth/verify-2fa`, and `/api/health
 | POST | `/login` | Username + password → JWT or `{requires_2fa: true}` |
 | POST | `/verify-2fa` | Username + TOTP code → JWT |
 | GET | `/me` | Returns `{username, two_fa_enabled}` |
-| POST | `/change-password` | Change own password |
+| POST | `/change-password` | Change own password; signs out every other session and returns replacement tokens for the caller (`remember_me` picks web or mobile shape) |
 | GET | `/users` | List all users (admin) |
 | POST | `/users` | Create user |
 | DELETE | `/users/{username}` | Delete user |

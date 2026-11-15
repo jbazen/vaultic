@@ -313,9 +313,9 @@ These rules come from a full security audit (March 2026). Every finding below wa
 - **Admin-only endpoints** (user management, security log) must also use `admin_required`
 - **JWT tokens** must include `iat` (issued-at) and `jti` (unique ID) claims for audit trail
 - **JWT_SECRET** must never be empty — `auth.py` raises `RuntimeError` on startup if it is
-- **Token cutoff**: deactivating a user sets `users.tokens_valid_after` (Unix seconds); `get_current_user` rejects any token whose `iat` is not after it, so reactivating a user never revives old tokens (#126). NULL = no cutoff. SQLite triggers (#136) set the cutoff and revoke refresh tokens on any `is_active` change, hand edits included, and revoke any refresh token inserted for an inactive user; `validate_refresh_token` also rejects refresh tokens created at or before the cutoff
+- **Token cutoff**: deactivating a user or changing the password sets `users.tokens_valid_after` (Unix seconds); `get_current_user` rejects any token whose `iat` is not after it, so reactivating a user never revives old tokens (#126). NULL = no cutoff. SQLite triggers (#136) set the cutoff and revoke refresh tokens on any `is_active` change, hand edits included, and revoke any refresh token inserted for an inactive user; `validate_refresh_token` also rejects refresh tokens created at or before the cutoff. `change-password` (#132) sets the cutoff and revokes refresh tokens in the same transaction as the new hash, waits past the cutoff second, then returns replacement tokens for the caller; `api.js` holds other requests until they are stored
 - **Token revocation**: logout must call `POST /api/auth/logout` server-side (adds token to denylist) before clearing localStorage
-- **Scoped tokens**: 2FA pending tokens have `purpose=2fa_pending` and 5-minute expiry. `decode_token()` rejects scoped tokens for general API access
+- **Scoped tokens**: 2FA pending tokens have `purpose=2fa_pending`, 5-minute expiry and an `iat` checked against the token cutoff. `decode_token()` rejects scoped tokens for general API access
 - **2FA bypass prevention**: verify-2fa requires the scoped `pending_token` issued after password auth — never allow TOTP verification without prior password check
 - **2FA disable** requires password confirmation (POST, not DELETE)
 - **TOTP secrets** are Fernet-encrypted at rest — never store plaintext
