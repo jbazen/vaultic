@@ -194,3 +194,36 @@ test.describe("Change password (issue #132)", () => {
     expect(await storedTokens(page)).toEqual({ token: newToken, refresh: null });
   });
 });
+
+test.describe("Disable 2FA errors (issue #151)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route("https://cdn.plaid.com/**", r =>
+      r.fulfill({ contentType: "application/javascript", body: "" }));
+  });
+
+  async function tryDisable(page, status, detail) {
+    await mockAllAPIs(page);
+    await page.route("**/api/auth/me", r =>
+      r.fulfill({ json: { username: "testuser", two_fa_enabled: 1 } }));
+    await page.route("**/api/auth/2fa/disable", r => r.fulfill({ status, json: { detail } }));
+    await loginOnly(page);
+    await page.getByRole("link", { name: /settings/i }).click();
+    const before = await storedTokens(page);
+    page.once("dialog", d => d.accept("SomePass12"));
+    await page.getByRole("button", { name: "Disable 2FA" }).click();
+    return before;
+  }
+
+  test("too many wrong guesses shows the lockout message and keeps the session", async ({ page }) => {
+    const before = await tryDisable(page, 429, "Too many failed attempts. Try again in 15 minutes.");
+    await expect(page.getByText("Too many failed attempts. Try again in 15 minutes.")).toBeVisible();
+    expect(await storedTokens(page)).toEqual(before);
+    await expect(page.getByRole("button", { name: "Disable 2FA" })).toBeVisible();
+  });
+
+  test("wrong password shows the server's message", async ({ page }) => {
+    await tryDisable(page, 401, "Password is incorrect");
+    await expect(page.getByText("Password is incorrect")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disable 2FA" })).toBeVisible();
+  });
+});
