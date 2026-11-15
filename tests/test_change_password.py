@@ -8,7 +8,6 @@ import asyncio
 import time
 
 import jwt
-import pytest
 
 from api import auth as auth_module
 from api.auth import (
@@ -17,16 +16,6 @@ from api.auth import (
 )
 from api.database import get_db
 from api.routers.auth import _wait_until_past
-
-
-@pytest.fixture(autouse=True)
-def _reset_login_rate_limits():
-    """Failed logins elsewhere must not lock out these tests' logins, or the reverse."""
-    auth_module._failed_attempts.clear()
-    auth_module._failed_by_username.clear()
-    yield
-    auth_module._failed_attempts.clear()
-    auth_module._failed_by_username.clear()
 
 
 def _create_user(client, auth_headers, username, password):

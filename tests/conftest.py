@@ -82,6 +82,22 @@ from api.main import app
 from api.auth import create_token
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_lockout():
+    """Start and end every test with empty login lockout counters.
+
+    Wrong passwords at /login, change-password and 2fa/disable all count
+    toward the same per-IP lockout (issue #151), and every TestClient request
+    comes from one IP, so leftovers would turn a later test's login into a 429.
+    """
+    from api import auth as auth_module
+    auth_module._failed_attempts.clear()
+    auth_module._failed_by_username.clear()
+    yield
+    auth_module._failed_attempts.clear()
+    auth_module._failed_by_username.clear()
+
+
 @pytest.fixture(scope="session")
 def client():
     with TestClient(app) as c:
