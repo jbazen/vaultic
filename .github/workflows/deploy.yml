@@ -136,9 +136,25 @@ jobs:
             # Restart API (Litestream wraps uvicorn — both restart together)
             sudo systemctl restart vaultic-api.service
 
-            # Update nginx config and reload (picks up cache-control header changes)
-            sudo cp deploy/vaultic-nginx.conf /etc/nginx/sites-available/vaultic
-            sudo nginx -t && sudo systemctl reload nginx
+            # Install nginx config and reload (#155). sites-enabled/vaultic must be a
+            # symlink to sites-available/vaultic: it used to be a separate old copy,
+            # so the config copied here never went live. Keep the config nginx is
+            # running now; if the new one fails nginx -t, put the old one back.
+            NGINX_SITE=/etc/nginx/sites-available/vaultic
+            NGINX_PREV=$(mktemp)
+            sudo cat /etc/nginx/sites-enabled/vaultic > "$NGINX_PREV"
+            sudo cp deploy/vaultic-nginx.conf "$NGINX_SITE"
+            sudo ln -sfn "$NGINX_SITE" /etc/nginx/sites-enabled/vaultic
+            if sudo nginx -t; then
+              sudo systemctl reload nginx
+              rm -f "$NGINX_PREV"
+            else
+              echo "nginx -t failed: restoring the previous nginx config"
+              sudo cp "$NGINX_PREV" "$NGINX_SITE"
+              rm -f "$NGINX_PREV"
+              sudo nginx -t
+              exit 1
+            fi
 
             # Health check — initial 5s wait then retry up to 10 times with 3s intervals
             # (Litestream + uvicorn occasionally need ~20s to be ready to serve HTTP).
