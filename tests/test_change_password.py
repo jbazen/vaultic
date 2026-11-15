@@ -116,12 +116,13 @@ class TestOtherSessionsEnd:
         _create_user(client, auth_headers, "cp_b", "CpBPass1")
         a = _login(client, "cp_a", "CpAPass1")["token"]
         b = _login(client, "cp_b", "CpBPass1", remember_me=True)
+        b_cutoff = _cutoff("cp_b")
 
         assert _change(client, a, "CpAPass1", "CpAPass2").status_code == 200
 
         assert client.get("/api/auth/me", headers=_bearer(b["token"])).status_code == 200
         assert validate_refresh_token(b["refresh_token"]) == "cp_b"
-        assert _cutoff("cp_b") is None
+        assert _cutoff("cp_b") == b_cutoff
 
 
 class TestReplacementTokens:
@@ -189,24 +190,26 @@ class TestNothingChangesOnRejectedRequest:
         _create_user(client, auth_headers, "cp_wrong", "CpWrongPass1")
         mine = _login(client, "cp_wrong", "CpWrongPass1")["token"]
         phone = _login(client, "cp_wrong", "CpWrongPass1", remember_me=True)
+        before = _cutoff("cp_wrong")
 
         res = _change(client, mine, "NotThePass1", "CpWrongPass2")
 
         assert res.status_code == 401
         # A wrong current password is not an auth failure: no forced logout.
         assert res.headers.get("WWW-Authenticate") is None
-        assert _cutoff("cp_wrong") is None
+        assert _cutoff("cp_wrong") == before
         assert client.get("/api/auth/me", headers=_bearer(mine)).status_code == 200
         assert validate_refresh_token(phone["refresh_token"]) == "cp_wrong"
 
     def test_weak_new_password_keeps_sessions(self, client, auth_headers):
         _create_user(client, auth_headers, "cp_weak", "CpWeakPass1")
         mine = _login(client, "cp_weak", "CpWeakPass1")["token"]
+        before = _cutoff("cp_weak")
 
         res = _change(client, mine, "CpWeakPass1", "weak")
 
         assert res.status_code == 400
-        assert _cutoff("cp_weak") is None
+        assert _cutoff("cp_weak") == before
         assert client.get("/api/auth/me", headers=_bearer(mine)).status_code == 200
 
     def test_requires_auth(self, client):
@@ -245,6 +248,8 @@ class TestPending2FAToken:
     def test_pending_token_without_iat_ok_when_no_cutoff(self, client, auth_headers):
         """Logins mid-2FA at deploy time (old tokens have no iat) still finish."""
         _create_user(client, auth_headers, "cp_noiat", "CpNoiatPass1")
+        with get_db() as conn:  # a row from before #140, which gives new rows a cutoff
+            conn.execute("UPDATE users SET tokens_valid_after = NULL WHERE username = 'cp_noiat'")
         old_style = jwt.encode({"sub": "cp_noiat", "purpose": "2fa_pending",
                                 "exp": int(time.time()) + 300}, SECRET_KEY, algorithm=ALGORITHM)
         assert decode_2fa_pending_token(old_style) == "cp_noiat"
