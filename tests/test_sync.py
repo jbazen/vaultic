@@ -548,3 +548,77 @@ class TestSyncHoldingsCurrency:
         from types import SimpleNamespace
         assert _currency_codes(SimpleNamespace(iso_currency_code="", unofficial_currency_code="BTC")) == (None, "BTC")
         assert _currency_codes(SimpleNamespace(iso_currency_code="", unofficial_currency_code="")) == ("USD", None)
+
+
+class TestSyncHoldingsOptionalFields:
+    """institution_price_as_of is optional on the SDK Holding model; when
+    Plaid omits the key, reading the attribute raises and used to fail the
+    whole item's investment sync (#142). Uses real SDK models."""
+
+    def _holding(self, sec_id, price_as_of="omit"):
+        from plaid.model.holding import Holding
+        extra = {} if price_as_of == "omit" else {"institution_price_as_of": price_as_of}
+        return Holding(
+            account_id="plaid-inv-acct", security_id=sec_id,
+            institution_value=100.0, institution_price=10.0, quantity=10.0,
+            cost_basis=90.0, iso_currency_code="USD", unofficial_currency_code=None,
+            **extra,
+        )
+
+    def _setup(self):
+        from tests.conftest import make_isolated_db
+        conn, get_db = make_isolated_db()
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, name, type, account_number) "
+            "VALUES ('plaid-inv-acct', 'Brokerage', 'investment', 'plaid-inv-acct')"
+        )
+        return conn, get_db
+
+    def _run(self, get_db, holdings, txns=()):
+        client = MagicMock()
+        resp = MagicMock()
+        resp.securities = []
+        resp.holdings = holdings
+        client.investments_holdings_get.return_value = resp
+        page = MagicMock()
+        page.investment_transactions = list(txns)
+        page.total_investment_transactions = len(txns)
+        client.investments_transactions_get.return_value = page
+        with patch("api.sync.get_db", get_db), \
+             patch("api.sync._get_plaid_client", return_value=client), \
+             patch.object(sync.logger, "warning") as m_warn:
+            sync._sync_investments(1, "access-sandbox-abc", "2026-11-14")
+        m_warn.assert_not_called()
+
+    def _rows(self, conn):
+        return [
+            tuple(r) for r in conn.execute(
+                "SELECT security_id, institution_price_as_of, institution_value "
+                "FROM plaid_holdings ORDER BY security_id"
+            )
+        ]
+
+    def test_holding_without_price_as_of_key_is_saved(self):
+        from datetime import date
+        conn, get_db = self._setup()
+        missing = self._holding("sec-a")
+        assert "institution_price_as_of" not in missing
+        self._run(get_db, [missing, self._holding("sec-b", date(2026, 11, 13))])
+        assert self._rows(conn) == [
+            ("sec-a", None, 100.0),
+            ("sec-b", "2026-11-13", 100.0),
+        ]
+
+    def test_null_price_as_of_is_saved_as_null(self):
+        conn, get_db = self._setup()
+        self._run(get_db, [self._holding("sec-a", None)])
+        assert self._rows(conn) == [("sec-a", None, 100.0)]
+
+    def test_investment_transactions_still_sync(self):
+        """The holdings step no longer aborts, so the transactions step runs."""
+        conn, get_db = self._setup()
+        txn = TestSyncInvestmentTransactions()._txn("inv-1")
+        self._run(get_db, [self._holding("sec-a")], [txn])
+        assert conn.execute(
+            "SELECT investment_transaction_id FROM plaid_investment_transactions"
+        ).fetchall()[0][0] == "inv-1"
