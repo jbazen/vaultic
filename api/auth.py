@@ -43,6 +43,7 @@ _failed_by_username: dict[str, list[float]] = defaultdict(list)
 # sign-out-everywhere control (issue #151).
 _own_pw_failed_by_ip: dict[str, list[float]] = defaultdict(list)
 _own_pw_failed_by_username: dict[str, list[float]] = defaultdict(list)
+_Counter = dict[str, list[float]]
 MAX_ATTEMPTS = 5
 MAX_ATTEMPTS_PER_USER = 20  # Per-username across all IPs
 LOCKOUT_WINDOW = 15 * 60
@@ -52,7 +53,7 @@ LOCKOUT_WINDOW = 15 * 60
 _token_denylist: dict[str, float] = {}
 
 
-def _over_limit(counter: dict[str, list[float]], key: str, limit: int) -> bool:
+def _over_limit(counter: _Counter, key: str, limit: int) -> bool:
     """Drop failures older than the window (and the key once empty), then compare."""
     now = time.time()
     counter[key] = [t for t in counter[key] if now - t < LOCKOUT_WINDOW]
@@ -62,19 +63,19 @@ def _over_limit(counter: dict[str, list[float]], key: str, limit: int) -> bool:
     return len(counter[key]) >= limit
 
 
-def _is_locked(by_ip, by_username, ip: str, username: str) -> bool:
+def _is_locked(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> bool:
     if _over_limit(by_ip, ip, MAX_ATTEMPTS):
         return True
     return bool(username) and _over_limit(by_username, username, MAX_ATTEMPTS_PER_USER)
 
 
-def _record(by_ip, by_username, ip: str, username: str) -> None:
+def _record(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
     by_ip[ip].append(time.time())
     if username:
         by_username[username].append(time.time())
 
 
-def _clear(by_ip, by_username, ip: str, username: str) -> None:
+def _clear(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
     by_ip.pop(ip, None)
     if username:
         by_username.pop(username, None)
