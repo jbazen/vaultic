@@ -9,7 +9,7 @@ from api.auth import (
     authenticate_user, create_token, create_2fa_pending_token, decode_2fa_pending_token,
     hash_password, validate_password_strength, is_rate_limited, record_failed_attempt,
     clear_failed_attempts, get_user_2fa, generate_totp_setup, confirm_totp_enrollment,
-    verify_totp_code, revoke_token, change_password_and_end_sessions,
+    verify_totp_code, TOTP_OK, TOTP_USED, revoke_token, change_password_and_end_sessions,
     is_own_password_locked, record_own_password_failure, clear_own_password_failures,
     is_2fa_locked, record_2fa_failure, clear_2fa_failures, clear_2fa_user_failures,
     create_refresh_token, validate_refresh_token, rotate_refresh_token, revoke_refresh_token,
@@ -122,9 +122,14 @@ async def verify_2fa(body: Verify2FARequest, request: Request):
         security_log.log_server_event(f"RATE_LIMITED  ip={ip}  user={username}  action=verify_2fa")
         raise HTTPException(status_code=429, detail="Too many attempts. Try again in 15 minutes.")
 
-    ok = verify_totp_code(username, body.code)
+    result = verify_totp_code(username, body.code)
+    ok = result == TOTP_OK
     security_log.log_2fa_attempt(ip, username, ok)
 
+    if result == TOTP_USED:
+        # The right code, already used to sign in: it can never pass again, so
+        # retrying it isn't guessing and isn't counted toward the lockout.
+        raise HTTPException(status_code=401, detail="That code was already used. Wait for the next one.")
     if not ok:
         record_2fa_failure(ip, username)
         raise HTTPException(status_code=401, detail="Invalid or expired code")

@@ -203,7 +203,7 @@ class TestDeployInstallsConfig:
         script = self._script()
         health = script.index('if [ "$HEALTHY" -ne 1 ]; then')
         site = script.index(
-            "curl -sf -k --resolve vaulticsage.com:443:127.0.0.1 https://vaulticsage.com/api/health")
+            "--resolve vaulticsage.com:443:127.0.0.1 https://vaulticsage.com/api/health")
         restore = script.index('sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"', site)
         fail = script.index('if [ "$NGINX_FAILED" -eq 1 ]; then')
         assert health < site < restore < fail

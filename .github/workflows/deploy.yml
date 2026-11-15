@@ -211,14 +211,14 @@ jobs:
             if [ "$NGINX_FAILED" -eq 0 ]; then
               SITE_OK=0
               for i in 1 2 3; do
-                if curl -sf -k --resolve vaulticsage.com:443:127.0.0.1 https://vaulticsage.com/api/health > /dev/null 2>&1; then
+                if SITE_ERR=$(curl -sS -f -k -o /dev/null --resolve vaulticsage.com:443:127.0.0.1 https://vaulticsage.com/api/health 2>&1); then
                   SITE_OK=1
                   break
                 fi
                 sleep 2
               done
               if [ "$SITE_OK" -ne 1 ]; then
-                echo "Health check through nginx failed"
+                echo "Health check through nginx failed: $SITE_ERR"
                 NGINX_FAILED=1
                 if [ "$NGINX_BACKED_UP" -eq 1 ]; then
                   echo "Restoring the previous nginx config"

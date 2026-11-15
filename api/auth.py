@@ -386,12 +386,17 @@ def _matching_step(totp: pyotp.TOTP, code: str) -> int | None:
     return None
 
 
-def verify_totp_code(username: str, code: str) -> bool:
-    """Verify a TOTP code at login time.
+TOTP_OK, TOTP_USED, TOTP_WRONG = "ok", "used", "wrong"
+
+
+def verify_totp_code(username: str, code: str) -> str:
+    """Check a TOTP code at login time: TOTP_OK, TOTP_USED or TOTP_WRONG.
 
     Each code works once (#165 review): the matching step must be later than
     the last one used, and recording it is a single conditional UPDATE, so two
-    requests with the same code can't both pass.
+    requests with the same code can't both pass. A right code whose step is
+    already used is TOTP_USED, so the caller can say so instead of counting it
+    as a wrong guess.
     """
     from api.encryption import decrypt
     from api.database import get_db
@@ -401,19 +406,19 @@ def verify_totp_code(username: str, code: str) -> bool:
             (username,)
         ).fetchone()
     if not row or not row["totp_secret"]:
-        return False
+        return TOTP_WRONG
     # Decrypt the stored TOTP secret before verification
     secret_plain = decrypt(row["totp_secret"])
     step = _matching_step(pyotp.TOTP(secret_plain), code)
     if step is None:
-        return False
+        return TOTP_WRONG
     with get_db() as conn:
-        used = conn.execute(
+        claimed = conn.execute(
             "UPDATE users SET totp_last_step = ? WHERE username = ? AND is_active = 1 "
             "AND (totp_last_step IS NULL OR totp_last_step < ?)",
             (step, username, step),
         ).rowcount
-    return used == 1
+    return TOTP_OK if claimed == 1 else TOTP_USED
 
 
 # ── Standard auth ─────────────────────────────────────────────────────────────

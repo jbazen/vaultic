@@ -137,13 +137,17 @@ class TestTOTPLogin:
         assert "token" in res.json()
 
     def test_code_works_only_once(self, client, auth_headers):
+        from api import auth as auth_module
         plain_secret = _enable_2fa(client, auth_headers)
         code = _next_code(plain_secret)
-        for expected in (200, 401):
+        for expected in (200, 401, 401, 401, 401, 401, 401):
             pending = client.post("/api/auth/login", json={
                 "username": "testuser", "password": "testpassword"}).json()["pending_token"]
             res = client.post("/api/auth/verify-2fa", json={"pending_token": pending, "code": code})
             assert res.status_code == expected
+        assert "already used" in res.json()["detail"]
+        # Retrying a used code is not guessing: nothing is counted or locked.
+        assert not auth_module._2fa_failed_by_ip and not auth_module._2fa_failed_by_username
 
     def test_enrollment_code_cannot_finish_a_login(self, client, auth_headers):
         client.post("/api/auth/2fa/setup", headers=auth_headers)
