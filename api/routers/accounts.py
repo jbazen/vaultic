@@ -299,6 +299,54 @@ async def transactions(
     return [dict(row) for row in rows]
 
 
+def _currency_key(h: dict) -> tuple[str | None, str | None]:
+    """The (iso, unofficial) currency pair a holding's amounts are in (#141).
+
+    The ISO code wins, then Plaid's unofficial code (crypto such as BTC);
+    USD when neither is set, the same rule sync uses (#137).
+    """
+    iso = h.get("iso_currency_code") or None
+    unofficial = h.get("unofficial_currency_code") or None
+    if iso:
+        return iso, None
+    if unofficial:
+        return None, unofficial
+    return "USD", None
+
+
+def _with_currency_totals(holdings: list[dict]) -> dict:
+    """Total holdings per currency and fill pct_assets (#141).
+
+    Amounts in different currencies are never added together: `totals` has
+    one entry per currency, USD first. pct_assets is only set when every
+    valued holding is in the same currency; with mixed currencies there is
+    no common denominator without exchange rates, so it is None.
+    """
+    totals: dict[tuple[str | None, str | None], float] = {}
+    for h in holdings:
+        if h.get("institution_value") is not None:
+            key = _currency_key(h)
+            totals[key] = totals.get(key, 0.0) + h["institution_value"]
+
+    single_currency = len(totals) == 1
+    for h in holdings:
+        total = totals.get(_currency_key(h)) if single_currency else None
+        value = h.get("institution_value")
+        h["pct_assets"] = (value / total) * 100 if total and value else None
+
+    ordered = sorted(
+        totals.items(),
+        key=lambda kv: (kv[0] != ("USD", None), kv[0][0] is None, kv[0][0] or kv[0][1]),
+    )
+    return {
+        "holdings": holdings,
+        "totals": [
+            {"iso_currency_code": iso, "unofficial_currency_code": unofficial, "total_value": value}
+            for (iso, unofficial), value in ordered
+        ],
+    }
+
+
 @router.get("/{account_id}/holdings")
 async def account_holdings(
     account_id: int,
@@ -358,24 +406,7 @@ async def account_holdings(
             ORDER BY h.institution_value DESC NULLS LAST
         """, (acct_num, acct_num)).fetchall()
 
-        total_row = conn.execute("""
-            SELECT COALESCE(SUM(institution_value), 0) AS total
-            FROM plaid_holdings
-            WHERE account_number = ?
-              AND snapped_at = (SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_number = ?)
-        """, (acct_num, acct_num)).fetchone()
-        total_value = total_row["total"] if total_row else 0.0
-
-    holdings = []
-    for row in rows:
-        h = dict(row)
-        if total_value and h.get("institution_value"):
-            h["pct_assets"] = (h["institution_value"] / total_value) * 100
-        else:
-            h["pct_assets"] = None
-        holdings.append(h)
-
-    return {"holdings": holdings, "total_value": total_value}
+    return _with_currency_totals([dict(row) for row in rows])
 
 
 def _i360_holdings(conn, account_number: str) -> dict:
@@ -401,7 +432,6 @@ def _i360_holdings(conn, account_number: str) -> dict:
         ORDER BY value_dollars DESC NULLS LAST
     """, (account_number, account_number)).fetchall()
 
-    total_value = sum(r["institution_value"] or 0 for r in rows)
     holdings = []
     for row in rows:
         h = dict(row)
@@ -410,13 +440,9 @@ def _i360_holdings(conn, account_number: str) -> dict:
         h["institution_price_as_of"] = None
         h["iso_currency_code"] = "USD"
         h["unofficial_currency_code"] = None
-        if total_value and h.get("institution_value"):
-            h["pct_assets"] = (h["institution_value"] / total_value) * 100
-        else:
-            h["pct_assets"] = None
         holdings.append(h)
 
-    return {"holdings": holdings, "total_value": total_value}
+    return _with_currency_totals(holdings)
 
 
 @router.get("/{account_id}/holdings/history")
