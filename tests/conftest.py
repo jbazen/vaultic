@@ -78,24 +78,29 @@ def make_isolated_db():
 
 import pytest
 from fastapi.testclient import TestClient
+from api import auth as auth_module
 from api.main import app
 from api.auth import create_token
 
+_LOCKOUT_COUNTERS = (
+    auth_module._failed_attempts, auth_module._failed_by_username,
+    auth_module._own_pw_failed_by_ip, auth_module._own_pw_failed_by_username,
+)
+
 
 @pytest.fixture(autouse=True)
-def _reset_login_lockout():
-    """Start and end every test with empty login lockout counters.
+def _reset_lockouts():
+    """Start and end every test with empty lockout counters.
 
-    Wrong passwords at /login, change-password and 2fa/disable all count
-    toward the same per-IP lockout (issue #151), and every TestClient request
-    comes from one IP, so leftovers would turn a later test's login into a 429.
+    Every TestClient request comes from one IP, so wrong passwords left over
+    from one test (at /login, change-password or 2fa/disable, issue #151)
+    would turn a later test's request into a 429.
     """
-    from api import auth as auth_module
-    auth_module._failed_attempts.clear()
-    auth_module._failed_by_username.clear()
+    for counter in _LOCKOUT_COUNTERS:
+        counter.clear()
     yield
-    auth_module._failed_attempts.clear()
-    auth_module._failed_by_username.clear()
+    for counter in _LOCKOUT_COUNTERS:
+        counter.clear()
 
 
 @pytest.fixture(scope="session")

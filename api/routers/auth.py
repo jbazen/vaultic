@@ -10,6 +10,7 @@ from api.auth import (
     hash_password, validate_password_strength, is_rate_limited, record_failed_attempt,
     clear_failed_attempts, get_user_2fa, generate_totp_setup, confirm_totp_enrollment,
     verify_totp_code, revoke_token, change_password_and_end_sessions,
+    is_own_password_locked, record_own_password_failure, clear_own_password_failures,
     create_refresh_token, validate_refresh_token, rotate_refresh_token, revoke_refresh_token,
 )
 from api.database import get_db
@@ -213,22 +214,23 @@ async def me(username: str = Depends(get_current_user)):
 
 
 def _check_own_password(request: Request, username: str, password: str, action: str) -> bool:
-    """Check a signed-in user's password behind the login lockout (issue #151).
+    """Check a signed-in user's password behind a lockout (issue #151).
 
-    Uses login's per-IP and per-username counters, so wrong guesses here and
-    at /login share one budget. Raises 429 while either counter is locked,
-    without checking the password. A wrong password is counted; a right one
-    clears both counters, as a successful login does.
+    Same limits as login (5 per IP, 20 per username, 15 minutes) on separate
+    counters, so failed logins, which need no session, can't lock the owner
+    out of changing their password. Raises 429 while either counter is
+    locked, without checking the password. A wrong password is counted; a
+    right one clears both counters, as a successful login does.
     """
     ip = get_client_ip(request)
-    if is_rate_limited(ip, username):
+    if is_own_password_locked(ip, username):
         security_log.log_server_event(f"RATE_LIMITED  ip={ip}  user={username}  action={action}")
         raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in 15 minutes.")
     if not authenticate_user(username, password):
-        record_failed_attempt(ip, username)
-        security_log.log_server_event(f"WRONG_PASSWORD  ip={ip}  user={username}  action={action}")
+        record_own_password_failure(ip, username)
+        security_log.log_server_event(f"PASSWORD_CHECK_FAILED  ip={ip}  user={username}  action={action}")
         return False
-    clear_failed_attempts(ip, username)
+    clear_own_password_failures(ip, username)
     return True
 
 
