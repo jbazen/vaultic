@@ -331,7 +331,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 ### Error Handling & Information Disclosure
 
 - **Never leak stack traces** in HTTP responses — all endpoints that catch exceptions must return generic messages (`"Internal server error"`) not `str(e)`
-- **Error boundary** in React hides stack traces from users in production
+- **On-screen errors**: `ui/index.html` shows an uncaught error (with its stack) only when the app isn't on screen (it never started, or React removed it after a crash), set as text via `textContent`; errors in a running app go to the console only (#162)
 - **QR codes**: render SVG via `DOMParser`, never via `dangerouslySetInnerHTML`
 
 ### Rate Limiting

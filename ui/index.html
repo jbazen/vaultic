@@ -27,7 +27,9 @@
           text.textContent = msg;
           box.appendChild(title);
           box.appendChild(text);
-          document.body.replaceChildren(box);
+          // Not replaceChildren(): Safari 14 lacks it, and that's where this page matters most
+          document.body.textContent = '';
+          document.body.appendChild(box);
         }, 250);
       }
       window.onerror = function(msg, src, line, col, err) {
