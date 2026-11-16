@@ -1123,23 +1123,3 @@ def get_sync_log(limit: int = 20, user=Depends(get_current_user)):
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
-
-
-# ── Bookmarklet endpoint ──────────────────────────────────────────────────
-
-@router.get("/bookmarklet.js")
-def get_bookmarklet(user=Depends(get_current_user)):
-    """Return the bookmarklet JavaScript for copying Investor360 session."""
-    js = (
-        "javascript:void(navigator.clipboard.writeText("
-        "document.cookie.match(/CFNSession=([^;]+)/)?.[1]||'')"
-        ".then(()=>alert('Session token copied to clipboard! "
-        "Paste it in Vaultic to sync.')))"
-    )
-    return {"bookmarklet": js, "instructions": [
-        "Drag the bookmarklet link to your bookmarks bar (one-time setup).",
-        "Log into Investor360 at https://my.investor360.com",
-        "Click the bookmarklet — it copies your session token.",
-        "Go to Vaultic and click 'Sync Parker Financial'.",
-        "Paste the token and click Sync.",
-    ]}

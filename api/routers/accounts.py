@@ -445,33 +445,6 @@ def _i360_holdings(conn, account_number: str) -> dict:
     return _with_currency_totals(holdings)
 
 
-@router.get("/{account_id}/holdings/history")
-async def holdings_history(
-    account_id: int,
-    security_id: str = Query(...),
-    days: int = Query(default=90, le=730),
-    _user: str = Depends(get_current_user),
-):
-    """
-    Daily price/value history for a single holding within an account.
-    Useful for plotting the performance of an individual position over time.
-    """
-    with get_db() as conn:
-        acct = conn.execute(
-            "SELECT account_number FROM accounts WHERE id = ?", (account_id,)
-        ).fetchone()
-        if not acct or not acct["account_number"]:
-            return []
-        rows = conn.execute("""
-            SELECT snapped_at, institution_price, institution_value, quantity, cost_basis
-            FROM plaid_holdings
-            WHERE account_number = ? AND security_id = ?
-              AND snapped_at >= date('now', '-' || ? || ' days')
-            ORDER BY snapped_at ASC
-        """, (acct["account_number"], security_id, days)).fetchall()
-    return [dict(row) for row in rows]
-
-
 @router.get("/{account_id}/investment-transactions")
 async def investment_transactions(
     account_id: int,

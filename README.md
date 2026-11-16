@@ -492,7 +492,6 @@ Route ordering matters for the reorder endpoints — specific paths like `/insti
 | GET | `/activity-summary` | Period activity: contributions, gains, fees |
 | GET | `/market-summary` | Market index quotes |
 | GET | `/sync-log` | Sync history audit log |
-| GET | `/bookmarklet.js` | Browser bookmarklet to capture I360 session cookie |
 
 ### Ticker Feed — `/api/ticker-feed`
 | Method | Path | Description |
@@ -904,7 +903,7 @@ All costs are for personal use (single user, ~22 connected accounts).
 
 Parker Financial (Elkhorn, NE) uses Investor360 by Advisor360° as its client portal. The actual custodian is **National Financial Services (NFS)** — Fidelity's institutional arm. **Plaid does not support NFS** (Fidelity blocked all third-party aggregators for institutional accounts).
 
-**Primary integration: Investor360 API sync.** Vaultic connects directly to the Investor360 API using a session cookie (manual authentication required — cannot be fully automated). The sync pulls holdings, balances, performance, asset allocation, activity summaries, and market data into dedicated `i360_*` tables. A browser bookmarklet (`/api/investor360/bookmarklet.js`) captures the session cookie for easy re-authentication.
+**Primary integration: Investor360 API sync.** Vaultic connects directly to the Investor360 API using a session cookie (manual authentication required — cannot be fully automated). The sync pulls holdings, balances, performance, asset allocation, activity summaries, and market data into dedicated `i360_*` tables.
 
 **Historical data: PDF import.** 14 months of historical Parker data was imported from monthly PDF statements. NFS/Commonwealth statements are parsed by a **free deterministic regex parser** (`api/routers/pdf_nfs.py`) — no AI cost. Any other PDF format falls back to Claude Sonnet. Detection is automatic based on markers in the PDF text; no manual selection is needed. Historical snapshots are migrated into `account_balances` and `i360_holdings` tables to provide continuous balance/holdings history alongside the live API data.
 
