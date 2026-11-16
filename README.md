@@ -672,7 +672,7 @@ The app deploys to an Oracle Cloud A1 instance (Ubuntu, always-free tier). The f
 
 ```bash
 # On the Oracle Cloud instance
-sudo apt update && sudo apt install nginx python3.12 python3.12-venv nodejs npm git -y
+sudo apt update && sudo apt install nginx python3.12 python3.12-venv git -y
 
 # Clone repo
 git clone <your-repo-url> ~/vaultic
@@ -681,67 +681,22 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Build frontend
-cd ui && npm ci && npm run build && cd ..
-
 # Create .env with production values
 cp .env.example .env
 nano .env   # fill in all values; use PLAID_ENV=production when ready
 ```
 
+The UI isn't built on the server: CI builds and tests it, and each deploy uploads that bundle to `ui/dist`. The first deploy (a push to `main`) also installs Litestream, which the service needs, and starts the service. `server-setup.sh` does the steps above in one go.
+
 ### systemd service
 
-The service file (`deploy/vaultic-api.service`) is deployed automatically by CI/CD. It runs `deploy/start.sh`, which loads Litestream credentials and wraps uvicorn with Litestream for continuous backup:
+The unit lives in the repo at `deploy/vaultic-api.service`; every deploy copies it to `/etc/systemd/system/` and restarts the service. It runs `deploy/start.sh`, which loads the Litestream credentials and wraps uvicorn with Litestream for continuous backup. On a new server, `sudo systemctl enable vaultic-api` once (`server-setup.sh` does this); the first deploy installs Litestream and starts it.
 
-```ini
-[Unit]
-Description=Vaultic API (with Litestream backup)
-After=network.target
+### Nginx config
 
-[Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/vaultic
-ExecStart=/bin/bash /home/ubuntu/vaultic/deploy/start.sh
-Restart=always
-RestartSec=5
+The config lives in the repo at `deploy/vaultic-nginx.conf`; don't copy it into docs or edit it on the server. Every deploy installs it: it copies the file to `/etc/nginx/sites-available/vaultic`, makes `/etc/nginx/sites-enabled/vaultic` a symlink to that copy, runs `nginx -t`, reloads with `deploy/nginx_reload.sh` (which fails unless nginx actually took the new config), and checks the site through nginx. If any of that fails, the previous config is put back and the deploy fails.
 
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable vaultic-api
-sudo systemctl start vaultic-api
-```
-
-### Nginx config (`/etc/nginx/sites-available/vaultic`)
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name your.domain.com;
-
-    ssl_certificate /etc/letsencrypt/live/your.domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your.domain.com/privkey.pem;
-
-    # Serve Vite build
-    root /home/ubuntu/vaultic/ui/dist;
-    index index.html;
-
-    # API proxy
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-
-    # SPA fallback
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
+It expects the Cloudflare Origin Certificate at `/etc/ssl/cloudflare/cert.pem` and `/etc/ssl/cloudflare/key.pem` (Cloudflare in Full Strict mode, no certbot). On a new server, remove `/etc/nginx/sites-enabled/default` before the first deploy.
 
 ### GitHub Actions Secrets required
 
@@ -812,11 +767,11 @@ If you ever migrate from SQLite to PostgreSQL, swap Litestream for [WAL-G](https
 On every pull request to `main` and every push to `main`:
 
 1. **Test job** — runs `pytest` against in-memory SQLite on Ubuntu (Python 3.12)
-2. **E2E job** — runs the Playwright tests against the Vite dev server
+2. **E2E job** — builds the production UI bundle and runs the Playwright tests against it (`vite preview`), then keeps that bundle as the `ui-dist` artifact. When a test fails, its trace and screenshot are uploaded as `playwright-results`
 
 On a push to `main` only:
 
-3. **Deploy job** — builds the UI on the runner, uploads it, then SSH into Oracle Cloud, `git pull`, `pip install`, `systemctl restart vaultic-api`
+3. **Deploy job** — uploads the E2E-tested `ui-dist` bundle (no second build), then SSH into Oracle Cloud, `git pull`, `pip install`, `systemctl restart vaultic-api`, install and reload the nginx config, and check the API and the site through nginx
 
 Deploy only runs if both test jobs pass. Pull request runs never deploy.
 

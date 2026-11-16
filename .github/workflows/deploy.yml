@@ -56,10 +56,32 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      # playwright.config.js builds the production bundle and serves it with
+      # `vite preview`, so these tests run against the bundle that ships (#147)
       - name: Run E2E tests
         run: npx playwright test --reporter=list
 
-  # ── 2. Build frontend on fast GH runner, then deploy to Oracle Cloud ─────────
+      # Failure traces, screenshots and page snapshots, so a flake can be
+      # diagnosed from the run (#162)
+      - name: Upload Playwright results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-results
+          path: ui/test-results/
+          retention-days: 7
+
+      # The deploy job ships exactly this tested bundle instead of building again (#147)
+      - name: Upload tested frontend bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-dist
+          path: ui/dist/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  # ── 2. Deploy the E2E-tested frontend bundle and the API to Oracle Cloud ─────
   deploy:
     needs: [test, e2e]
     runs-on: ubuntu-latest
@@ -67,18 +89,14 @@ jobs:
     if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      # Build frontend here (seconds on x86) instead of on the slow A1 ARM server
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
+      # Built on the fast GH runner by the e2e job (never on the slow A1 ARM
+      # server) and tested there; a missing artifact fails here, before the
+      # server is touched (#147)
+      - name: Download tested frontend bundle
+        uses: actions/download-artifact@v8
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Build frontend
-        working-directory: ui
-        run: npm ci && npm run build
+          name: ui-dist
+          path: ui/dist
 
       - name: Upload dist to server
         run: |
@@ -148,7 +166,10 @@ jobs:
             # loads it) for a manual rollback; deploys that don't change the config
             # leave .prev alone. If the new config fails nginx -t or the reload, the
             # old one is put back and the deploy fails AFTER the API health check
-            # below, so a bad API still gets rolled back.
+            # below, so a bad API still gets rolled back. `systemctl reload` returns
+            # 0 even when the running nginx rejects the config and keeps the old one,
+            # so nginx_reload.sh also waits for nginx to start new workers, which it
+            # only does once it has accepted the config (#167).
             NGINX_SITE=/etc/nginx/sites-available/vaultic
             NGINX_ENABLED=/etc/nginx/sites-enabled/vaultic
             NGINX_FAILED=0
@@ -163,7 +184,7 @@ jobs:
             fi
             sudo cp deploy/vaultic-nginx.conf "$NGINX_SITE"
             sudo ln -sfn "$NGINX_SITE" "$NGINX_ENABLED"
-            if sudo nginx -t && sudo systemctl reload nginx; then
+            if sudo nginx -t && sudo bash deploy/nginx_reload.sh /run/nginx.pid /var/log/nginx/error.log systemctl reload nginx; then
               echo "nginx config installed and reloaded"
             else
               echo "nginx -t or reload failed: restoring the previous nginx config"
@@ -173,7 +194,9 @@ jobs:
               elif [ "$NGINX_HAD_SITE" -eq 0 ]; then
                 sudo rm -f "$NGINX_ENABLED"
               fi
-              sudo nginx -t || true
+              # Reload the restored config too: if nginx did take the new one after
+              # the check gave up, this puts it back in line with the file on disk.
+              sudo nginx -t && sudo systemctl reload nginx || true
             fi
 
             # Health check — initial 5s wait then retry up to 10 times with 3s intervals

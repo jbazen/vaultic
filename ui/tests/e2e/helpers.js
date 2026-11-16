@@ -1,5 +1,14 @@
 /** Shared mock API setup for E2E tests */
 
+/**
+ * A JWT-shaped token the app can decode. exp defaults to far in the future, so
+ * the client counts it as signed in and never tries a refresh.
+ */
+export function fakeJwt(tag, exp = 4102444800) {
+  const payload = btoa(JSON.stringify({ sub: "testuser", exp, tag }));
+  return `e30.${payload}.sig`;
+}
+
 export async function mockAllAPIs(page) {
   // ── Catch-all: intercept any /api/ request that isn't explicitly mocked ──
   // Returns an empty JSON response to prevent ECONNREFUSED crashes when
@@ -7,6 +16,13 @@ export async function mockAllAPIs(page) {
   await page.route("**/api/**", r => {
     r.fulfill({ json: {} });
   });
+
+  // ── Plaid Link's CDN script ──
+  // The Dashboard and Settings mount Plaid Link, which loads its script from
+  // cdn.plaid.com. Serve an empty script so no test depends on the internet or
+  // on what Plaid's real script does in a test browser (#162).
+  await page.route("https://cdn.plaid.com/**", r =>
+    r.fulfill({ contentType: "application/javascript", body: "" }));
 
   // ── Auth ──
   await page.route("**/api/auth/login", r =>

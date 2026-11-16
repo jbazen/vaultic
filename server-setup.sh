@@ -9,7 +9,6 @@ echo "=== Vaultic Server Setup ==="
 sudo apt-get update -q
 sudo apt-get install -y -q \
     python3.12 python3.12-venv python3-pip \
-    nodejs npm \
     nginx \
     git \
     curl \
@@ -23,16 +22,12 @@ fi
 cd vaultic
 
 # ── Python virtualenv ─────────────────────────────────────────────────────────
-python3.12 -m venv ~/vaultic-venv
-source ~/vaultic-venv/bin/activate
-pip install -q -r requirements.txt
-deactivate
+# .venv in the repo: the deploy and deploy/start.sh use this path
+python3.12 -m venv .venv
+.venv/bin/pip install -q -r requirements.txt
 
-# ── Frontend build ────────────────────────────────────────────────────────────
-cd ui
-npm ci --silent
-npm run build
-cd ..
+# The frontend isn't built here: CI builds and tests it, and every deploy
+# uploads that bundle to ui/dist.
 
 # ── .env file — fill in values after setup ───────────────────────────────────
 if [ ! -f ".env" ]; then
@@ -45,59 +40,28 @@ fi
 mkdir -p data
 
 # ── systemd service ───────────────────────────────────────────────────────────
-sudo tee /etc/systemd/system/vaultic-api.service > /dev/null <<'EOF'
-[Unit]
-Description=Vaultic API (FastAPI/uvicorn)
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/vaultic
-ExecStart=/home/ubuntu/vaultic-venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000
-Restart=always
-RestartSec=5
-EnvironmentFile=/home/ubuntu/vaultic/.env
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+# The unit lives in the repo (deploy/vaultic-api.service) and every deploy
+# installs it again: it runs deploy/start.sh, which wraps uvicorn in Litestream.
+# Litestream is installed by the deploy too, so the service is only enabled
+# here; the first deploy starts it.
+sudo cp deploy/vaultic-api.service /etc/systemd/system/vaultic-api.service
 sudo systemctl daemon-reload
 sudo systemctl enable vaultic-api.service
 
 # ── nginx config ──────────────────────────────────────────────────────────────
-# Serves the built React UI as static files.
-# Proxies /api/* to uvicorn on localhost:8000.
-# Replace YOUR_DOMAIN with your actual domain (or use the server IP temporarily).
-sudo tee /etc/nginx/sites-available/vaultic > /dev/null <<'EOF'
-server {
-    listen 80;
-    server_name YOUR_DOMAIN;
-
-    root /home/ubuntu/vaultic/ui/dist;
-    index index.html;
-
-    # Serve frontend — fallback to index.html for client-side routing
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-
-    # Proxy API requests to uvicorn
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-    }
-}
-EOF
-
-sudo ln -sf /etc/nginx/sites-available/vaultic /etc/nginx/sites-enabled/vaultic
+# The config lives in the repo (deploy/vaultic-nginx.conf) and every deploy
+# installs it the same way (#167): a copy in sites-available, symlinked from
+# sites-enabled. It needs the Cloudflare Origin Certificate in
+# /etc/ssl/cloudflare/ (cert.pem, key.pem), so nginx is only reloaded once
+# that is in place.
+sudo cp deploy/vaultic-nginx.conf /etc/nginx/sites-available/vaultic
+sudo ln -sfn /etc/nginx/sites-available/vaultic /etc/nginx/sites-enabled/vaultic
 sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl restart nginx
+if sudo test -f /etc/ssl/cloudflare/cert.pem && sudo test -f /etc/ssl/cloudflare/key.pem; then
+    sudo nginx -t && sudo systemctl reload nginx
+else
+    echo ">>> nginx not reloaded: put the Cloudflare Origin Certificate in /etc/ssl/cloudflare/ first <<<"
+fi
 
 # ── Firewall ──────────────────────────────────────────────────────────────────
 sudo ufw allow OpenSSH
@@ -109,10 +73,11 @@ echo "=== Setup complete ==="
 echo ""
 echo "Next steps:"
 echo "  1. Edit ~/vaultic/.env with your real values"
-echo "  2. Edit /etc/nginx/sites-available/vaultic — replace YOUR_DOMAIN"
-echo "  3. sudo systemctl start vaultic-api.service"
-echo "  4. sudo systemctl status vaultic-api.service   (check it's running)"
-echo "  5. Set up SSL with: sudo apt install certbot python3-certbot-nginx && sudo certbot --nginx"
+echo "  2. Put the Cloudflare Origin Certificate in /etc/ssl/cloudflare/ (cert.pem, key.pem),"
+echo "     then: sudo nginx -t && sudo systemctl reload nginx"
+echo "  3. Add the GitHub Actions secrets below, then push to main (or re-run the"
+echo "     last Test & Deploy run): the deploy installs Litestream, uploads the UI,"
+echo "     starts vaultic-api and installs the nginx config"
 echo ""
 echo "GitHub Actions secrets to add at github.com/jbazen/vaultic/settings/secrets:"
 echo "  SERVER_HOST    = <your Oracle Cloud public IP>"

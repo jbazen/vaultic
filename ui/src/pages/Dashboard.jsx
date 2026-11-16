@@ -32,6 +32,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
   const [coinbaseSyncing, setCoinbaseSyncing] = useState(false);
   const [coinbaseStatus, setCoinbaseStatus] = useState(null);
   const [i360Open, setI360Open] = useState(false);
@@ -125,11 +126,17 @@ export default function Dashboard() {
 
   async function handleSync() {
     setSyncing(true);
+    setSyncError(null);
     try {
       await triggerSync();
       await loadAll();
+    } catch (e) {
+      // Shown under the button. Uncaught, the rejection reached index.html's
+      // error handler, which replaced the whole app with it (#162).
+      if (mountedRef.current) setSyncError(e.message || "Sync failed");
+    } finally {
+      if (mountedRef.current) setSyncing(false);
     }
-    finally { if (mountedRef.current) setSyncing(false); }
   }
 
   async function handleCoinbaseSync() {
@@ -189,9 +196,14 @@ export default function Dashboard() {
               </span>
             )}
           </div>
-          <button className="btn btn-secondary" onClick={handleSync} disabled={syncing}>
-            {syncing ? "Syncing…" : "↻ Sync All"}
-          </button>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <button className="btn btn-secondary" onClick={handleSync} disabled={syncing}>
+              {syncing ? "Syncing…" : "↻ Sync All"}
+            </button>
+            {syncError && (
+              <span role="alert" style={{ fontSize: 12, color: "var(--red)" }}>{syncError}</span>
+            )}
+          </div>
         </div>
       </div>
 

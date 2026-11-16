@@ -24,6 +24,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 NGINX_CONF = REPO / "deploy" / "vaultic-nginx.conf"
 DEPLOY_YML = REPO / ".github" / "workflows" / "deploy.yml"
+RELOAD_SCRIPT = REPO / "deploy" / "nginx_reload.sh"
 
 # https://www.cloudflare.com/ips-v4 and /ips-v6, checked 2026-11-15
 CLOUDFLARE_RANGES = {
@@ -187,7 +188,20 @@ class TestDeployInstallsConfig:
         restore = script.index('sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"')
         assert changed < backup < install < restore
         assert 'if [ "$NGINX_BACKED_UP" -eq 1 ]; then' in script
-        assert "if sudo nginx -t && sudo systemctl reload nginx; then" in script
+        assert (
+            "if sudo nginx -t && sudo bash deploy/nginx_reload.sh /run/nginx.pid "
+            "/var/log/nginx/error.log systemctl reload nginx; then"
+        ) in script
+
+    def test_restore_after_failed_reload_reloads_the_old_config(self):
+        """#167: if the reload check gave up while nginx did take the new config,
+        reloading the restored file brings the running config back in line."""
+        script = self._script()
+        check = script.index("deploy/nginx_reload.sh")
+        restore = script.index('sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"', check)
+        reload_old = script.index("sudo nginx -t && sudo systemctl reload nginx || true", restore)
+        health = script.index('if [ "$HEALTHY" -ne 1 ]; then')
+        assert check < restore < reload_old < health
 
     def test_nginx_failure_fails_deploy_after_health_check(self):
         script = self._script()
@@ -343,6 +357,15 @@ http {{
         self.cmd = [NGINX, "-p", d, "-c", f"{d}/nginx.conf", "-e", f"{d}/error.log"]
         self.proc = None
 
+    def reload_check(self, reload_cmd: list[str] | None = None) -> subprocess.CompletedProcess:
+        """Run deploy/nginx_reload.sh against this nginx, as the deploy does (#167)."""
+        cmd = reload_cmd if reload_cmd is not None else self.cmd + ["-s", "reload"]
+        return subprocess.run(
+            ["bash", RELOAD_SCRIPT.as_posix(), (self.dir / "nginx.pid").as_posix(),
+             (self.dir / "error.log").as_posix(), *cmd],
+            capture_output=True, text=True, timeout=60,
+        )
+
     def config_test(self) -> subprocess.CompletedProcess:
         return subprocess.run(self.cmd + ["-t"], capture_output=True, text=True)
 
@@ -480,3 +503,52 @@ class TestNginxLive:
         assert r.headers["location"] == "https://vaulticsage.com/x"
         with pytest.raises(httpx.RemoteProtocolError):
             server.request("GET", "/x", {"Host": "evil.example"}, https=False)
+
+
+class TestReloadCheckLive:
+    """deploy/nginx_reload.sh against a real nginx master (#167)."""
+
+    def test_accepted_reload_passes(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        result = server.reload_check()
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "nginx reload applied" in result.stdout
+
+    def test_rejected_reload_fails_and_says_why(self, nginx_factory):
+        """A changed limit_req_zone key passes nginx -t, but the running master
+        rejects it on reload and keeps the old config while the reload command
+        itself still succeeds. That is the case the check exists for."""
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        site = server.dir / "site.conf"
+        site.write_text(
+            _replace_all(
+                site.read_text(encoding="utf-8"),
+                "limit_req_zone $binary_remote_addr zone=login:",
+                "limit_req_zone $remote_addr zone=login:",
+            ),
+            encoding="utf-8",
+        )
+        assert server.config_test().returncode == 0
+        result = server.reload_check()
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "nginx reload NOT applied" in result.stdout
+        assert "[emerg]" in result.stdout
+        assert 'uses the "$remote_addr" key' in result.stdout
+        # nginx is still up on the old config.
+        assert server.request("GET", "/api/health").status_code == 200
+
+    def test_failed_reload_command_fails(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        result = server.reload_check(["false"])
+        assert result.returncode == 1
+        assert "failed" in result.stdout
+
+    def test_missing_pid_file_fails(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        # Never started, so there is no master and no pid file.
+        result = server.reload_check()
+        assert result.returncode == 1
+        assert "no master PID" in result.stdout

@@ -271,6 +271,8 @@ r.fulfill({ json: { rates: [] } });
 
 **Login helpers**: `loginMocked(page)` registers the base mocks and signs in. To override a mock for one test, call `mockAllAPIs(page)`, register your override, then `loginOnly(page)` — the last route registered wins, so `loginMocked` would hide the override.
 
+**Production build**: Playwright builds the UI and runs against `vite preview` on port 4173, not the dev server, and CI deploys that tested bundle (#147). `mockAllAPIs` also serves an empty script for `https://cdn.plaid.com/**`, so no test loads Plaid's real script (#162).
+
 **Account list**: it lives on the Dashboard (`/`, anchor `#accounts`); the sidebar has no groups and there is no Accounts page (`/accounts` redirects to `/#accounts`). The Dashboard has many buttons, so match tab buttons with `getByRole("button", { name: "Performance", exact: true })`.
 
 ### Test coverage expectations
@@ -329,7 +331,7 @@ These rules come from a full security audit (March 2026). Every finding below wa
 ### Error Handling & Information Disclosure
 
 - **Never leak stack traces** in HTTP responses — all endpoints that catch exceptions must return generic messages (`"Internal server error"`) not `str(e)`
-- **Error boundary** in React hides stack traces from users in production
+- **On-screen errors**: `ui/index.html` shows an uncaught error (with its stack) only when the app isn't on screen (it never started, or React removed it after a crash), set as text via `textContent`; errors in a running app go to the console only (#162)
 - **QR codes**: render SVG via `DOMParser`, never via `dangerouslySetInnerHTML`
 
 ### Rate Limiting
