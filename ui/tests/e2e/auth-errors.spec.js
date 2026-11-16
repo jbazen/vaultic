@@ -117,9 +117,6 @@ test.describe("Token refresh failures (issue #168)", () => {
   test("a later successful refresh carries on with the new token", async ({ page }) => {
     const fresh = fakeJwt("fresh", 4102444800);
     let fail = true;
-    // Settings mounts Plaid Link; stub its CDN script (see settings-password.spec.js).
-    await page.route("https://cdn.plaid.com/**", r =>
-      r.fulfill({ contentType: "application/javascript", body: "" }));
     await mockAllAPIs(page);
     await page.route("**/api/auth/refresh", r => {
       if (fail) {

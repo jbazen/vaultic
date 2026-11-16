@@ -25,13 +25,6 @@ async function storedTokens(page) {
 }
 
 test.describe("Change password (issue #132)", () => {
-  // Settings mounts Plaid Link; its real CDN script throws a cross-origin
-  // "Script error." in the test browser that replaces the page.
-  test.beforeEach(async ({ page }) => {
-    await page.route("https://cdn.plaid.com/**", r =>
-      r.fulfill({ contentType: "application/javascript", body: "" }));
-  });
-
   test("web session keeps working with the replacement token", async ({ page }) => {
     const newToken = fakeJwt("web-after-change");
     let sentBody = null;
@@ -169,8 +162,6 @@ test.describe("Change password (issue #132)", () => {
 
     // A second tab on Settings: its Security Log poll still carries the old token.
     const other = await context.newPage();
-    await other.route("https://cdn.plaid.com/**", r =>
-      r.fulfill({ contentType: "application/javascript", body: "" }));
     await mockAllAPIs(other);
     await other.route("**/api/auth/security-log*", r => {
       const auth = r.request().headers()["authorization"];
@@ -196,11 +187,6 @@ test.describe("Change password (issue #132)", () => {
 });
 
 test.describe("Disable 2FA errors (issue #151)", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.route("https://cdn.plaid.com/**", r =>
-      r.fulfill({ contentType: "application/javascript", body: "" }));
-  });
-
   async function tryDisable(page, status, detail) {
     await mockAllAPIs(page);
     await page.route("**/api/auth/me", r =>

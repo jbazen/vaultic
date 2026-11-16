@@ -15,6 +15,10 @@
           + '</div>';
       }
       window.onerror = function(msg, src, line, col, err) {
+        // An error from another origin's script (e.g. Plaid Link) arrives as a
+        // bare "Script error." with no Error object. It says nothing useful and
+        // the app is still running, so leave the page alone (#162).
+        if (!err && /^Script error\.?$/.test(msg)) return false;
         showError((err && err.stack) || msg);
         return true;
       };

@@ -8,6 +8,13 @@ export async function mockAllAPIs(page) {
     r.fulfill({ json: {} });
   });
 
+  // ── Plaid Link's CDN script ──
+  // The Dashboard and Settings mount Plaid Link, which loads its script from
+  // cdn.plaid.com. Serve an empty script so no test depends on the internet or
+  // on what Plaid's real script does in a test browser (#162).
+  await page.route("https://cdn.plaid.com/**", r =>
+    r.fulfill({ contentType: "application/javascript", body: "" }));
+
   // ── Auth ──
   await page.route("**/api/auth/login", r =>
     r.fulfill({ json: { token: "test-jwt-token" } }));

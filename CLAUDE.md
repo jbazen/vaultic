@@ -271,6 +271,8 @@ r.fulfill({ json: { rates: [] } });
 
 **Login helpers**: `loginMocked(page)` registers the base mocks and signs in. To override a mock for one test, call `mockAllAPIs(page)`, register your override, then `loginOnly(page)` — the last route registered wins, so `loginMocked` would hide the override.
 
+**Production build**: Playwright builds the UI and runs against `vite preview` on port 4173, not the dev server, and CI deploys that tested bundle (#147). `mockAllAPIs` also serves an empty script for `https://cdn.plaid.com/**`, so no test loads Plaid's real script (#162).
+
 **Account list**: it lives on the Dashboard (`/`, anchor `#accounts`); the sidebar has no groups and there is no Accounts page (`/accounts` redirects to `/#accounts`). The Dashboard has many buttons, so match tab buttons with `getByRole("button", { name: "Performance", exact: true })`.
 
 ### Test coverage expectations
