@@ -59,3 +59,7 @@ voya_data.json
 
 # Secret-rotation scripts (contain prod server IP + SSH key paths) — local only, public repo
 scripts/Rotate-*.ps1
+
+# Playwright output: last-run state, failure traces and screenshots, HTML report (#160)
+ui/test-results/
+ui/playwright-report/
