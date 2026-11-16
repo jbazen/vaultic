@@ -1,5 +1,5 @@
 python-dotenv==1.2.4
-fastapi==0.162.4
+fastapi==0.162.7
 # FastAPI's framework deps, pinned so the server's in-place pip upgrade
 # lands on the same versions CI tests (pip leaves satisfied deps alone).
 starlette==1.10.0
