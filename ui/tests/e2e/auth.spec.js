@@ -47,5 +47,12 @@ test.describe("Authentication", () => {
     await page.waitForSelector("text=Net Worth", { timeout: 8000 });
     await page.getByRole("button", { name: /sign out|logout/i }).click();
     await expect(page.getByPlaceholder(/username/i)).toBeVisible({ timeout: 8000 });
+    // The session is really gone, so a reload can't bring the Dashboard back (#162)
+    await expect.poll(() => page.evaluate(() => [
+      localStorage.getItem("vaultic_token"),
+      localStorage.getItem("vaultic_refresh_token"),
+    ])).toEqual([null, null]);
+    await page.reload();
+    await expect(page.getByPlaceholder(/username/i)).toBeVisible();
   });
 });
