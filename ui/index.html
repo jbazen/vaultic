@@ -27,7 +27,7 @@
           text.textContent = msg;
           box.appendChild(title);
           box.appendChild(text);
-          // Not replaceChildren(): Safari 14 lacks it, and that's where this page matters most
+          // Not replaceChildren(): browsers older than Safari 14 / Chrome 86 lack it, and they're where this page matters most
           document.body.textContent = '';
           document.body.appendChild(box);
         }, 250);
