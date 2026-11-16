@@ -535,7 +535,7 @@ class TestReloadCheckLive:
         assert result.returncode == 1, result.stdout + result.stderr
         assert "nginx reload NOT applied" in result.stdout
         assert "[emerg]" in result.stdout
-        assert "limit_req_zone" in result.stdout
+        assert 'uses the "$remote_addr" key' in result.stdout
         # nginx is still up on the old config.
         assert server.request("GET", "/api/health").status_code == 200
 
