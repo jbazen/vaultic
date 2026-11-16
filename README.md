@@ -714,34 +714,11 @@ sudo systemctl enable vaultic-api
 sudo systemctl start vaultic-api
 ```
 
-### Nginx config (`/etc/nginx/sites-available/vaultic`)
+### Nginx config
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name your.domain.com;
+The config lives in the repo at `deploy/vaultic-nginx.conf`; don't copy it into docs or edit it on the server. Every deploy installs it: it copies the file to `/etc/nginx/sites-available/vaultic`, makes `/etc/nginx/sites-enabled/vaultic` a symlink to that copy, runs `nginx -t`, reloads with `deploy/nginx_reload.sh` (which fails unless nginx actually took the new config), and checks the site through nginx. If any of that fails, the previous config is put back and the deploy fails.
 
-    ssl_certificate /etc/letsencrypt/live/your.domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your.domain.com/privkey.pem;
-
-    # Serve Vite build
-    root /home/ubuntu/vaultic/ui/dist;
-    index index.html;
-
-    # API proxy
-    location /api/ {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-
-    # SPA fallback
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
+It expects the Cloudflare Origin Certificate at `/etc/ssl/cloudflare/cert.pem` and `/etc/ssl/cloudflare/key.pem` (Cloudflare in Full Strict mode, no certbot). On a new server, remove `/etc/nginx/sites-enabled/default` before the first deploy.
 
 ### GitHub Actions Secrets required
 
