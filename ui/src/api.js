@@ -710,10 +710,6 @@ export async function i360SyncLog(limit = 20) {
   const res = await apiFetch(`/api/investor360/sync-log?limit=${limit}`);
   return res.json();
 }
-export async function i360Bookmarklet() {
-  const res = await apiFetch("/api/investor360/bookmarklet.js");
-  return res.json();
-}
 
 
 // ── Insperity 401K ──────────────────────────────────────────────────────────

@@ -175,17 +175,12 @@ class TestEmptyDataEndpoints:
         assert resp.json() == []
 
 
-# ── Bookmarklet endpoint ──────────────────────────────────────────────────
+# ── Removed bookmarklet endpoint (#169) ───────────────────────────────────
 
-class TestBookmarklet:
-    def test_returns_bookmarklet(self, client, auth_headers):
+class TestBookmarkletRemoved:
+    def test_bookmarklet_route_is_gone(self, client, auth_headers):
         resp = client.get("/api/investor360/bookmarklet.js", headers=auth_headers)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "bookmarklet" in data
-        assert "CFNSession" in data["bookmarklet"]
-        assert "instructions" in data
-        assert len(data["instructions"]) > 0
+        assert resp.status_code == 404
 
 
 # ── Sync endpoint tests ───────────────────────────────────────────────────
