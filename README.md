@@ -789,11 +789,11 @@ If you ever migrate from SQLite to PostgreSQL, swap Litestream for [WAL-G](https
 On every pull request to `main` and every push to `main`:
 
 1. **Test job** — runs `pytest` against in-memory SQLite on Ubuntu (Python 3.12)
-2. **E2E job** — runs the Playwright tests against the Vite dev server
+2. **E2E job** — builds the production UI bundle and runs the Playwright tests against it (`vite preview`), then keeps that bundle as the `ui-dist` artifact. When a test fails, its trace and screenshot are uploaded as `playwright-results`
 
 On a push to `main` only:
 
-3. **Deploy job** — builds the UI on the runner, uploads it, then SSH into Oracle Cloud, `git pull`, `pip install`, `systemctl restart vaultic-api`
+3. **Deploy job** — uploads the E2E-tested `ui-dist` bundle (no second build), then SSH into Oracle Cloud, `git pull`, `pip install`, `systemctl restart vaultic-api`, install and reload the nginx config, and check the API and the site through nginx
 
 Deploy only runs if both test jobs pass. Pull request runs never deploy.
 
