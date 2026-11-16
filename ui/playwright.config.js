@@ -1,10 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // The tests run against the production bundle (`vite build`, served by
-// `vite preview`), not the dev server, so they cover what actually ships (#147).
-// Preview also has no dependency optimiser or HMR, so it can't reload a page in
-// the middle of a test, the likely cause of the #162 logout flake. The API is
-// mocked in every test (tests/e2e/helpers.js), so preview needs no /api proxy.
+// `vite preview`), not the dev server, so they cover what actually ships, and
+// CI deploys that same bundle (#147). The API is mocked in every test
+// (tests/e2e/helpers.js), so preview needs no /api proxy.
 const PORT = 4173;
 
 export default defineConfig({

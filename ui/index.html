@@ -6,21 +6,36 @@
     <title>Vaultic</title>
     <!-- Immediate dark theme before React/CSS loads — prevents white flash and invisible text on mobile -->
     <style>html, body { background: #0f1117; color: #e8eaf0; }</style>
-    <!-- Catch JS errors and show them on screen — useful for mobile debugging where DevTools isn't available -->
+    <!-- Show JS errors on screen when the app is blank — useful for mobile debugging where DevTools isn't available -->
     <script>
+      // Only when the app isn't on screen: it never started, or React removed it
+      // after a crash (checked a moment later, once React has done so). A stray
+      // error in a running app, such as a failed request nobody caught or a
+      // third-party script throwing, leaves the app alone and goes to the
+      // console only (#162). The message is set as text, never parsed as HTML.
       function showError(msg) {
-        document.body.innerHTML = '<div style="position:fixed;inset:0;background:#0f1117;color:#e8eaf0;padding:24px;font-size:13px;overflow:auto;z-index:9999">'
-          + '<div style="color:#f87171;font-weight:700;font-size:16px;margin-bottom:12px">Error</div>'
-          + '<pre style="white-space:pre-wrap;word-break:break-all">' + msg + '</pre>'
-          + '</div>';
+        setTimeout(function() {
+          var root = document.getElementById('root');
+          if (!document.body || (root && root.childNodes.length)) return;
+          var box = document.createElement('div');
+          box.style.cssText = 'position:fixed;inset:0;background:#0f1117;color:#e8eaf0;padding:24px;font-size:13px;overflow:auto;z-index:9999';
+          var title = document.createElement('div');
+          title.style.cssText = 'color:#f87171;font-weight:700;font-size:16px;margin-bottom:12px';
+          title.textContent = 'Error';
+          var text = document.createElement('pre');
+          text.style.cssText = 'white-space:pre-wrap;word-break:break-all';
+          text.textContent = msg;
+          box.appendChild(title);
+          box.appendChild(text);
+          document.body.replaceChildren(box);
+        }, 250);
       }
       window.onerror = function(msg, src, line, col, err) {
-        // An error from another origin's script (e.g. Plaid Link) arrives as a
-        // bare "Script error." with no Error object. It says nothing useful and
-        // the app is still running, so leave the page alone (#162).
+        // Another origin's script (e.g. Plaid Link) reports only a bare
+        // "Script error." with no Error object: nothing useful to show.
         if (!err && /^Script error\.?$/.test(msg)) return false;
-        showError((err && err.stack) || msg);
-        return true;
+        showError((err && err.stack) || String(msg));
+        return false;
       };
       window.addEventListener('unhandledrejection', function(e) {
         showError(e.reason && e.reason.stack ? e.reason.stack : String(e.reason));

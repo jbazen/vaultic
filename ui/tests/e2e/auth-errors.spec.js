@@ -1,12 +1,7 @@
 import { test, expect } from "@playwright/test";
-import { mockAllAPIs } from "./helpers.js";
+import { fakeJwt, mockAllAPIs } from "./helpers.js";
 
 const LOCKED = "Too many failed attempts. Try again in 15 minutes.";
-
-function fakeJwt(tag, exp) {
-  const payload = btoa(JSON.stringify({ sub: "testuser", exp, tag }));
-  return `e30.${payload}.sig`;
-}
 
 async function submitLogin(page) {
   await page.goto("/");

@@ -1,5 +1,14 @@
 /** Shared mock API setup for E2E tests */
 
+/**
+ * A JWT-shaped token the app can decode. exp defaults to far in the future, so
+ * the client counts it as signed in and never tries a refresh.
+ */
+export function fakeJwt(tag, exp = 4102444800) {
+  const payload = btoa(JSON.stringify({ sub: "testuser", exp, tag }));
+  return `e30.${payload}.sig`;
+}
+
 export async function mockAllAPIs(page) {
   // ── Catch-all: intercept any /api/ request that isn't explicitly mocked ──
   // Returns an empty JSON response to prevent ECONNREFUSED crashes when

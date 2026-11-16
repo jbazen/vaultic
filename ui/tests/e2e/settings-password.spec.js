@@ -1,11 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mockAllAPIs, loginOnly } from "./helpers.js";
-
-// A JWT-shaped token whose exp is far off, so the client never tries a refresh.
-function fakeJwt(tag) {
-  const payload = btoa(JSON.stringify({ sub: "testuser", exp: 4102444800, tag }));
-  return `e30.${payload}.sig`;
-}
+import { fakeJwt, loginOnly, mockAllAPIs } from "./helpers.js";
 
 async function fillAndSubmit(page) {
   const field = label => page.locator(".form-group")
