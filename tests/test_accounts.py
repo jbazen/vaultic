@@ -709,6 +709,11 @@ class TestInvestmentCurrencyFields:
     def test_holdings_requires_auth(self, client):
         assert client.get("/api/accounts/1/holdings").status_code == 401
 
+    def test_holdings_history_route_is_gone(self, client, auth_headers):
+        """The unused per-holding history endpoint was removed (#161)."""
+        res = client.get("/api/accounts/1/holdings/history?security_id=x", headers=auth_headers)
+        assert res.status_code == 404
+
 
 class TestHoldingsCurrencyTotals:
     """GET /api/accounts/{id}/holdings never adds amounts in different

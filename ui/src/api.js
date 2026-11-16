@@ -515,13 +515,6 @@ export async function getAccountInvestmentTransactions(accountId, limit = 100, o
   return res.json();
 }
 
-// Fetches daily price/value history for a single security within an account.
-// Used for plotting an individual holding's performance over time.
-export async function getHoldingsHistory(accountId, securityId, days = 90) {
-  const res = await apiFetch(`/api/accounts/${accountId}/holdings/history?security_id=${encodeURIComponent(securityId)}&days=${days}`);
-  return res.json();
-}
-
 // --- Manual entries ---
 export async function getManualEntries() {
   const res = await apiFetch("/api/manual");
