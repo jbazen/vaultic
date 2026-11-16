@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 
 # Where account-related notifications open: the account list on the Dashboard.
 ACCOUNTS_URL = "/#accounts"
+# VAPID contact used when VAPID_EMAIL is unset. RFC 8292 allows an https: URI,
+# and every push service accepts it (Apple rejects localhost contacts).
+VAPID_FALLBACK_SUB = "https://vaulticsage.com"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -84,16 +87,19 @@ def _create_vapid_jwt(endpoint: str) -> str:
     The JWT is signed with ES256 (ECDSA P-256 + SHA-256) and contains:
       aud — the push service origin (https://fcm.googleapis.com, etc.)
       exp — expiry 12 hours from now
-      sub — admin contact (mailto: URI from VAPID_EMAIL env var)
+      sub — admin contact (mailto: URI from VAPID_EMAIL env var, else the site URL)
     """
     parsed = urlparse(endpoint)
     audience = f"{parsed.scheme}://{parsed.netloc}"
-    email = os.environ.get("VAPID_EMAIL", "mailto:jason.bazen@yahoo.com")
+    subject = os.environ.get("VAPID_EMAIL", "").strip()
+    if not subject:
+        logger.warning("VAPID_EMAIL is not set; using %s as the VAPID contact", VAPID_FALLBACK_SUB)
+        subject = VAPID_FALLBACK_SUB
 
     claims = {
         "aud": audience,
         "exp": int(time.time()) + 43_200,  # 12 hours
-        "sub": email,  # mailto:jason.bazen@yahoo.com (set via VAPID_EMAIL in .env)
+        "sub": subject,
     }
 
     private_key = _load_private_key()
