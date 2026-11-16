@@ -117,6 +117,54 @@ class TestNginxConfigText:
         assert "proxy_send_timeout 180s;" in body
 
 
+def _server_blocks(text: str) -> list[str]:
+    """Bodies of the top-level server blocks (comments removed)."""
+    stripped = "\n".join(_directives(text))
+    blocks, depth, start = [], 0, 0
+    for m in re.finditer(r"\bserver\s*\{|\{|\}", stripped):
+        token = m.group(0)
+        if depth == 0:
+            if token.startswith("server"):
+                start, depth = m.end(), 1
+        elif token.endswith("{"):
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                blocks.append(stripped[start:m.start()])
+    return blocks
+
+
+class TestOnlyOurHostname:
+    """The origin answers only for vaulticsage.com (#166)."""
+
+    def test_port_80_default_server_closes_connection(self):
+        blocks = [b for b in _server_blocks(_conf_text()) if "listen 80 default_server;" in b]
+        assert len(blocks) == 1
+        assert "return 444;" in blocks[0]
+
+    def test_port_443_default_server_rejects_handshake(self):
+        blocks = [b for b in _server_blocks(_conf_text())
+                  if "listen 443 ssl default_server;" in b]
+        assert len(blocks) == 1
+        assert "ssl_reject_handshake on;" in blocks[0]
+        assert "return 444;" in blocks[0]
+        # The TLS version is chosen from the default server, before SNI.
+        assert "ssl_protocols TLSv1.2 TLSv1.3;" in blocks[0]
+
+    def test_auth_locations_cap_the_body(self):
+        locations = _proxy_locations(_conf_text())
+        for path in ("/api/auth/login", "/api/auth/verify-2fa"):
+            assert "client_max_body_size 16k;" in locations[path]
+
+    def test_site_blocks_name_only_our_hostnames(self):
+        named = [b for b in _server_blocks(_conf_text()) if "default_server" not in b]
+        assert len(named) == 2
+        for body in named:
+            assert "server_name vaulticsage.com www.vaulticsage.com;" in body
+            assert "default_server" not in body
+
+
 class TestDeployInstallsConfig:
     def _script(self) -> str:
         return DEPLOY_YML.read_text(encoding="utf-8")
@@ -147,6 +195,18 @@ class TestDeployInstallsConfig:
         health = script.index('if [ "$HEALTHY" -ne 1 ]; then')
         fail = script.index('if [ "$NGINX_FAILED" -eq 1 ]; then')
         assert flagged < health < fail
+
+    def test_site_is_checked_through_nginx_with_our_hostname(self):
+        """#166: the default_server blocks drop anything without our SNI/Host,
+        so the check must send both, after the API check and before the
+        deploy fails on NGINX_FAILED."""
+        script = self._script()
+        health = script.index('if [ "$HEALTHY" -ne 1 ]; then')
+        site = script.index(
+            "--resolve vaulticsage.com:443:127.0.0.1 https://vaulticsage.com/api/health")
+        restore = script.index('sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"', site)
+        fail = script.index('if [ "$NGINX_FAILED" -eq 1 ]; then')
+        assert health < site < restore < fail
 
 
 # ── Live checks against a real nginx ─────────────────────────────────────────
@@ -236,8 +296,13 @@ class _Nginx:
         _write_self_signed_cert(cert, key)
         (workdir / "dist").mkdir()
 
+        self.http_port = _free_port()
         site = _conf_text()
-        site = _replace_all(site, "listen 80;", f"listen 127.0.0.1:{_free_port()};")
+        site = _replace_all(site, "listen 80 default_server;",
+                            f"listen 127.0.0.1:{self.http_port} default_server;")
+        site = _replace_all(site, "listen 443 ssl default_server;",
+                            f"listen 127.0.0.1:{self.https_port} ssl default_server;")
+        site = _replace_all(site, "listen 80;", f"listen 127.0.0.1:{self.http_port};")
         site = _replace_all(site, "listen 443 ssl;", f"listen 127.0.0.1:{self.https_port} ssl;")
         site = _replace_all(site, "/etc/ssl/cloudflare/cert.pem", cert.as_posix())
         site = _replace_all(site, "/etc/ssl/cloudflare/key.pem", key.as_posix())
@@ -304,12 +369,18 @@ http {{
         self.upstream.shutdown()
         self.upstream.server_close()
 
-    def request(self, method: str, path: str, headers: dict | None = None) -> httpx.Response:
+    def request(self, method: str, path: str, headers: dict | None = None,
+                sni: str | None = "vaulticsage.com", https: bool = True) -> httpx.Response:
+        """Send a request as Cloudflare does: SNI and Host vaulticsage.com
+        unless overridden. sni=None sends no SNI, like a bare-IP client."""
+        url = (f"https://127.0.0.1:{self.https_port}{path}" if https
+               else f"http://127.0.0.1:{self.http_port}{path}")
+        extensions = {"sni_hostname": sni} if https and sni else {}
         with httpx.Client(verify=False, timeout=5) as client:
             return client.request(
-                method,
-                f"https://127.0.0.1:{self.https_port}{path}",
+                method, url,
                 headers={"Host": "vaulticsage.com", **(headers or {})},
+                extensions=extensions,
             )
 
 
@@ -380,3 +451,32 @@ class TestNginxLive:
         server.start()
         codes = [server.request("POST", "/api/auth/login").status_code for _ in range(5)]
         assert codes == [200, 200, 200, 200, 429]
+
+    def test_other_sni_is_refused_at_handshake(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        for sni in ("evil.example", None):
+            with pytest.raises(httpx.ConnectError):
+                server.request("GET", "/api/health", sni=sni)
+
+    def test_our_sni_with_other_host_gets_no_reply(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        with pytest.raises(httpx.RemoteProtocolError):
+            server.request("GET", "/api/health", {"Host": "evil.example"})
+
+    def test_www_is_served(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        r = server.request("GET", "/api/health", {"Host": "www.vaulticsage.com"},
+                           sni="www.vaulticsage.com")
+        assert r.status_code == 200
+
+    def test_port_80_redirects_our_host_and_drops_others(self, nginx_factory):
+        server = nginx_factory(trust_loopback_as_cloudflare=True)
+        server.start()
+        r = server.request("GET", "/x", https=False)
+        assert r.status_code == 301
+        assert r.headers["location"] == "https://vaulticsage.com/x"
+        with pytest.raises(httpx.RemoteProtocolError):
+            server.request("GET", "/x", {"Host": "evil.example"}, https=False)

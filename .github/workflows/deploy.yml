@@ -204,14 +204,38 @@ jobs:
               exit 1
             fi
 
+            # The check above calls uvicorn directly, so it can't see an nginx config
+            # that passes nginx -t but breaks the site. Check through nginx too, with
+            # our hostname as SNI and Host (#166). On failure put the previous config
+            # back; the deploy fails below with the nginx step.
+            if [ "$NGINX_FAILED" -eq 0 ]; then
+              SITE_OK=0
+              for i in 1 2 3; do
+                if SITE_ERR=$(curl -sS -f -k -o /dev/null --resolve vaulticsage.com:443:127.0.0.1 https://vaulticsage.com/api/health 2>&1); then
+                  SITE_OK=1
+                  break
+                fi
+                sleep 2
+              done
+              if [ "$SITE_OK" -ne 1 ]; then
+                echo "Health check through nginx failed: $SITE_ERR"
+                NGINX_FAILED=1
+                if [ "$NGINX_BACKED_UP" -eq 1 ]; then
+                  echo "Restoring the previous nginx config"
+                  sudo cp "$NGINX_SITE.prev" "$NGINX_SITE"
+                  sudo nginx -t && sudo systemctl reload nginx || true
+                fi
+              fi
+            fi
+
             # Force-refresh net worth snapshot (applies calculation fixes immediately)
             # NOT || true — snapshot failure must be visible in deploy logs
             .venv/bin/python scripts/refresh_nw_snapshot.py
 
-            # A failed nginx -t or reload (above) fails the deploy only now, after the API
-            # health check and rollback have run (#155)
+            # A failed nginx -t, reload or site check (above) fails the deploy only now,
+            # after the API health check and rollback have run (#155)
             if [ "$NGINX_FAILED" -eq 1 ]; then
-              echo "Deploy failed: the new nginx config did not pass nginx -t or reload (previous config restored)"
+              echo "Deploy failed: nginx -t, the reload or the site check through nginx failed (previous config restored where there was one)"
               exit 1
             fi
 

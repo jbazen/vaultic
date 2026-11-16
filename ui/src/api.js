@@ -29,9 +29,51 @@ function getTokenExpiry(token) {
 let _refreshing = null;
 
 /**
+ * Swap the refresh token for a new access + refresh token pair.
+ * Resolves "ok", "invalid" (a 401: the refresh token is dead, so sign out) or
+ * "retry" (a 429, a 5xx, a network error: keep the tokens, issue #168).
+ */
+async function refreshAccessToken(refreshToken) {
+  let res;
+  try {
+    res = await fetch("/api/auth/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+  } catch {
+    return "retry";
+  }
+  if (res.status === 401) {
+    // Another tab already rotated this refresh token and stored the new pair:
+    // the 401 is for the old one, so keep the new tokens.
+    if (getRefreshToken() !== refreshToken) return "ok";
+    clearToken();
+    clearRefreshToken();
+    window.dispatchEvent(new Event("auth:logout"));
+    return "invalid";
+  }
+  if (!res.ok) return "retry";
+  try {
+    const data = await res.json();
+    if (typeof data.token !== "string" || typeof data.refresh_token !== "string") return "retry";
+    setToken(data.token);
+    setRefreshToken(data.refresh_token);
+    return "ok";
+  } catch {
+    return "retry";
+  }
+}
+
+/**
  * If the access token is expired or within 2 minutes of expiry, and a refresh
  * token is available, silently swap in a fresh access token before the request.
  * Uses a shared promise (_refreshing) so concurrent calls don't double-refresh.
+ *
+ * Only a 401 from /refresh signs the device out. When the refresh fails for
+ * another reason and the access token has already expired, the request is
+ * failed here instead of being sent with the expired token, whose 401 would
+ * sign the device out (issue #168). The next request tries the refresh again.
  */
 async function ensureFreshToken() {
   const token        = getToken();
@@ -43,35 +85,15 @@ async function ensureFreshToken() {
   const needsRefresh = !token || (getTokenExpiry(token) - Date.now() < TWO_MIN);
   if (!needsRefresh) return;
 
-  if (_refreshing) {
-    await _refreshing; // Another call already refreshing — wait for it
-    return;
+  if (!_refreshing) {
+    _refreshing = refreshAccessToken(refreshToken).finally(() => { _refreshing = null; });
   }
-
-  _refreshing = (async () => {
-    try {
-      const res = await fetch("/api/auth/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setToken(data.token);
-        setRefreshToken(data.refresh_token);
-      } else {
-        // Refresh token is invalid/expired — force full logout
-        clearToken();
-        clearRefreshToken();
-        window.dispatchEvent(new Event("auth:logout"));
-      }
-    } catch {
-      // Network error — don't force logout; the subsequent request will handle 401
-    }
-  })();
-
-  await _refreshing;
-  _refreshing = null;
+  const outcome = await _refreshing;
+  if (outcome !== "retry") return;
+  const current = getToken();
+  if (!current || getTokenExpiry(current) <= Date.now()) {
+    throw new Error("Couldn't renew your session. Try again in a moment.");
+  }
 }
 
 // ── Core fetch wrapper ────────────────────────────────────────────────────────
@@ -144,17 +166,42 @@ async function sendRequest(path, options, canRetry = true) {
 // ── Auth functions ────────────────────────────────────────────────────────────
 
 /**
+ * The message to show for a failed login or 2FA response (issue #157): the
+ * server's detail (e.g. the lockout's "Try again in 15 minutes"), or a
+ * fallback when there is none. A 429 without JSON is nginx's own per-minute
+ * limit, which clears within a minute.
+ */
+async function authErrorMessage(res, fallback) {
+  const detail = await res.json().then(d => d.detail).catch(() => null);
+  if (typeof detail === "string" && detail) return detail;
+  if (res.status === 429) return "Too many attempts. Wait a minute and try again.";
+  if (fallback && res.status === 401) return fallback;
+  return `Sign-in failed (${res.status}). Try again in a moment.`;
+}
+
+/** POST a sign-in step; a request that never reaches the server gets a plain message. */
+async function postAuth(path, body) {
+  try {
+    return await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("Can't reach the server. Check your connection and try again.");
+  }
+}
+
+/**
  * Log in with username + password.
  * rememberMe=true issues a refresh token (mobile "keep me signed in").
  * rememberMe=false issues a 30-day web access token only.
  */
 export async function login(username, password, rememberMe = false) {
-  const res = await fetch("/api/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, remember_me: rememberMe }),
-  });
-  if (!res.ok) throw new Error("Invalid credentials");
+  const res = await postAuth("/api/auth/login", { username, password, remember_me: rememberMe });
+  if (!res.ok) {
+    throw new Error(res.status === 401 ? "Invalid credentials" : await authErrorMessage(res));
+  }
   const data = await res.json();
   if (data.requires_2fa) return { requires_2fa: true, pending_token: data.pending_token };
   setToken(data.token);
@@ -167,18 +214,23 @@ export async function login(username, password, rememberMe = false) {
  * rememberMe must match what was passed at the login step.
  */
 export async function verify2FA(pendingToken, code, rememberMe = false) {
-  const res = await fetch("/api/auth/verify-2fa", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pending_token: pendingToken, code, remember_me: rememberMe }),
-  });
-  if (!res.ok) throw new Error("Invalid or expired code");
+  const res = await postAuth("/api/auth/verify-2fa",
+    { pending_token: pendingToken, code, remember_me: rememberMe });
+  if (!res.ok) throw new Error(await authErrorMessage(res, "Invalid or expired code"));
   const data = await res.json();
   setToken(data.token);
   if (data.refresh_token) setRefreshToken(data.refresh_token);
 }
 
 export async function logout() {
+  // Refresh first if it's due, so the refresh token sent below is the current
+  // one: refreshing inside apiFetch would rotate it after it was read here,
+  // and the server would revoke a token that is already dead.
+  try {
+    await ensureFreshToken();
+  } catch {
+    // Refresh failed: log out with what we have
+  }
   const refreshToken = getRefreshToken();
   try {
     // Send refresh token so the server revokes it immediately — prevents the

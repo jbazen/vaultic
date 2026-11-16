@@ -4,6 +4,7 @@ import re
 import time
 import uuid
 import hashlib
+import ipaddress
 import secrets
 from pathlib import Path
 from collections import defaultdict
@@ -43,14 +44,48 @@ _failed_by_username: dict[str, list[float]] = defaultdict(list)
 # sign-out-everywhere control (issue #151).
 _own_pw_failed_by_ip: dict[str, list[float]] = defaultdict(list)
 _own_pw_failed_by_username: dict[str, list[float]] = defaultdict(list)
+# Wrong codes at /verify-2fa. Own counters, so a correct password at /login
+# (which clears the login counters) can't reset them (#156), and wrong codes
+# can't lock the owner out of password login (#165).
+_2fa_failed_by_ip: dict[str, list[float]] = defaultdict(list)
+_2fa_failed_by_username: dict[str, list[float]] = defaultdict(list)
 _Counter = dict[str, list[float]]
+_ALL_COUNTERS: tuple[_Counter, ...] = (
+    _failed_attempts, _failed_by_username,
+    _own_pw_failed_by_ip, _own_pw_failed_by_username,
+    _2fa_failed_by_ip, _2fa_failed_by_username,
+)
 MAX_ATTEMPTS = 5
 MAX_ATTEMPTS_PER_USER = 20  # Per-username across all IPs
+# Wrong 2FA codes per username across all IPs. Lower than the password limit:
+# whoever reaches this step already has the password, and a 6-digit code
+# (accepted in a 3-step window) is the only thing left to guess.
+MAX_2FA_ATTEMPTS_PER_USER = 10
 LOCKOUT_WINDOW = 15 * 60
+# How often a recorded failure also sweeps every counter for keys whose
+# failures have all aged out, so keys that are never checked again (a rotated
+# IPv6 address, a made-up username) don't pile up (#165).
+_SWEEP_INTERVAL = 60
+_last_sweep = 0.0
 
-# Token denylist: stores revoked tokens until they would naturally expire.
-# Key = token string, value = expiry timestamp. Cleaned up on each check.
-_token_denylist: dict[str, float] = {}
+
+def lockout_key(ip: str) -> str:
+    """The key an IP's failures are counted under.
+
+    An IPv6 address counts as its /64: one host is usually handed a whole /64,
+    so counting single addresses would give it 2^64 fresh lockouts (#165).
+    An IPv4-mapped IPv6 address counts as the IPv4 address. Anything else,
+    such as IPv4 or "unknown", is used as is.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network((int(addr) >> 64 << 64, 64)))
+    return str(addr)
 
 
 def _over_limit(counter: _Counter, key: str, limit: int) -> bool:
@@ -63,20 +98,35 @@ def _over_limit(counter: _Counter, key: str, limit: int) -> bool:
     return len(counter[key]) >= limit
 
 
-def _is_locked(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> bool:
-    if _over_limit(by_ip, ip, MAX_ATTEMPTS):
+def _sweep_stale(now: float) -> None:
+    """Drop every key whose newest failure is outside the window, at most
+    once per _SWEEP_INTERVAL."""
+    global _last_sweep
+    if now - _last_sweep < _SWEEP_INTERVAL:
+        return
+    _last_sweep = now
+    for counter in _ALL_COUNTERS:
+        for key in [k for k, times in counter.items() if not times or now - times[-1] >= LOCKOUT_WINDOW]:
+            counter.pop(key, None)
+
+
+def _is_locked(by_ip: _Counter, by_username: _Counter, ip: str, username: str,
+               user_limit: int = MAX_ATTEMPTS_PER_USER) -> bool:
+    if _over_limit(by_ip, lockout_key(ip), MAX_ATTEMPTS):
         return True
-    return bool(username) and _over_limit(by_username, username, MAX_ATTEMPTS_PER_USER)
+    return bool(username) and _over_limit(by_username, username, user_limit)
 
 
 def _record(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
-    by_ip[ip].append(time.time())
+    now = time.time()
+    _sweep_stale(now)
+    by_ip[lockout_key(ip)].append(now)
     if username:
-        by_username[username].append(time.time())
+        by_username[username].append(now)
 
 
 def _clear(by_ip: _Counter, by_username: _Counter, ip: str, username: str) -> None:
-    by_ip.pop(ip, None)
+    by_ip.pop(lockout_key(ip), None)
     if username:
         by_username.pop(username, None)
 
@@ -107,24 +157,56 @@ def clear_own_password_failures(ip: str, username: str) -> None:
     _clear(_own_pw_failed_by_ip, _own_pw_failed_by_username, ip, username)
 
 
-def revoke_token(token: str):
-    """Add a token to the denylist. It will be cleaned up after its natural expiry."""
+def is_2fa_locked(ip: str, username: str = "") -> bool:
+    """verify-2fa: 5 wrong codes per IP (IPv6 /64) or 10 per username in
+    15 minutes, on counters a password login doesn't touch (#156, #165)."""
+    return _is_locked(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username,
+                      user_limit=MAX_2FA_ATTEMPTS_PER_USER)
+
+
+def record_2fa_failure(ip: str, username: str) -> None:
+    _record(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username)
+
+
+def clear_2fa_failures(ip: str, username: str) -> None:
+    _clear(_2fa_failed_by_ip, _2fa_failed_by_username, ip, username)
+
+
+def clear_2fa_user_failures(username: str) -> None:
+    """Drop one user's wrong-code count (after a password change)."""
+    _2fa_failed_by_username.pop(username, None)
+
+
+def revoke_token(token: str) -> None:
+    """Revoke an access token at logout (#146).
+
+    Stores the token's jti in revoked_tokens until its exp, so the revocation
+    survives restarts and deploys. Rows past their exp are pruned here. A
+    token that doesn't verify, or has no string jti or numeric exp, is
+    ignored: decode_token_claims refuses such tokens anyway.
+    """
+    from api.database import get_db
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"verify_exp": False})
-        exp = payload.get("exp", 0)
-        _token_denylist[token] = exp
     except jwt.PyJWTError:
-        pass  # Invalid token, nothing to revoke
+        return
+    jti, exp = payload.get("jti"), payload.get("exp")
+    if not isinstance(jti, str) or not jti or not isinstance(exp, (int, float)):
+        return
+    with get_db() as conn:
+        conn.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (int(time.time()),))
+        conn.execute(
+            "INSERT OR IGNORE INTO revoked_tokens (jti, expires_at) VALUES (?, ?)",
+            (jti, int(exp)),
+        )
 
 
-def is_token_revoked(token: str) -> bool:
-    """Check if a token has been revoked. Also cleans up expired entries."""
-    now = datetime.now(timezone.utc).timestamp()
-    # Clean up expired entries
-    expired = [t for t, exp in _token_denylist.items() if exp < now]
-    for t in expired:
-        _token_denylist.pop(t, None)
-    return token in _token_denylist
+def is_token_revoked(jti: str) -> bool:
+    """True if the access token with this jti was revoked at logout (#146)."""
+    from api.database import get_db
+    with get_db() as conn:
+        row = conn.execute("SELECT 1 FROM revoked_tokens WHERE jti = ?", (jti,)).fetchone()
+    return row is not None
 
 
 def validate_password_strength(password: str) -> str | None:
@@ -137,6 +219,8 @@ def validate_password_strength(password: str) -> str | None:
         return "Password must contain at least one lowercase letter"
     if not re.search(r"\d", password):
         return "Password must contain at least one digit"
+    if len(password.encode()) > BCRYPT_MAX_BYTES:
+        return "Password must be at most 72 bytes"
     return None
 
 
@@ -144,8 +228,14 @@ def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
 
+# bcrypt only uses the first 72 bytes. bcrypt 5 raises on longer input, which
+# made a long password at /login a 500; older hashes were made from the first
+# 72 bytes, so checking those bytes keeps every existing password working.
+BCRYPT_MAX_BYTES = 72
+
+
 def verify_password(plain: str, hashed: str) -> bool:
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    return bcrypt.checkpw(plain.encode()[:BCRYPT_MAX_BYTES], hashed.encode())
 
 
 def authenticate_user(username: str, password: str) -> bool:
@@ -271,20 +361,43 @@ def confirm_totp_enrollment(username: str, code: str) -> bool:
         return False
     # Decrypt the pending secret to verify the TOTP code
     pending_plain = decrypt(row["totp_pending_secret"])
-    totp = pyotp.TOTP(pending_plain)
-    if not totp.verify(code, valid_window=1):
+    step = _matching_step(pyotp.TOTP(pending_plain), code)
+    if step is None:
         return False
-    # Store confirmed secret encrypted; clear pending
+    # Store confirmed secret encrypted; clear pending. The enrollment code's
+    # step counts as used, so it can't also finish a login.
     with get_db() as conn:
         conn.execute(
-            "UPDATE users SET totp_secret = ?, totp_pending_secret = NULL, two_fa_enabled = 1 WHERE username = ?",
-            (encrypt(pending_plain), username)
+            "UPDATE users SET totp_secret = ?, totp_pending_secret = NULL, two_fa_enabled = 1, "
+            "totp_last_step = ? WHERE username = ?",
+            (encrypt(pending_plain), step, username)
         )
     return True
 
 
-def verify_totp_code(username: str, code: str) -> bool:
-    """Verify a TOTP code at login time."""
+def _matching_step(totp: pyotp.TOTP, code: str) -> int | None:
+    """The 30-second step whose code matches, checking the current step and
+    one on each side (the same window as verify(valid_window=1)), or None."""
+    now = int(time.time())
+    for offset in (-1, 0, 1):
+        at = now + offset * totp.interval
+        if pyotp.utils.strings_equal(str(code), totp.at(at)):
+            return at // totp.interval
+    return None
+
+
+TOTP_OK, TOTP_USED, TOTP_WRONG = "ok", "used", "wrong"
+
+
+def verify_totp_code(username: str, code: str) -> str:
+    """Check a TOTP code at login time: TOTP_OK, TOTP_USED or TOTP_WRONG.
+
+    Each code works once (#165 review): the matching step must be later than
+    the last one used, and recording it is a single conditional UPDATE, so two
+    requests with the same code can't both pass. A right code whose step is
+    already used is TOTP_USED, so the caller can say so instead of counting it
+    as a wrong guess.
+    """
     from api.encryption import decrypt
     from api.database import get_db
     with get_db() as conn:
@@ -293,10 +406,19 @@ def verify_totp_code(username: str, code: str) -> bool:
             (username,)
         ).fetchone()
     if not row or not row["totp_secret"]:
-        return False
+        return TOTP_WRONG
     # Decrypt the stored TOTP secret before verification
     secret_plain = decrypt(row["totp_secret"])
-    return pyotp.TOTP(secret_plain).verify(code, valid_window=1)
+    step = _matching_step(pyotp.TOTP(secret_plain), code)
+    if step is None:
+        return TOTP_WRONG
+    with get_db() as conn:
+        claimed = conn.execute(
+            "UPDATE users SET totp_last_step = ? WHERE username = ? AND is_active = 1 "
+            "AND (totp_last_step IS NULL OR totp_last_step < ?)",
+            (step, username, step),
+        ).rowcount
+    return TOTP_OK if claimed == 1 else TOTP_USED
 
 
 # ── Standard auth ─────────────────────────────────────────────────────────────
@@ -434,16 +556,22 @@ def decode_2fa_pending_token(token: str) -> str | None:
 
 def decode_token_claims(token: str) -> dict | None:
     """Return a general-access token's claims, or None if it is invalid,
-    expired, revoked, or scoped (e.g. 2fa_pending)."""
+    expired, revoked, or scoped (e.g. 2fa_pending).
+
+    exp, iat, sub and jti are required: create_token sets all four, and the
+    jti is what logout revokes (#146).
+    """
     try:
-        if is_token_revoked(token):
-            return None
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("purpose"):
-            return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth
-        return payload
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM],
+                             options={"require": ["exp", "iat", "sub", "jti"]})
     except jwt.PyJWTError:
         return None
+    if payload.get("purpose"):
+        return None  # Reject scoped tokens (e.g. 2fa_pending) from general auth
+    jti = payload["jti"]
+    if not isinstance(jti, str) or not jti or is_token_revoked(jti):
+        return None
+    return payload
 
 
 def decode_token(token: str) -> str | None:

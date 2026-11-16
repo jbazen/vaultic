@@ -778,6 +778,16 @@ MIGRATIONS = [
     "ALTER TABLE plaid_securities ADD COLUMN unofficial_currency_code TEXT",
     "ALTER TABLE plaid_holdings ADD COLUMN unofficial_currency_code TEXT",
     "ALTER TABLE plaid_investment_transactions ADD COLUMN unofficial_currency_code TEXT",
+    # Access tokens revoked at logout, by jti, kept until the token's exp
+    # (Unix seconds) so a restart or deploy doesn't forget them (#146).
+    # revoke_token prunes rows past their exp.
+    """CREATE TABLE IF NOT EXISTS revoked_tokens (
+        jti        TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+    )""",
+    # Last 30-second TOTP step used to sign in, so a code works only once
+    # (#165 review). NULL means none used yet.
+    "ALTER TABLE users ADD COLUMN totp_last_step INTEGER",
 ]
 
 
@@ -1342,6 +1352,9 @@ def init_db():
         user_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "tokens_valid_after" not in user_cols:
             raise RuntimeError("users.tokens_valid_after migration did not apply")
+        # verify_totp_code writes it on every 2FA login.
+        if "totp_last_step" not in user_cols:
+            raise RuntimeError("users.totp_last_step migration did not apply")
         # The #136 and #140 triggers keep hand edits (deactivation, a deleted
         # and recreated or renamed user) from reviving tokens; refuse to start
         # without them, the same as the column above.
@@ -1352,6 +1365,12 @@ def init_db():
                      "users_insert_cutoff", "users_rename_cutoff"):
             if name not in triggers:
                 raise RuntimeError(f"trigger {name} migration did not apply")
+        # Every authenticated request checks revoked_tokens (#146); without it
+        # every call would 500 while /api/health passes.
+        if not conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'revoked_tokens'"
+        ).fetchone():
+            raise RuntimeError("revoked_tokens migration did not apply")
         # One-time: encrypt any plaintext TOTP secrets still in the DB
         try:
             _migrate_encrypt_totp_secrets(conn)

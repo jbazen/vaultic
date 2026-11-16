@@ -25,6 +25,7 @@ REQUIRED_TABLES = {
     "users", "plaid_items", "accounts", "account_balances", "transactions",
     "net_worth_snapshots", "manual_entries", "manual_entry_snapshots",
     "push_subscriptions", "refresh_tokens", "ticker_quotes", "news_articles",
+    "revoked_tokens",
 }
 
 

@@ -26,8 +26,8 @@ export default function Login({ onLogin }) {
       } else {
         onLogin();
       }
-    } catch {
-      setError("Invalid credentials");
+    } catch (err) {
+      setError(err.message || "Invalid credentials");
     } finally {
       setLoading(false);
     }

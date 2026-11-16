@@ -210,20 +210,16 @@ class TestReactivationDoesNotReviveTokens:
         res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert res.status_code == 401
 
-    def test_token_without_iat_rejected_when_cutoff_set(self, client, auth_headers):
+    def test_token_without_iat_rejected(self, client, auth_headers):
+        """iat has been required since #146, cutoff or not."""
         _create_user(client, auth_headers, "react_no_iat", "ReactPass1")
         token = auth_module.jwt.encode(
-            {"sub": "react_no_iat", "exp": 9999999999},
+            {"sub": "react_no_iat", "exp": 9999999999, "jti": "react-no-iat"},
             auth_module.SECRET_KEY, algorithm=auth_module.ALGORITHM,
         )
         headers = {"Authorization": f"Bearer {token}"}
         with get_db() as conn:  # a row from before #140, which gives new rows a cutoff
             conn.execute("UPDATE users SET tokens_valid_after = NULL WHERE username = ?",
-                         ("react_no_iat",))
-        assert client.get("/api/auth/me", headers=headers).status_code == 200
-
-        with get_db() as conn:
-            conn.execute("UPDATE users SET tokens_valid_after = 1 WHERE username = ?",
                          ("react_no_iat",))
         assert client.get("/api/auth/me", headers=headers).status_code == 401
 
@@ -232,7 +228,7 @@ class TestReactivationDoesNotReviveTokens:
         Rows created before #140 keep NULL, so any token for them works."""
         _create_user(client, auth_headers, "react_null", "ReactPass1")
         old = auth_module.jwt.encode(
-            {"sub": "react_null", "exp": 9999999999, "iat": 1},
+            {"sub": "react_null", "exp": 9999999999, "iat": 1, "jti": "react-null"},
             auth_module.SECRET_KEY, algorithm=auth_module.ALGORITHM,
         )
         headers = {"Authorization": f"Bearer {old}"}
