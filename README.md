@@ -672,7 +672,7 @@ The app deploys to an Oracle Cloud A1 instance (Ubuntu, always-free tier). The f
 
 ```bash
 # On the Oracle Cloud instance
-sudo apt update && sudo apt install nginx python3.12 python3.12-venv nodejs npm git -y
+sudo apt update && sudo apt install nginx python3.12 python3.12-venv git -y
 
 # Clone repo
 git clone <your-repo-url> ~/vaultic
@@ -681,38 +681,16 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Build frontend
-cd ui && npm ci && npm run build && cd ..
-
 # Create .env with production values
 cp .env.example .env
 nano .env   # fill in all values; use PLAID_ENV=production when ready
 ```
 
+The UI isn't built on the server: CI builds and tests it, and each deploy uploads that bundle to `ui/dist`. The first deploy (a push to `main`) also installs Litestream, which the service needs, and starts the service. `server-setup.sh` does the steps above in one go.
+
 ### systemd service
 
-The service file (`deploy/vaultic-api.service`) is deployed automatically by CI/CD. It runs `deploy/start.sh`, which loads Litestream credentials and wraps uvicorn with Litestream for continuous backup:
-
-```ini
-[Unit]
-Description=Vaultic API (with Litestream backup)
-After=network.target
-
-[Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/vaultic
-ExecStart=/bin/bash /home/ubuntu/vaultic/deploy/start.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable vaultic-api
-sudo systemctl start vaultic-api
-```
+The unit lives in the repo at `deploy/vaultic-api.service`; every deploy copies it to `/etc/systemd/system/` and restarts the service. It runs `deploy/start.sh`, which loads the Litestream credentials and wraps uvicorn with Litestream for continuous backup. On a new server, `sudo systemctl enable vaultic-api` once (`server-setup.sh` does this); the first deploy installs Litestream and starts it.
 
 ### Nginx config
 
