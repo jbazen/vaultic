@@ -175,12 +175,12 @@ def test_provider_routes_are_allowlisted():
 def _app_routes():
     from api.main import app
 
+    # The OpenAPI paths list every route the same way across FastAPI versions;
+    # app.routes nests included routers on newer versions.
     routes = []
-    for route in app.routes:
-        methods = getattr(route, "methods", None)
-        if methods:
-            sample = re.sub(r"\{[^}]+\}", "1", route.path)
-            routes.append((sample, set(methods)))
+    for path, operations in app.openapi()["paths"].items():
+        sample = re.sub(r"\{[^}]+\}", "1", path)
+        routes.append((sample, {method.upper() for method in operations}))
     return routes
 
 
