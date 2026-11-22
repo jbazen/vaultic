@@ -1,6 +1,7 @@
 """Tests for scripts/vaultic_mcp.py (read-only MCP server). HTTP and token minting are mocked."""
 import importlib.util
 import io
+import re
 import json
 import sys
 from pathlib import Path
@@ -164,10 +165,38 @@ def test_tool_maps_to_get_route(env, tool, args, path, query):
     assert req.headers["Authorization"] == f"Bearer {SECRET}"
 
 
-def test_every_tool_route_is_allowlisted_and_tools_cover_provider_resources():
+def test_provider_routes_are_allowlisted():
     for provider, routes in mcp._PROVIDER_ROUTES.items():
-        for resource, (path, accepted) in routes.items():
+        for resource, (path, _accepted) in routes.items():
             assert mcp.check_request(path, {}) == {}, (provider, resource)
+    assert mcp.check_request("/api/investor360/holdings/12", {}) == {}
+
+
+def _app_routes():
+    from api.main import app
+
+    routes = []
+    for route in app.routes:
+        methods = getattr(route, "methods", None)
+        if methods:
+            sample = re.sub(r"\{[^}]+\}", "1", route.path)
+            routes.append((sample, set(methods)))
+    return routes
+
+
+def test_every_allowlisted_pattern_matches_a_real_get_route():
+    routes = _app_routes()
+    for pattern, _spec in mcp._ALLOWED:
+        hits = [(p, m) for p, m in routes if pattern.fullmatch(p)]
+        assert any("GET" in m for _p, m in hits), pattern.pattern
+
+
+def test_allowlisted_paths_match_no_sensitive_route():
+    for pattern, _spec in mcp._ALLOWED:
+        for path, _methods in _app_routes():
+            if pattern.fullmatch(path):
+                assert not path.startswith(("/api/auth", "/api/push", "/api/pdf")), path
+                assert not path.endswith(("/debug", "/refresh", "/sync", "/resync")), path
 
 
 # ── allowlist ──────────────────────────────────────────────────────────────
@@ -334,7 +363,7 @@ def test_only_get_is_used(env):
     for tool, args, *_ in CASES:
         env.call(tool, args)
     assert {r.method for r in env.requests} == {"GET"}
-    src = Path(mcp.__file__).read_text()
+    src = Path(mcp.__file__).read_text(encoding="utf-8")
     for verb in ("post", "put", "patch", "delete", "request", "send", "stream"):
         assert f"client.{verb}(" not in src and f"httpx.{verb}(" not in src
 
@@ -395,3 +424,67 @@ def test_http_base_url_refused_unless_local(monkeypatch):
         client._http()
     monkeypatch.setenv("VAULTIC_URL", "http://localhost:8000")
     assert mcp.VaulticClient()._http() is not None
+
+
+# ── hardening ──────────────────────────────────────────────────────────────
+
+def test_lone_surrogate_does_not_crash_output(env, monkeypatch, capsys):
+    line = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": "get_account_detail",
+                                  "arguments": {"account_id": "\ud800", "view": "balances"}}})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(line + "\n"))
+    monkeypatch.setattr(mcp, "Server", lambda: env.server)
+    mcp.main()
+    out = capsys.readouterr().out
+    assert out.isascii()
+    json.loads(out)
+
+
+def test_deeply_nested_json_is_parse_error(env):
+    assert env.server.handle_line("[" * 100000)["error"]["code"] == -32700
+
+
+def test_main_writes_lf_newlines(env, monkeypatch):
+    raw = io.BytesIO()
+    out = io.TextIOWrapper(raw, encoding="ascii", newline="\r\n", write_through=True)
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"jsonrpc":"2.0","id":1,"method":"ping"}\n'))
+    monkeypatch.setattr(mcp, "Server", lambda: env.server)
+    mcp.main()
+    assert raw.getvalue().endswith(b"}\n") and b"\r" not in raw.getvalue()
+
+
+def test_responses_are_never_answered(env):
+    assert env.server.handle({"jsonrpc": "2.0", "id": 5, "result": {}}) is None
+    assert env.server.handle({"jsonrpc": "2.0", "id": 5, "error": {"code": 1, "message": "x"}}) is None
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("get_net_worth", {"days": 5}),
+    ("list_accounts", {"extra": 1}),
+    ("get_net_worth_history", {"days": 5, "limit": 1}),
+    ("get_account_detail", {"account_id": 1, "view": "holdings", "days": 5}),
+    ("get_account_detail", {"account_id": 1, "view": "holdings", "limit": 5}),
+    ("get_account_detail", {"account_id": 1, "view": "balances", "limit": 5}),
+    ("get_account_detail", {"account_id": 1, "view": "transactions", "days": 5}),
+    ("get_provider_data", {"provider": "insperity", "resource": "holdings", "account_id": 1}),
+    ("get_provider_data", {"provider": "voya", "resource": "holdings", "limit": 5}),
+    ("get_provider_data", {"provider": "investor360", "resource": "status", "account_id": 1}),
+    ("get_manual_entries", {"days": 30}),
+    ("get_market_and_news", {"resource": "rates", "x": 1}),
+    ("get_account_detail", {"account_id": 1, "view": None}),
+])
+def test_inapplicable_or_unknown_arguments_rejected(env, tool, args):
+    result = env.call(tool, args)
+    assert result["isError"] is True
+    assert env.requests == []
+
+
+def test_sync_log_limit_documented_max_is_100(env):
+    env.call("get_provider_data", {"provider": "insperity", "resource": "sync_log", "limit": 500})
+    assert dict(env.requests[0].url.params) == {"limit": "100"}
+    assert "max 100" in mcp.TOOLS["get_provider_data"]["description"]
+
+
+def test_list_accounts_description_mentions_manual_ids():
+    assert "get_manual_entries" in mcp.TOOLS["list_accounts"]["description"]

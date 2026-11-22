@@ -203,6 +203,33 @@ def _int_arg(args: dict[str, Any], name: str, default: int | None, lo: int, hi: 
     return max(lo, min(hi, value))
 
 
+def validate_args(args: dict[str, Any], schema: dict[str, Any]) -> None:
+    """Reject unknown keys, wrong types, bad enum values and missing required arguments."""
+    props = schema.get("properties", {})
+    for key in args:
+        if key not in props:
+            raise ToolError(f"unknown argument: {key}")
+    for key in schema.get("required", []):
+        if args.get(key) is None:
+            raise ToolError(f"{key} is required")
+    for key, value in args.items():
+        spec = props[key]
+        if value is None:
+            raise ToolError(f"{key} must not be null")
+        if spec["type"] == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+            raise ToolError(f"{key} must be an integer")
+        if spec["type"] == "string" and not isinstance(value, str):
+            raise ToolError(f"{key} must be a string")
+        if "enum" in spec and value not in spec["enum"]:
+            raise ToolError(f"{key} must be one of: " + ", ".join(spec["enum"]))
+
+
+def _reject(args: dict[str, Any], names: tuple[str, ...], why: str) -> None:
+    for name in names:
+        if name in args:
+            raise ToolError(f"{name} does not apply {why}")
+
+
 def _id_arg(args: dict[str, Any], name: str, required: bool = True) -> int | None:
     value = args.get(name)
     if value is None:
@@ -233,6 +260,10 @@ def _t_account_detail(args: dict[str, Any]) -> Request:
     acct = _id_arg(args, "account_id")
     view = args.get("view")
     base = f"/api/accounts/{acct}"
+    if view != "balances":
+        _reject(args, ("days",), f"to view={view}")
+    if view not in ("transactions", "investment_transactions"):
+        _reject(args, ("limit", "offset"), f"to view={view}")
     if view == "balances":
         return f"{base}/balances", {"days": _int_arg(args, "days", 90, 1, 1825)}
     if view == "holdings":
@@ -258,6 +289,7 @@ def _t_crypto(args: dict[str, Any]) -> Request:
 def _t_manual(args: dict[str, Any]) -> Request:
     entry = _id_arg(args, "entry_id", required=False)
     if entry is None:
+        _reject(args, ("days",), "without entry_id")
         return "/api/manual", {}
     return f"/api/manual/{entry}/history", {"days": _int_arg(args, "days", 1825, 1, 3650)}
 
@@ -309,6 +341,10 @@ def _t_provider(args: dict[str, Any]) -> Request:
         raise ToolError(f"resource for {provider} must be one of: " + ", ".join(routes))
     path, accepted = route
     params: dict[str, Any] = {}
+    if "account_id" not in accepted:
+        _reject(args, ("account_id",), f"to {provider} {resource}")
+    if "limit" not in accepted:
+        _reject(args, ("limit",), f"to {provider} {resource}")
     if "account_id" in accepted:
         acct = _id_arg(args, "account_id", required=False)
         if acct is not None:
@@ -317,8 +353,8 @@ def _t_provider(args: dict[str, Any]) -> Request:
             else:
                 params["account_id"] = acct
     if "limit" in accepted:
-        params["limit"] = _int_arg(args, "limit", 20 if resource == "sync_log" else 100, 1,
-                                   100 if resource == "sync_log" else 500)
+        is_log = resource == "sync_log"
+        params["limit"] = _int_arg(args, "limit", 20 if is_log else 100, 1, 100 if is_log else 500)
     return path, params
 
 
@@ -365,15 +401,18 @@ TOOLS: dict[str, dict[str, Any]] = {
             "Every active account (Plaid, Coinbase, Investor360/Parker, Insperity, Voya, manual) "
             "with its latest balance in US dollars: id, name, institution, type/subtype, "
             "current/available/limit, native_balance and unit_price for crypto, snapped_at, "
-            "plus registration details for Investor360 accounts. Use the id with get_account_detail."),
+            "plus registration details for Investor360 accounts. Use the id with get_account_detail. "
+            "Manual entries (home, car, credit score) have their own ids, usable only with "
+            "get_manual_entries, not get_account_detail."),
         "schema": _NO_ARGS, "handler": _t_accounts,
     },
     "get_account_detail": {
         "description": (
             "Detail for one account id from list_accounts. view: 'balances' = daily balance "
-            "history (days, default 90); 'holdings' = current positions; 'transactions' = bank/"
-            "card transactions, newest first (limit, offset); 'investment_transactions' = buys, "
-            "sells, dividends, contributions (limit, offset)."),
+            "history (days only, default 90); 'holdings' = current positions (no other arguments); "
+            "'transactions' = bank/card transactions, newest first (limit, offset only); "
+            "'investment_transactions' = buys, sells, dividends, contributions (limit, offset "
+            "only). Arguments that do not apply to the chosen view are rejected."),
         "schema": {"type": "object", "additionalProperties": False,
                    "required": ["account_id", "view"], "properties": {
             "account_id": {"type": "integer", "minimum": 1},
@@ -418,16 +457,19 @@ TOOLS: dict[str, dict[str, Any]] = {
             "an optional Vaultic account_id for one account. insperity (401k): status, holdings, "
             "performance, contributions, activity, transactions, allocations, prices, sync_log. "
             "voya (401k): status, accounts, holdings, transactions, performance, allocations, "
-            "fund_performance, contributions, sync_log. limit applies to sync_log and voya "
-            "transactions."),
+            "fund_performance, contributions, sync_log. limit applies only to sync_log (max 100) "
+            "and voya transactions (max 500); arguments that do not apply are rejected."),
         "schema": {"type": "object", "additionalProperties": False,
                    "required": ["provider", "resource"], "properties": {
             "provider": {"type": "string", "enum": list(_PROVIDER_ROUTES)},
             "resource": {"type": "string",
                          "enum": sorted({r for p in _PROVIDER_ROUTES.values() for r in p})},
             "account_id": {"type": "integer", "minimum": 1,
-                           "description": "investor360 only: restrict to one Vaultic account id."},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 500}}},
+                           "description": "investor360 holdings, performance, asset_allocation "
+                                          "and activity_summary only; rejected elsewhere."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500,
+                      "description": "sync_log (max 100, default 20) and voya transactions "
+                                     "(max 500, default 100) only."}}},
         "handler": _t_provider,
     },
     "get_market_and_news": {
@@ -457,6 +499,15 @@ def render_result(data: Any) -> str:
 
 # ── JSON-RPC / MCP ─────────────────────────────────────────────────────────
 
+class _RpcError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        self.code, self.message = code, message
+
+
+def _error(msg_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
+
+
 class Server:
     def __init__(self, client: VaulticClient | None = None) -> None:
         self.client = client or VaulticClient()
@@ -470,6 +521,7 @@ class Server:
         if not isinstance(args, dict):
             raise _RpcError(-32602, "arguments must be an object")
         try:
+            validate_args(args, tool["schema"])
             path, query = tool["handler"](args)
             data = self.client.get(path, {k: v for k, v in query.items() if v is not None})
             return {"content": [{"type": "text", "text": render_result(data)}]}
@@ -500,6 +552,8 @@ class Server:
 
     def handle(self, msg: Any) -> dict[str, Any] | None:
         """Handle one decoded message; returns the response, or None for notifications."""
+        if isinstance(msg, dict) and "method" not in msg and ("result" in msg or "error" in msg):
+            return None  # a response to something we never sent; never answer a response
         if not isinstance(msg, dict) or not isinstance(msg.get("method"), str):
             if isinstance(msg, dict) and "id" not in msg:
                 return None  # a stray response or notification-shaped object
@@ -519,25 +573,17 @@ class Server:
     def handle_line(self, line: str) -> dict[str, Any] | None:
         try:
             msg = json.loads(line)
-        except ValueError:
+        except Exception:  # ValueError, or RecursionError on deeply nested input
             return _error(None, -32700, "Parse error")
         return self.handle(msg)
-
-
-class _RpcError(Exception):
-    def __init__(self, code: int, message: str) -> None:
-        self.code, self.message = code, message
-
-
-def _error(msg_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": message}}
 
 
 def main() -> None:
     for stream in (sys.stdin, sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure:
-            reconfigure(encoding="utf-8")  # Windows defaults to a legacy code page
+            # Windows defaults to a legacy code page; stdout frames must end in LF, not CRLF
+            reconfigure(encoding="utf-8", **({"newline": "\n"} if stream is sys.stdout else {}))
     server = Server()
     log("ready")
     for line in sys.stdin:
@@ -546,7 +592,7 @@ def main() -> None:
             continue
         reply = server.handle_line(line)
         if reply is not None:
-            sys.stdout.write(json.dumps(reply, ensure_ascii=False) + "\n")
+            sys.stdout.write(json.dumps(reply, ensure_ascii=True) + "\n")  # ASCII-only: survives lone surrogates
             sys.stdout.flush()
 
 
