@@ -13,6 +13,38 @@ class TestNotifyStaleI360:
     def setup_method(self):
         # Reset the daily guard before each test
         push_module._last_i360_stale_notify_date = None
+        # The reminder only fires while a Parker account is shown (#179).
+        with get_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO accounts (plaid_account_id, name, type, source, "
+                "account_number, is_active) VALUES ('i360_pushtest', 'Parker test', "
+                "'investment', 'investor360', 'PUSHTEST1', 1)"
+            )
+            conn.execute("UPDATE accounts SET is_active = 1 WHERE plaid_account_id = 'i360_pushtest'")
+
+    def teardown_method(self):
+        with get_db() as conn:
+            conn.execute("DELETE FROM accounts WHERE plaid_account_id = 'i360_pushtest'")
+
+    def test_skips_when_parker_accounts_hidden(self):
+        """Stale log but every Parker account hidden (moved to LPL, #179) → no notification."""
+        stale_time = (datetime.now() - timedelta(hours=30)).isoformat()
+        with get_db() as conn:
+            hidden = [r[0] for r in conn.execute(
+                "SELECT id FROM accounts WHERE source = 'investor360' AND is_active = 1")]
+            conn.execute("UPDATE accounts SET is_active = 0 WHERE source = 'investor360'")
+            conn.execute("DELETE FROM i360_sync_log")
+            conn.execute(
+                "INSERT INTO i360_sync_log (synced_at, status) VALUES (?, 'success')",
+                (stale_time,)
+            )
+        try:
+            with patch.object(push_module, "is_configured", return_value=True),                  patch.object(push_module, "send_push_notification", return_value=True) as mock_send:
+                push_module.notify_stale_i360()
+                mock_send.assert_not_called()
+        finally:
+            with get_db() as conn:
+                conn.executemany("UPDATE accounts SET is_active = 1 WHERE id = ?", [(i,) for i in hidden])
 
     def test_skips_when_no_sync_log(self):
         """No i360_sync_log rows → no notification (I360 not configured)."""

@@ -1083,6 +1083,27 @@ def _migrate_deactivate_voya_plaid(conn):
         )
 
 
+def _migrate_hide_investor360_accounts(conn):
+    """Hide the Parker (Commonwealth/NFS) Investor360 accounts (#179).
+
+    Parker moved to LPL Financial, which syncs through Plaid. The Investor360
+    data stopped on 2026-11-03 and the same money now shows on the LPL
+    accounts, so the old accounts would be counted twice.
+
+    Flips is_active=0 on every source='investor360' account, the same
+    "kept but not shown or counted" state used for disconnected Plaid accounts.
+    NON-destructive: the accounts, their account_balances history, every i360_*
+    table and all past net_worth_snapshots are kept. Idempotent: a no-op once
+    they are all inactive.
+    """
+    cur = conn.execute(
+        "UPDATE accounts SET is_active = 0 WHERE source = 'investor360' AND is_active = 1"
+    )
+    if cur.rowcount:
+        logger.info("Hid %d Investor360 (Parker) account(s); Parker now syncs from LPL via Plaid",
+                    cur.rowcount)
+
+
 def _migrate_voya_real_account_number(conn):
     """Move Voya 401k onto its real account number (861956) and stitch the
     Plaid-era balance history into the local-sync entry so the Accounts page
@@ -1409,6 +1430,12 @@ def init_db():
             _migrate_voya_real_account_number(conn)
         except Exception as exc:
             logger.warning("Voya real account-number migration failed: %s", exc)
+        # Hide the Investor360 (Parker) accounts now that Parker syncs from LPL
+        # through Plaid; history is kept (#179).
+        try:
+            _migrate_hide_investor360_accounts(conn)
+        except Exception as exc:
+            logger.warning("Investor360 hide migration failed: %s", exc)
         # Backfill Insperity per-account balance history from insperity_holdings
         # into manual_entry_snapshots — the sync only ever wrote the holdings
         # table, so the Performance chart (which reads snapshots) looked empty.

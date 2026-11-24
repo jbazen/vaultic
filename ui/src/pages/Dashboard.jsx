@@ -170,6 +170,10 @@ export default function Dashboard() {
     </div>
   );
 
+  // The Investor360 (Parker) accounts are hidden since Parker moved to LPL (#179);
+  // its summary and sync button only show while one of them is still active.
+  const hasParker = accounts.some(a => a.source === "investor360");
+
   return (
     <div>
       {/* ── Page header ── */}
@@ -180,9 +184,11 @@ export default function Dashboard() {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <PlaidLink onSuccess={loadAccounts} />
-          <button className="btn btn-secondary" onClick={() => setI360Open(true)}>
-            ⟳ Parker
-          </button>
+          {hasParker && (
+            <button className="btn btn-secondary" onClick={() => setI360Open(true)}>
+              ⟳ Parker
+            </button>
+          )}
           <button className="btn btn-secondary" onClick={() => setInsperityOpen(true)}>
             ⟳ Insperity
           </button>
@@ -236,14 +242,14 @@ export default function Dashboard() {
       {/* ── News Feed ── */}
       <NewsFeedPanel />
 
-      {/* ── Parker Financial Portfolio Summary ── */}
-      <I360SummarySection />
+      {/* ── Parker Financial Portfolio Summary (only while its accounts are shown, #179) ── */}
+      {hasParker && <I360SummarySection />}
 
       {/* ── Accounts: full-width list; every block (institution + manual section) draggable ── */}
       <AccountsSection accounts={accounts} manualEntries={manualEntries} plaidItems={plaidItems}
         savedOrder={savedOrder} i360LastSync={i360LastSync} onChanged={loadAccounts} />
 
-      <I360SyncModal open={i360Open} onClose={() => setI360Open(false)} onSynced={loadAll} />
+      {hasParker && <I360SyncModal open={i360Open} onClose={() => setI360Open(false)} onSynced={loadAll} />}
       <InsperitySyncModal open={insperityOpen} onClose={() => setInsperityOpen(false)} onSynced={loadAll} />
     </div>
   );

@@ -597,3 +597,83 @@ class TestSyncLog:
         assert data["configured"] is True
         assert data["accounts"] == 5
         assert data["healthy"] is True
+
+
+class TestHideInvestor360Accounts:
+    """#179: Parker moved to LPL (Plaid). The Investor360 accounts are hidden
+    from the list and the totals, and nothing about them is deleted."""
+
+    def _seed(self, conn):
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, account_number, name, type, subtype, "
+            "institution_name, source, is_manual, is_active) VALUES "
+            "('i360_hidetest', 'HIDETEST1', 'Roth IRA', 'investment', 'roth_ira', "
+            "'Parker Financial (Commonwealth/NFS)', 'investor360', 0, 1)")
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, account_number, name, type, subtype, "
+            "institution_name, source, is_manual, is_active) VALUES "
+            "('lpl-hidetest', 'lpl-hidetest', 'SAM - Retirement', 'investment', 'ira', "
+            "'LPL Financial', 'plaid', 0, 1)")
+        acct_id = conn.execute(
+            "SELECT id FROM accounts WHERE plaid_account_id = 'i360_hidetest'").fetchone()["id"]
+        conn.execute(
+            "INSERT INTO account_balances (account_id, current, snapped_at, account_number) "
+            "VALUES (?, 1234.5, '2026-11-03', 'HIDETEST1')", (acct_id,))
+
+    def _cleanup(self, conn):
+        conn.execute("DELETE FROM account_balances WHERE account_number = 'HIDETEST1'")
+        conn.execute("DELETE FROM accounts WHERE plaid_account_id IN ('i360_hidetest', 'lpl-hidetest')")
+
+    def test_hides_only_investor360_keeps_history_and_is_idempotent(self):
+        from api.database import _migrate_hide_investor360_accounts
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            self._seed(conn)
+            try:
+                _migrate_hide_investor360_accounts(conn)
+                state = dict(conn.execute(
+                    "SELECT plaid_account_id, is_active FROM accounts "
+                    "WHERE plaid_account_id IN ('i360_hidetest', 'lpl-hidetest')").fetchall())
+                assert state == {"i360_hidetest": 0, "lpl-hidetest": 1}
+                # History is kept, not deleted
+                bal = conn.execute(
+                    "SELECT current FROM account_balances WHERE account_number = 'HIDETEST1'").fetchone()
+                assert bal["current"] == 1234.5
+                # Idempotent: a second run changes nothing
+                assert conn.execute(
+                    "UPDATE accounts SET is_active = 0 WHERE source = 'investor360' AND is_active = 1"
+                ).rowcount == 0
+                _migrate_hide_investor360_accounts(conn)
+                assert conn.execute(
+                    "SELECT is_active FROM accounts WHERE plaid_account_id = 'i360_hidetest'"
+                ).fetchone()["is_active"] == 0
+            finally:
+                self._cleanup(conn)
+
+    def test_hidden_accounts_leave_list_and_snapshot(self, client, auth_headers):
+        from api.database import _migrate_hide_investor360_accounts
+        from api.sync import _take_net_worth_snapshot
+        from tests.conftest import _test_get_db
+        day = "2099-11-24"
+        with _test_get_db() as conn:
+            self._seed(conn)
+        try:
+            def invested():
+                with _test_get_db() as conn:
+                    return conn.execute(
+                        "SELECT invested FROM net_worth_snapshots WHERE snapped_at = ?", (day,)
+                    ).fetchone()["invested"]
+            _take_net_worth_snapshot(day)
+            before = invested()
+            with _test_get_db() as conn:
+                _migrate_hide_investor360_accounts(conn)
+            _take_net_worth_snapshot(day)
+            after = invested()
+            assert round(before - after, 2) == 1234.5
+            listed = {a["coinbase_uuid"] for a in client.get("/api/accounts", headers=auth_headers).json()}
+            assert "i360_hidetest" not in listed
+            assert "lpl-hidetest" in listed
+        finally:
+            with _test_get_db() as conn:
+                conn.execute("DELETE FROM net_worth_snapshots WHERE snapped_at = ?", (day,))
+                self._cleanup(conn)
