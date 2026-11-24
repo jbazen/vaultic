@@ -628,6 +628,8 @@ class TestHideInvestor360Accounts:
         from api.database import _migrate_hide_investor360_accounts
         from tests.conftest import _test_get_db
         with _test_get_db() as conn:
+            already_active = [r[0] for r in conn.execute(
+                "SELECT id FROM accounts WHERE source = 'investor360' AND is_active = 1")]
             self._seed(conn)
             try:
                 _migrate_hide_investor360_accounts(conn)
@@ -648,6 +650,8 @@ class TestHideInvestor360Accounts:
                     "SELECT is_active FROM accounts WHERE plaid_account_id = 'i360_hidetest'"
                 ).fetchone()["is_active"] == 0
             finally:
+                conn.executemany("UPDATE accounts SET is_active = 1 WHERE id = ?",
+                                 [(i,) for i in already_active])
                 self._cleanup(conn)
 
     def test_hidden_accounts_leave_list_and_snapshot(self, client, auth_headers):
@@ -686,7 +690,10 @@ class TestHideInvestor360Accounts:
             self, client, auth_headers):
         """The Portfolio Performance chart still shows a hidden Parker account on
         its own dates, but its last value is not carried onto later dates."""
+        from datetime import date, timedelta
         from tests.conftest import _test_get_db
+        # Recent dates, so they stay inside the chart's window whenever this runs
+        d1, d2, d3 = ((date.today() - timedelta(days=n)).isoformat() for n in (40, 39, 38))
         with _test_get_db() as conn:
             for no, active, src in (("PERF_HID_P", 0, "investor360"), ("PERF_HID_L", 1, "plaid")):
                 conn.execute(
@@ -694,8 +701,8 @@ class TestHideInvestor360Accounts:
                     "VALUES (?, ?, 'investment', ?, ?, ?)", (no, no, src, active, no))
             ids = {r["account_number"]: r["id"] for r in conn.execute(
                 "SELECT id, account_number FROM accounts WHERE account_number LIKE 'PERF_HID_%'")}
-            for no, day, val in (("PERF_HID_P", "2023-08-01", 700.0), ("PERF_HID_L", "2023-08-02", 50.0),
-                                 ("PERF_HID_L", "2023-08-03", 60.0)):
+            for no, day, val in (("PERF_HID_P", d1, 700.0), ("PERF_HID_L", d2, 50.0),
+                                 ("PERF_HID_L", d3, 60.0)):
                 conn.execute(
                     "INSERT INTO account_balances (account_id, account_number, current, snapped_at) "
                     "VALUES (?, ?, ?, ?)", (ids[no], no, val, day))
@@ -704,8 +711,8 @@ class TestHideInvestor360Accounts:
             by_date = {r["snapped_at"]: r["total_value"] for r in res.json()}
             # Day 1 has the hidden account; on day 2 it is NOT carried forward
             # (the plaid account adds 50, the hidden one drops out: -700 + 50)
-            assert by_date["2023-08-02"] - by_date["2023-08-01"] == 50.0 - 700.0
-            assert by_date["2023-08-03"] - by_date["2023-08-02"] == 10.0
+            assert by_date[d2] - by_date[d1] == pytest.approx(50.0 - 700.0)
+            assert by_date[d3] - by_date[d2] == pytest.approx(10.0)
         finally:
             with _test_get_db() as conn:
                 conn.execute("DELETE FROM account_balances WHERE account_number LIKE 'PERF_HID_%'")

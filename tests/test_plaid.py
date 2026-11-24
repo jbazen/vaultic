@@ -434,7 +434,8 @@ class TestPlaidExchangeSecondLogin:
                 res = client.post("/api/plaid/exchange", headers=auth_headers, json={
                     "public_token": "public-x", "institution_id": self.INST})
             assert res.status_code == 409
-            assert res.json()["detail"].startswith("This this bank login")
+            assert res.json()["detail"].startswith(
+                "This login at this bank (or one of its accounts) is already connected.")
         finally:
             self._cleanup()
 

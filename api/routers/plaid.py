@@ -161,7 +161,7 @@ def _discard_new_item(client, item_id: str, access_token: str) -> None:
         remove_item_at_plaid(client, access_token)
     except Exception as e:
         logger.error(f"Plaid item_remove for discarded link {item_id} failed; "
-                     f"remove it in the Plaid dashboard: {type(e).__name__}")
+                     f"remove it in the Plaid dashboard: {type(e).__name__}: {e}")
 
 
 @router.post("/exchange")
@@ -195,14 +195,14 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
         raise HTTPException(
             status_code=502,
             detail=f"Could not check whether this login is already connected, so it was not added. "
-                   f"If another {bank} login shows Login expired on the Dashboard, reconnect it first; "
+                   f"If another login at {bank} shows Login expired on the Dashboard, reconnect it first; "
                    f"otherwise try again.",
         )
     if duplicate:
         _discard_new_item(client, item_id, access_token)
         raise HTTPException(
             status_code=409,
-            detail=f"This {bank} login (or one of its accounts) is already connected. Use Reconnect in the Accounts section of the Dashboard instead of adding it again.",
+            detail=f"This login at {bank} (or one of its accounts) is already connected. Use Reconnect in the Accounts section of the Dashboard instead of adding it again.",
         )
 
     with get_db() as conn:
