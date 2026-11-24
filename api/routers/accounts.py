@@ -40,7 +40,7 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 a.id, a.name, a.display_name, a.mask, a.official_name,
                 a.type, a.subtype, a.institution_name, a.is_manual,
                 a.plaid_account_id AS coinbase_uuid,
-                a.source, a.notes,
+                a.source, a.notes, p.item_id AS plaid_item_id,
                 b.current, b.available, b.limit_amount,
                 b.native_balance, b.unit_price,
                 b.snapped_at,
@@ -53,6 +53,7 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                     WHERE account_number = a.account_number
                 )
             LEFT JOIN i360_account_map m ON m.account_id = a.id
+            LEFT JOIN plaid_items p ON p.id = a.plaid_item_id
             WHERE a.is_active = 1
             ORDER BY a.institution_name, a.name
         """).fetchall()

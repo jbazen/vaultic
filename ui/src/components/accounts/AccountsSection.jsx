@@ -8,7 +8,7 @@ import ManualSimpleRow from "./ManualSimpleRow.jsx";
 import InsperityAccountCard from "./InsperityAccountCard.jsx";
 import VoyaAccountCard from "./VoyaAccountCard.jsx";
 import AllocationBar from "../AllocationBar.jsx";
-import { institutionStatus, splitManualEntries, buildAccountBlocks, sortBlocks } from "./accountsUtils.jsx";
+import { institutionBlockStatus, splitManualEntries, buildAccountBlocks, sortBlocks } from "./accountsUtils.jsx";
 
 const PROPERTY_BADGES = { home_value: "Home", car_value: "Vehicle", real_estate: "Real Estate", vehicles: "Vehicle" };
 
@@ -98,21 +98,39 @@ export default function AccountsSection({
     ));
   }
 
+  // Names a Plaid login by the accounts it holds, e.g. "…4616, …1440".
+  function loginLabel(item) {
+    const masks = accounts.filter(a => a.plaid_item_id === item.item_id && a.mask).map(a => `…${a.mask}`);
+    return masks.length ? masks.join(", ") : "Login";
+  }
+
   function renderBlock(block) {
     const card = { blockKey: block.key, onDragStart: handleInstDragStart, onDragOver: handleInstDragOver,
       onDrop: handleInstDrop, onDragEnd: handleInstDragEnd };
 
     if (block.kind === "institution") {
-      const item = plaidItems.find(i => i.institution_name === block.key);
+      // A bank can have several Plaid logins (one per spouse at LPL, #179):
+      // each login gets its own Reconnect / Disconnect.
+      const items = plaidItems.filter(i => i.institution_name === block.key);
       const isI360 = block.accts.some(x => x.source === "investor360");
-      const { loginExpired, subtitle } = institutionStatus(item, isI360, i360LastSync);
-      const actions = item && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <PlaidReconnect itemId={item.item_id} onSuccess={onChanged} />
-          <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}
-            onClick={() => handleRemove(item.item_id)}>
-            Disconnect
-          </button>
+      const { loginExpired, subtitle } = institutionBlockStatus(items, isI360, i360LastSync);
+      const actions = items.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+          {items.map(item => (
+            <div key={item.item_id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {items.length > 1 && (
+                <span style={{ fontSize: 12, color: item.error_code === "ITEM_LOGIN_REQUIRED" ? "var(--red)" : "var(--text2)" }}>
+                  {loginLabel(item)}
+                </span>
+              )}
+              <PlaidReconnect itemId={item.item_id} onSuccess={onChanged} />
+              <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}
+                aria-label={items.length > 1 ? `Disconnect ${loginLabel(item)}` : "Disconnect"}
+                onClick={() => handleRemove(item.item_id)}>
+                Disconnect
+              </button>
+            </div>
+          ))}
         </div>
       );
       return (
