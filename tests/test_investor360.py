@@ -597,3 +597,123 @@ class TestSyncLog:
         assert data["configured"] is True
         assert data["accounts"] == 5
         assert data["healthy"] is True
+
+
+class TestHideInvestor360Accounts:
+    """#179: Parker moved to LPL (Plaid). The Investor360 accounts are hidden
+    from the list and the totals, and nothing about them is deleted."""
+
+    def _seed(self, conn):
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, account_number, name, type, subtype, "
+            "institution_name, source, is_manual, is_active) VALUES "
+            "('i360_hidetest', 'HIDETEST1', 'Roth IRA', 'investment', 'roth_ira', "
+            "'Parker Financial (Commonwealth/NFS)', 'investor360', 0, 1)")
+        conn.execute(
+            "INSERT INTO accounts (plaid_account_id, account_number, name, type, subtype, "
+            "institution_name, source, is_manual, is_active) VALUES "
+            "('lpl-hidetest', 'lpl-hidetest', 'SAM - Retirement', 'investment', 'ira', "
+            "'LPL Financial', 'plaid', 0, 1)")
+        acct_id = conn.execute(
+            "SELECT id FROM accounts WHERE plaid_account_id = 'i360_hidetest'").fetchone()["id"]
+        conn.execute(
+            "INSERT INTO account_balances (account_id, current, snapped_at, account_number) "
+            "VALUES (?, 1234.5, '2026-11-03', 'HIDETEST1')", (acct_id,))
+
+    def _cleanup(self, conn):
+        conn.execute("DELETE FROM account_balances WHERE account_number = 'HIDETEST1'")
+        conn.execute("DELETE FROM accounts WHERE plaid_account_id IN ('i360_hidetest', 'lpl-hidetest')")
+
+    def test_hides_only_investor360_keeps_history_and_is_idempotent(self):
+        from api.database import _migrate_hide_investor360_accounts
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            already_active = [r[0] for r in conn.execute(
+                "SELECT id FROM accounts WHERE source = 'investor360' AND is_active = 1")]
+            self._seed(conn)
+            try:
+                _migrate_hide_investor360_accounts(conn)
+                state = dict(conn.execute(
+                    "SELECT plaid_account_id, is_active FROM accounts "
+                    "WHERE plaid_account_id IN ('i360_hidetest', 'lpl-hidetest')").fetchall())
+                assert state == {"i360_hidetest": 0, "lpl-hidetest": 1}
+                # History is kept, not deleted
+                bal = conn.execute(
+                    "SELECT current FROM account_balances WHERE account_number = 'HIDETEST1'").fetchone()
+                assert bal["current"] == 1234.5
+                # Idempotent: a second run changes nothing
+                assert conn.execute(
+                    "UPDATE accounts SET is_active = 0 WHERE source = 'investor360' AND is_active = 1"
+                ).rowcount == 0
+                _migrate_hide_investor360_accounts(conn)
+                assert conn.execute(
+                    "SELECT is_active FROM accounts WHERE plaid_account_id = 'i360_hidetest'"
+                ).fetchone()["is_active"] == 0
+            finally:
+                conn.executemany("UPDATE accounts SET is_active = 1 WHERE id = ?",
+                                 [(i,) for i in already_active])
+                self._cleanup(conn)
+
+    def test_hidden_accounts_leave_list_and_snapshot(self, client, auth_headers):
+        from api.database import _migrate_hide_investor360_accounts
+        from api.sync import _take_net_worth_snapshot
+        from tests.conftest import _test_get_db
+        day = "2099-11-24"
+        with _test_get_db() as conn:
+            already_active = [r[0] for r in conn.execute(
+                "SELECT id FROM accounts WHERE source = 'investor360' AND is_active = 1")]
+            self._seed(conn)
+        try:
+            def invested():
+                with _test_get_db() as conn:
+                    return conn.execute(
+                        "SELECT invested FROM net_worth_snapshots WHERE snapped_at = ?", (day,)
+                    ).fetchone()["invested"]
+            _take_net_worth_snapshot(day)
+            before = invested()
+            with _test_get_db() as conn:
+                _migrate_hide_investor360_accounts(conn)
+            _take_net_worth_snapshot(day)
+            after = invested()
+            assert round(before - after, 2) == 1234.5
+            listed = {a["coinbase_uuid"] for a in client.get("/api/accounts", headers=auth_headers).json()}
+            assert "i360_hidetest" not in listed
+            assert "lpl-hidetest" in listed
+        finally:
+            with _test_get_db() as conn:
+                conn.execute("DELETE FROM net_worth_snapshots WHERE snapped_at = ?", (day,))
+                conn.executemany("UPDATE accounts SET is_active = 1 WHERE id = ?",
+                                 [(i,) for i in already_active])
+                self._cleanup(conn)
+
+    def test_performance_chart_keeps_hidden_history_without_carrying_it_forward(
+            self, client, auth_headers):
+        """The Portfolio Performance chart still shows a hidden Parker account on
+        its own dates, but its last value is not carried onto later dates."""
+        from datetime import date, timedelta
+        from tests.conftest import _test_get_db
+        # Recent dates, so they stay inside the chart's window whenever this runs
+        d1, d2, d3 = ((date.today() - timedelta(days=n)).isoformat() for n in (40, 39, 38))
+        with _test_get_db() as conn:
+            for no, active, src in (("PERF_HID_P", 0, "investor360"), ("PERF_HID_L", 1, "plaid")):
+                conn.execute(
+                    "INSERT INTO accounts (plaid_account_id, name, type, source, is_active, account_number) "
+                    "VALUES (?, ?, 'investment', ?, ?, ?)", (no, no, src, active, no))
+            ids = {r["account_number"]: r["id"] for r in conn.execute(
+                "SELECT id, account_number FROM accounts WHERE account_number LIKE 'PERF_HID_%'")}
+            for no, day, val in (("PERF_HID_P", d1, 700.0), ("PERF_HID_L", d2, 50.0),
+                                 ("PERF_HID_L", d3, 60.0)):
+                conn.execute(
+                    "INSERT INTO account_balances (account_id, account_number, current, snapped_at) "
+                    "VALUES (?, ?, ?, ?)", (ids[no], no, val, day))
+        try:
+            res = client.get("/api/accounts/portfolio/performance?days=1825", headers=auth_headers)
+            by_date = {r["snapped_at"]: r["total_value"] for r in res.json()}
+            # Day 1 has the hidden account; on day 2 it is NOT carried forward
+            # (the plaid account adds 50, the hidden one drops out: -700 + 50)
+            assert by_date[d2] - by_date[d1] == pytest.approx(50.0 - 700.0)
+            assert by_date[d3] - by_date[d2] == pytest.approx(10.0)
+        finally:
+            with _test_get_db() as conn:
+                conn.execute("DELETE FROM account_balances WHERE account_number LIKE 'PERF_HID_%'")
+                conn.execute("DELETE FROM accounts WHERE account_number LIKE 'PERF_HID_%'")

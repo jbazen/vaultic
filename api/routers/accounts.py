@@ -40,7 +40,7 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 a.id, a.name, a.display_name, a.mask, a.official_name,
                 a.type, a.subtype, a.institution_name, a.is_manual,
                 a.plaid_account_id AS coinbase_uuid,
-                a.source, a.notes,
+                a.source, a.notes, p.item_id AS plaid_item_id,
                 b.current, b.available, b.limit_amount,
                 b.native_balance, b.unit_price,
                 b.snapped_at,
@@ -53,6 +53,7 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                     WHERE account_number = a.account_number
                 )
             LEFT JOIN i360_account_map m ON m.account_id = a.id
+            LEFT JOIN plaid_items p ON p.id = a.plaid_item_id
             WHERE a.is_active = 1
             ORDER BY a.institution_name, a.name
         """).fetchall()
@@ -202,18 +203,26 @@ async def portfolio_performance(
         # are added only when real snapshot history exists (otherwise they are a
         # constant baseline, below). No lower date bound here so the as-of lookup
         # can carry a value forward from before the window start.
+        # The hidden Investor360 (Parker) accounts (#179) keep their past points
+        # but stop at their last balance (`until`), so their final value is not
+        # carried forward onto dates after Parker moved to LPL.
         src_cte = """
-            SELECT 'a:' || b.account_number AS entity, b.snapped_at AS d, b.current AS value
+            SELECT 'a:' || b.account_number AS entity, b.snapped_at AS d, b.current AS value,
+                   CASE WHEN a.is_active = 1 THEN NULL ELSE (
+                       SELECT MAX(b2.snapped_at) FROM account_balances b2
+                       WHERE b2.account_number = a.account_number
+                   ) END AS until
             FROM account_balances b
             JOIN accounts a ON a.account_number = b.account_number
-            WHERE a.type = 'investment' AND a.is_active = 1 AND b.current IS NOT NULL
+            WHERE a.type = 'investment' AND b.current IS NOT NULL
+              AND (a.is_active = 1 OR a.source = 'investor360')
         """
         baseline = 0.0
         if has_snapshots:
             src_cte += """
             UNION ALL
             SELECT 'm:' || COALESCE(NULLIF(s.account_number, ''), s.name) AS entity,
-                   s.snapped_at AS d, s.value AS value
+                   s.snapped_at AS d, s.value AS value, NULL AS until
             FROM manual_entry_snapshots s
             WHERE s.category = 'invested'
               AND EXISTS (
@@ -242,6 +251,7 @@ async def portfolio_performance(
                    SUM(COALESCE((
                        SELECT s.value FROM src s
                        WHERE s.entity = e.entity AND s.d <= dt.d
+                         AND (s.until IS NULL OR dt.d <= s.until)
                        ORDER BY s.d DESC LIMIT 1
                    ), 0)) + ? AS total_value
             FROM dates dt

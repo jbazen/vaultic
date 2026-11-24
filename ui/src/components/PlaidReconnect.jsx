@@ -10,7 +10,7 @@ import { createUpdateLinkToken, triggerSync } from "../api.js";
  * Update mode repairs the item server-side, so there is NO public token to
  * exchange; on success we just kick a sync and let the parent refresh.
  */
-export default function PlaidReconnect({ itemId, onSuccess }) {
+export default function PlaidReconnect({ itemId, onSuccess, label = "Reconnect this institution's Plaid login" }) {
   const [linkToken, setLinkToken] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -70,7 +70,7 @@ export default function PlaidReconnect({ itemId, onSuccess }) {
         style={{ fontSize: 12, padding: "5px 12px" }}
         onClick={fetchLinkToken}
         disabled={loading || !!linkToken}
-        aria-label="Reconnect this institution's Plaid login"
+        aria-label={label}
       >
         {loading ? "…" : "Reconnect"}
       </button>

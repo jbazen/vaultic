@@ -313,10 +313,15 @@ def notify_stale_i360() -> None:
     from api.database import get_db
 
     with get_db() as conn:
+        active = conn.execute(
+            "SELECT 1 FROM accounts WHERE source = 'investor360' AND is_active = 1 LIMIT 1"
+        ).fetchone()
         row = conn.execute(
             "SELECT synced_at FROM i360_sync_log ORDER BY synced_at DESC LIMIT 1"
         ).fetchone()
 
+    if not active:
+        return  # no Parker accounts shown (hidden since the move to LPL, #179)
     if not row:
         return  # I360 not configured — no sync log at all
 

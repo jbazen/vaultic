@@ -185,6 +185,12 @@ class TestPlaidExchange:
         mock_api = MagicMock()
         mock_api.item_public_token_exchange.return_value = MagicMock(
             access_token="access-new", item_id=new_item_id)
+        # Both the existing and the new item report the same account: the same
+        # login linked twice (#76). Different logins are covered in
+        # TestPlaidExchangeSecondLogin (#179).
+        acct = MagicMock()
+        acct.mask, acct.type, acct.subtype, acct.name = "0001", "depository", "checking", "TOTAL CHECKING"
+        mock_api.accounts_get.return_value = MagicMock(accounts=[acct])
         return mock_api
 
     def _insert_existing(self):
@@ -255,6 +261,191 @@ class TestPlaidExchange:
             res = self._exchange(client, auth_headers, self._mock_client(self.NEW), institution_id="ins_other")
             assert res.status_code == 200
             assert self._item_ids() == {self.EXISTING, self.NEW}
+        finally:
+            self._cleanup()
+
+
+class TestPlaidExchangeSecondLogin:
+    """#179: a second login at the same bank (LPL, one per spouse) is a
+    different set of accounts and must be stored. Linking the same login again,
+    or a login that shares an account, is still refused (#76)."""
+
+    EXISTING = "item-login-existing"
+    NEW = "item-login-new"
+    INST = "ins_login_test"
+
+    @staticmethod
+    def _acct(mask, subtype="ira", name="SAM - Retirement", acct_type="investment"):
+        a = MagicMock()
+        a.mask, a.type, a.subtype, a.name = mask, acct_type, subtype, name
+        return a
+
+    def _mock_client(self, new_accounts, existing_accounts=None):
+        mock_api = MagicMock()
+        mock_api.item_public_token_exchange.return_value = MagicMock(
+            access_token="access-new", item_id=self.NEW)
+        by_token = {"access-new": new_accounts, "access-old": existing_accounts or []}
+        mock_api.accounts_get.side_effect = lambda req: MagicMock(accounts=by_token[req.access_token])
+        return mock_api
+
+    def _insert_existing(self, stored_masks=()):
+        from tests.conftest import _test_get_db
+        from api.encryption import encrypt
+        with _test_get_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO plaid_items (item_id, institution_id, institution_name, access_token_enc) "
+                "VALUES (?, ?, 'LPL Financial', ?)", (self.EXISTING, self.INST, encrypt("access-old")))
+            for mask in stored_masks:
+                conn.execute(
+                    "INSERT INTO accounts (plaid_account_id, plaid_item_id, name, mask, type, subtype, "
+                    "account_number) VALUES (?, ?, 'SAM - Retirement', ?, 'investment', 'ira', ?)",
+                    (f"pa-login-{mask}", cur.lastrowid, mask, f"pa-login-{mask}"))
+
+    def _cleanup(self):
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            conn.execute("DELETE FROM accounts WHERE plaid_account_id LIKE 'pa-login-%'")
+            conn.execute("DELETE FROM plaid_items WHERE item_id IN (?, ?)", (self.EXISTING, self.NEW))
+
+    def _exchange(self, client, auth_headers, mock_api):
+        with patch("api.routers.plaid._get_client", return_value=mock_api), patch("api.sync.sync_all"):
+            return client.post("/api/plaid/exchange", headers=auth_headers, json={
+                "public_token": "public-x", "institution_id": self.INST,
+                "institution_name": "LPL Financial"})
+
+    def _item_ids(self):
+        from tests.conftest import _test_get_db
+        with _test_get_db() as conn:
+            return {r[0] for r in conn.execute(
+                "SELECT item_id FROM plaid_items WHERE item_id IN (?, ?)", (self.EXISTING, self.NEW))}
+
+    def test_second_login_with_different_accounts_is_stored(self, client, auth_headers):
+        self._insert_existing(stored_masks=("4616", "1440"))
+        try:
+            mock_api = self._mock_client([self._acct("7001"), self._acct("7002", "brokerage")])
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 200
+            assert self._item_ids() == {self.EXISTING, self.NEW}
+            mock_api.item_remove.assert_not_called()
+        finally:
+            self._cleanup()
+
+    def test_same_login_again_is_refused(self, client, auth_headers):
+        self._insert_existing(stored_masks=("4616", "1440"))
+        try:
+            mock_api = self._mock_client([self._acct("4616"), self._acct("1440")])
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+            assert "Reconnect" in res.json()["detail"]
+            assert self._item_ids() == {self.EXISTING}
+            assert mock_api.item_remove.call_args[0][0].access_token == "access-new"
+        finally:
+            self._cleanup()
+
+    def test_login_sharing_one_account_is_refused(self, client, auth_headers):
+        """A shared (joint) account in both logins would be counted twice."""
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("7001"), self._acct("4616")])
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+            assert self._item_ids() == {self.EXISTING}
+        finally:
+            self._cleanup()
+
+    def test_same_mask_different_account_type_is_allowed(self, client, auth_headers):
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("4616", subtype="checking", acct_type="depository")])
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 200
+        finally:
+            self._cleanup()
+
+    def test_existing_item_without_stored_accounts_is_asked_from_plaid(self, client, auth_headers):
+        """If the first login's accounts were never stored (its first sync failed),
+        its accounts come from Plaid, so a fresh duplicate is still caught."""
+        self._insert_existing()
+        try:
+            mock_api = self._mock_client([self._acct("4616")], existing_accounts=[self._acct("4616")])
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+            assert self._item_ids() == {self.EXISTING}
+        finally:
+            self._cleanup()
+
+    def test_plaid_accounts_error_removes_new_item_and_stores_nothing(self, client, auth_headers):
+        import plaid
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([])
+            mock_api.accounts_get.side_effect = plaid.ApiException(status=500, reason="Server Error")
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 502
+            assert "was not added" in res.json()["detail"]
+            assert self._item_ids() == {self.EXISTING}
+            assert mock_api.item_remove.call_args[0][0].access_token == "access-new"
+        finally:
+            self._cleanup()
+
+    def test_reclassified_subtype_still_counts_as_same_account(self, client, auth_headers):
+        """Stored subtype is never refreshed by the sync, so a subtype Plaid has
+        since changed must not let the same login through."""
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("4616", subtype="retirement")])
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+        finally:
+            self._cleanup()
+
+    def test_non_plaid_error_in_check_still_removes_new_item(self, client, auth_headers):
+        """A dropped connection or SDK parse error is not a plaid.ApiException;
+        the new item must still be removed at Plaid and the answer is a 502."""
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([])
+            mock_api.accounts_get.side_effect = ConnectionResetError("connection reset")
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 502
+            assert "was not added" in res.json()["detail"]
+            assert "connection reset" not in res.json()["detail"]
+            assert self._item_ids() == {self.EXISTING}
+            assert mock_api.item_remove.call_args[0][0].access_token == "access-new"
+        finally:
+            self._cleanup()
+
+    def test_failed_removal_still_answers_409(self, client, auth_headers):
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("4616")])
+            mock_api.item_remove.side_effect = TimeoutError("timed out")
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+            assert self._item_ids() == {self.EXISTING}
+        finally:
+            self._cleanup()
+
+    def test_message_without_institution_name_reads_cleanly(self, client, auth_headers):
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("4616")])
+            with patch("api.routers.plaid._get_client", return_value=mock_api), patch("api.sync.sync_all"):
+                res = client.post("/api/plaid/exchange", headers=auth_headers, json={
+                    "public_token": "public-x", "institution_id": self.INST})
+            assert res.status_code == 409
+            assert res.json()["detail"].startswith(
+                "This login at this bank (or one of its accounts) is already connected.")
+        finally:
+            self._cleanup()
+
+    def test_accounts_list_carries_plaid_item_id(self, client, auth_headers):
+        """The Dashboard labels each login's Reconnect/Disconnect with this field."""
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            rows = client.get("/api/accounts", headers=auth_headers).json()
+            row = next(a for a in rows if a["coinbase_uuid"] == "pa-login-4616")
+            assert row["plaid_item_id"] == self.EXISTING
         finally:
             self._cleanup()
 

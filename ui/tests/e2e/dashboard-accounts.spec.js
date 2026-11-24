@@ -171,3 +171,56 @@ test.describe("Plaid Reconnect", () => {
     await expect(page.getByRole("alert")).toContainText("Plaid could not remove this connection");
   });
 });
+
+test.describe("Several logins at one bank (#179)", () => {
+  const LPL_ITEMS = [
+    { id: 5, item_id: "item-lpl-1", institution_name: "LPL Financial",
+      last_synced_at: "2026-11-24 23:10:20", error_code: null, created_at: "2026-11-24 23:10:12" },
+    { id: 6, item_id: "item-lpl-2", institution_name: "LPL Financial",
+      last_synced_at: "2026-11-24 23:20:20", error_code: "ITEM_LOGIN_REQUIRED", created_at: "2026-11-24 23:20:12" },
+  ];
+  const LPL_ACCOUNTS = [
+    { id: 26, name: "SAM - Non-Retirement", mask: "1440", type: "investment", subtype: "brokerage",
+      institution_name: "LPL Financial", source: "plaid", plaid_item_id: "item-lpl-1", current: 1000 },
+    { id: 30, name: "SAM - Retirement", mask: "7001", type: "investment", subtype: "ira",
+      institution_name: "LPL Financial", source: "plaid", plaid_item_id: "item-lpl-2", current: 2000 },
+  ];
+
+  test("both logins' accounts show in one block, each login with its own Reconnect", async ({ page }) => {
+    await mockAllAPIs(page);
+    await page.route("**/api/accounts", r => r.fulfill({ json: LPL_ACCOUNTS }));
+    await page.route("**/api/plaid/items", r => r.fulfill({ json: LPL_ITEMS }));
+    await loginOnly(page);
+
+    await expect(page.getByText("SAM - Non-Retirement (...1440)")).toBeVisible();
+    await expect(page.getByText("SAM - Retirement (...7001)")).toBeVisible();
+    await expect(page.getByRole("button", { name: /reconnect/i })).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Disconnect …1440" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Disconnect …7001" })).toBeVisible();
+    // The second login's expired sign-in is not hidden behind the first one's fresh sync
+    await expect(page.getByText(/login expired/i)).toBeVisible();
+  });
+});
+
+test.describe("Parker (Investor360) hidden after the move to LPL (#179)", () => {
+  test("no Parker sync button or summary when no Parker account is shown", async ({ page }) => {
+    await mockAllAPIs(page);
+    // Investor360 data still exists (configured), but every Parker account is hidden
+    await page.route("**/api/investor360/status", r =>
+      r.fulfill({ json: { configured: true, last_sync: "2026-11-03 15:47:35" } }));
+    await loginOnly(page);
+    await expect(page.getByText("Net Worth History").or(page.getByText("Asset Allocation")).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /⟳ Parker/ })).toHaveCount(0);
+    await expect(page.getByText("Parker Financial — Portfolio Summary")).toHaveCount(0);
+  });
+
+  test("Parker sync button still shows while a Parker account is active", async ({ page }) => {
+    await mockAllAPIs(page);
+    await page.route("**/api/accounts", r => r.fulfill({ json: [
+      { id: 18, name: "Roth IRA", mask: "1959", type: "investment", subtype: "roth_ira",
+        institution_name: "Parker Financial (Commonwealth/NFS)", source: "investor360", current: 3000 },
+    ] }));
+    await loginOnly(page);
+    await expect(page.getByRole("button", { name: /⟳ Parker/ })).toBeVisible();
+  });
+});
