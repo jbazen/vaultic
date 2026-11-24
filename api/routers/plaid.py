@@ -6,6 +6,7 @@ import plaid
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.products import Products
 from plaid.model.country_code import CountryCode
 from fastapi import APIRouter, Depends, HTTPException
@@ -96,6 +97,66 @@ class ExchangeRequest(BaseModel):
     institution_name: str | None = None
 
 
+def _account_key(mask, acct_type, subtype, name) -> tuple:
+    """Identity of a Plaid account that is the same across items.
+
+    Plaid account_ids differ per item, so linking the same login twice gives
+    new ids. The mask (last digits of the real account number) with type and
+    subtype identifies the account; the name stands in only when there is no
+    mask.
+    """
+    def norm(v) -> str:
+        return str(getattr(v, "value", v) or "").strip().lower()
+    if norm(mask):
+        return (norm(mask), norm(acct_type), norm(subtype))
+    return ("", norm(acct_type), norm(subtype), norm(name))
+
+
+def _plaid_account_keys(client, access_token: str) -> set[tuple]:
+    resp = client.accounts_get(AccountsGetRequest(access_token=access_token))
+    return {_account_key(a.mask, a.type, a.subtype, a.name) for a in resp.accounts}
+
+
+def _overlaps_linked_accounts(client, institution_id: str | None, new_item_id: str,
+                              new_access_token: str) -> bool:
+    """True if the new item shares any account with an item already linked at
+    the same institution. Raises plaid.ApiException if Plaid can't list accounts.
+
+    An existing item whose accounts haven't been stored yet (its first sync
+    failed) is asked from Plaid directly, so a fresh duplicate is still caught.
+    """
+    if not institution_id:
+        return False
+    with get_db() as conn:
+        others = conn.execute(
+            "SELECT id, access_token_enc FROM plaid_items WHERE institution_id = ? AND item_id != ?",
+            (institution_id, new_item_id),
+        ).fetchall()
+        stored = {
+            o["id"]: {
+                _account_key(r["mask"], r["type"], r["subtype"], r["name"])
+                for r in conn.execute(
+                    "SELECT mask, type, subtype, name FROM accounts WHERE plaid_item_id = ?", (o["id"],)
+                ).fetchall()
+            }
+            for o in others
+        }
+    if not others:
+        return False
+    linked: set[tuple] = set()
+    for o in others:
+        linked |= stored[o["id"]] or _plaid_account_keys(client, decrypt(o["access_token_enc"]))
+    return bool(_plaid_account_keys(client, new_access_token) & linked)
+
+
+def _discard_new_item(client, item_id: str, access_token: str) -> None:
+    """Remove a just-exchanged item at Plaid so it never bills; never stored locally."""
+    try:
+        remove_item_at_plaid(client, access_token)
+    except plaid.ApiException as e:
+        logger.error(f"Plaid item_remove for discarded link {item_id} failed: {e}")
+
+
 @router.post("/exchange")
 async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current_user)):
     try:
@@ -109,23 +170,27 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
         logger.error(f"Plaid exchange error: {e}")
         raise HTTPException(status_code=502, detail="Failed to exchange Plaid token")
 
-    # Re-linking an institution that's already connected mints a new item and a
-    # second copy of every account (issue #76). Remove the new item at Plaid so it
-    # never bills, and send the user to Reconnect on the existing item instead.
-    with get_db() as conn:
-        existing = conn.execute(
-            "SELECT 1 FROM plaid_items WHERE institution_id = ? AND item_id != ?",
-            (body.institution_id, item_id),
-        ).fetchone() if body.institution_id else None
-    if existing:
-        try:
-            remove_item_at_plaid(client, access_token)
-        except plaid.ApiException as e:
-            logger.error(f"Plaid item_remove for duplicate link {item_id} failed: {e}")
+    # Re-linking a login that's already connected mints a new item and a second
+    # copy of every account (issue #76). A second login at the same bank (one per
+    # spouse, #179) is a different set of accounts and must be allowed, so the
+    # check compares accounts, not institutions. Any overlap, including one shared
+    # account, would count money twice: remove the new item at Plaid so it never
+    # bills, and send the user to Reconnect on the existing item instead.
+    try:
+        duplicate = _overlaps_linked_accounts(client, body.institution_id, item_id, access_token)
+    except plaid.ApiException as e:
+        logger.error(f"Plaid accounts check for new item {item_id} failed: {e}")
+        _discard_new_item(client, item_id, access_token)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not check whether this login is already connected. Nothing was changed; try again.",
+        )
+    if duplicate:
+        _discard_new_item(client, item_id, access_token)
         name = body.institution_name or "This institution"
         raise HTTPException(
             status_code=409,
-            detail=f"{name} is already connected. Use Reconnect in the Accounts section of the Dashboard instead of adding it again.",
+            detail=f"This {name} login (or one of its accounts) is already connected. Use Reconnect in the Accounts section of the Dashboard instead of adding it again.",
         )
 
     with get_db() as conn:
