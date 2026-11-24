@@ -36,7 +36,7 @@ export default function AccountsSection({
   }, {});
 
   async function handleRemove(itemId) {
-    if (!confirm("Disconnect this institution? Account history will be preserved.")) return;
+    if (!confirm("Disconnect this login? Its accounts leave the Dashboard; account history will be preserved.")) return;
     setRemoveError("");
     try {
       await removePlaidItem(itemId);
@@ -123,7 +123,8 @@ export default function AccountsSection({
                   {loginLabel(item)}
                 </span>
               )}
-              <PlaidReconnect itemId={item.item_id} onSuccess={onChanged} />
+              <PlaidReconnect itemId={item.item_id} onSuccess={onChanged}
+                label={items.length > 1 ? `Reconnect ${loginLabel(item)}` : undefined} />
               <button className="btn btn-danger" style={{ fontSize: 12, padding: "5px 12px" }}
                 aria-label={items.length > 1 ? `Disconnect ${loginLabel(item)}` : "Disconnect"}
                 onClick={() => handleRemove(item.item_id)}>

@@ -382,9 +382,59 @@ class TestPlaidExchangeSecondLogin:
             mock_api.accounts_get.side_effect = plaid.ApiException(status=500, reason="Server Error")
             res = self._exchange(client, auth_headers, mock_api)
             assert res.status_code == 502
-            assert "Nothing was changed" in res.json()["detail"]
+            assert "was not added" in res.json()["detail"]
             assert self._item_ids() == {self.EXISTING}
             assert mock_api.item_remove.call_args[0][0].access_token == "access-new"
+        finally:
+            self._cleanup()
+
+    def test_reclassified_subtype_still_counts_as_same_account(self, client, auth_headers):
+        """Stored subtype is never refreshed by the sync, so a subtype Plaid has
+        since changed must not let the same login through."""
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("4616", subtype="retirement")])
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+        finally:
+            self._cleanup()
+
+    def test_non_plaid_error_in_check_still_removes_new_item(self, client, auth_headers):
+        """A dropped connection or SDK parse error is not a plaid.ApiException;
+        the new item must still be removed at Plaid and the answer is a 502."""
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([])
+            mock_api.accounts_get.side_effect = ConnectionResetError("connection reset")
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 502
+            assert "was not added" in res.json()["detail"]
+            assert "connection reset" not in res.json()["detail"]
+            assert self._item_ids() == {self.EXISTING}
+            assert mock_api.item_remove.call_args[0][0].access_token == "access-new"
+        finally:
+            self._cleanup()
+
+    def test_failed_removal_still_answers_409(self, client, auth_headers):
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("4616")])
+            mock_api.item_remove.side_effect = TimeoutError("timed out")
+            res = self._exchange(client, auth_headers, mock_api)
+            assert res.status_code == 409
+            assert self._item_ids() == {self.EXISTING}
+        finally:
+            self._cleanup()
+
+    def test_message_without_institution_name_reads_cleanly(self, client, auth_headers):
+        self._insert_existing(stored_masks=("4616",))
+        try:
+            mock_api = self._mock_client([self._acct("4616")])
+            with patch("api.routers.plaid._get_client", return_value=mock_api), patch("api.sync.sync_all"):
+                res = client.post("/api/plaid/exchange", headers=auth_headers, json={
+                    "public_token": "public-x", "institution_id": self.INST})
+            assert res.status_code == 409
+            assert res.json()["detail"].startswith("This this bank login")
         finally:
             self._cleanup()
 

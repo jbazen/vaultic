@@ -101,14 +101,16 @@ def _account_key(mask, acct_type, subtype, name) -> tuple:
     """Identity of a Plaid account that is the same across items.
 
     Plaid account_ids differ per item, so linking the same login twice gives
-    new ids. The mask (last digits of the real account number) with type and
-    subtype identifies the account; the name stands in only when there is no
-    mask.
+    new ids. The mask (last digits of the real account number) with the type
+    identifies the account. Subtype is left out because the sync never updates
+    a stored account's subtype, so a reclassified account would slip past; a
+    false match only costs a visible 409. Without a mask, subtype and name
+    stand in.
     """
     def norm(v) -> str:
         return str(getattr(v, "value", v) or "").strip().lower()
     if norm(mask):
-        return (norm(mask), norm(acct_type), norm(subtype))
+        return (norm(mask), norm(acct_type))
     return ("", norm(acct_type), norm(subtype), norm(name))
 
 
@@ -150,11 +152,16 @@ def _overlaps_linked_accounts(client, institution_id: str | None, new_item_id: s
 
 
 def _discard_new_item(client, item_id: str, access_token: str) -> None:
-    """Remove a just-exchanged item at Plaid so it never bills; never stored locally."""
+    """Remove a just-exchanged item at Plaid so it never bills; never stored locally.
+
+    Any failure (Plaid error, dropped connection) is logged with the item id and
+    swallowed, so the caller still answers with its own 409/502.
+    """
     try:
         remove_item_at_plaid(client, access_token)
-    except plaid.ApiException as e:
-        logger.error(f"Plaid item_remove for discarded link {item_id} failed: {e}")
+    except Exception as e:
+        logger.error(f"Plaid item_remove for discarded link {item_id} failed; "
+                     f"remove it in the Plaid dashboard: {type(e).__name__}")
 
 
 @router.post("/exchange")
@@ -176,21 +183,26 @@ async def exchange_token(body: ExchangeRequest, _user: str = Depends(get_current
     # check compares accounts, not institutions. Any overlap, including one shared
     # account, would count money twice: remove the new item at Plaid so it never
     # bills, and send the user to Reconnect on the existing item instead.
+    # Any failure here (Plaid error, dropped connection, SDK parse error, bad
+    # stored token) must still remove the new item: its access token exists only
+    # in this request, so if it escaped the item would bill forever.
+    bank = body.institution_name or "this bank"
     try:
         duplicate = _overlaps_linked_accounts(client, body.institution_id, item_id, access_token)
-    except plaid.ApiException as e:
-        logger.error(f"Plaid accounts check for new item {item_id} failed: {e}")
+    except Exception as e:
+        logger.error(f"Accounts check for new Plaid item {item_id} failed: {type(e).__name__}: {e}")
         _discard_new_item(client, item_id, access_token)
         raise HTTPException(
             status_code=502,
-            detail="Could not check whether this login is already connected. Nothing was changed; try again.",
+            detail=f"Could not check whether this login is already connected, so it was not added. "
+                   f"If another {bank} login shows Login expired on the Dashboard, reconnect it first; "
+                   f"otherwise try again.",
         )
     if duplicate:
         _discard_new_item(client, item_id, access_token)
-        name = body.institution_name or "This institution"
         raise HTTPException(
             status_code=409,
-            detail=f"This {name} login (or one of its accounts) is already connected. Use Reconnect in the Accounts section of the Dashboard instead of adding it again.",
+            detail=f"This {bank} login (or one of its accounts) is already connected. Use Reconnect in the Accounts section of the Dashboard instead of adding it again.",
         )
 
     with get_db() as conn:

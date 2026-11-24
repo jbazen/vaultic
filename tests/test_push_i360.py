@@ -39,7 +39,8 @@ class TestNotifyStaleI360:
                 (stale_time,)
             )
         try:
-            with patch.object(push_module, "is_configured", return_value=True),                  patch.object(push_module, "send_push_notification", return_value=True) as mock_send:
+            with patch.object(push_module, "is_configured", return_value=True), \
+                 patch.object(push_module, "send_push_notification", return_value=True) as mock_send:
                 push_module.notify_stale_i360()
                 mock_send.assert_not_called()
         finally:

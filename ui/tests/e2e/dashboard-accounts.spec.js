@@ -192,8 +192,8 @@ test.describe("Several logins at one bank (#179)", () => {
     await page.route("**/api/plaid/items", r => r.fulfill({ json: LPL_ITEMS }));
     await loginOnly(page);
 
-    await expect(page.getByText("SAM - Non-Retirement")).toBeVisible();
-    await expect(page.getByText("SAM - Retirement", { exact: true })).toBeVisible();
+    await expect(page.getByText("SAM - Non-Retirement (...1440)")).toBeVisible();
+    await expect(page.getByText("SAM - Retirement (...7001)")).toBeVisible();
     await expect(page.getByRole("button", { name: /reconnect/i })).toHaveCount(2);
     await expect(page.getByRole("button", { name: "Disconnect …1440" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Disconnect …7001" })).toBeVisible();
@@ -205,8 +205,13 @@ test.describe("Several logins at one bank (#179)", () => {
 test.describe("Parker (Investor360) hidden after the move to LPL (#179)", () => {
   test("no Parker sync button or summary when no Parker account is shown", async ({ page }) => {
     await mockAllAPIs(page);
+    // Investor360 data still exists (configured), but every Parker account is hidden
+    await page.route("**/api/investor360/status", r =>
+      r.fulfill({ json: { configured: true, last_sync: "2026-11-03 15:47:35" } }));
     await loginOnly(page);
+    await expect(page.getByText("Net Worth History").or(page.getByText("Asset Allocation")).first()).toBeVisible();
     await expect(page.getByRole("button", { name: /⟳ Parker/ })).toHaveCount(0);
+    await expect(page.getByText("Parker Financial — Portfolio Summary")).toHaveCount(0);
   });
 
   test("Parker sync button still shows while a Parker account is active", async ({ page }) => {

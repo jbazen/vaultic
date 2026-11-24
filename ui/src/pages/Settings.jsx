@@ -465,7 +465,7 @@ function PushNotifications() {
     <div>
       <p style={{ fontSize: 13, color: "var(--text2)", marginBottom: 16 }}>
         Get notified on this device when a bank login expires and needs to be
-        reconnected, or when Parker data hasn't synced in over a day.
+        reconnected.
       </p>
 
       {/* Status badge */}

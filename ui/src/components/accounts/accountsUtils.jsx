@@ -23,7 +23,7 @@ export function isSyncStale(lastSyncedAt) {
 // Real disconnect detection (issue #73) is driven by Plaid's error_code, not by
 // staleness; a merely slow sync shows a softer "hasn't synced recently" note.
 // Investor360 has no Plaid item, so its date comes from the I360 sync log.
-export function institutionStatus(item, isI360, i360LastSync) {
+function institutionStatus(item, isI360, i360LastSync) {
   const loginExpired = item?.error_code === "ITEM_LOGIN_REQUIRED";
   if (loginExpired) {
     return { loginExpired, subtitle: "⚠ Login expired — click Reconnect to resume syncing" };
