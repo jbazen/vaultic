@@ -41,7 +41,7 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 a.id, a.name, a.display_name, a.mask, a.official_name,
                 a.type, a.subtype, a.institution_name, a.is_manual,
                 a.plaid_account_id AS coinbase_uuid,
-                a.source, a.notes, p.item_id AS plaid_item_id,
+                a.source, a.notes, p.item_id AS plaid_item_id, a.account_number,
                 b.current, b.available, b.limit_amount,
                 b.native_balance, b.unit_price,
                 b.snapped_at,
@@ -67,11 +67,23 @@ async def list_accounts(_user: str = Depends(get_current_user)):
             WHERE a.is_active = 1
             ORDER BY a.institution_name, a.name
         """).fetchall()
-    result = []
-    for row in rows:
-        r = dict(row)
-        r["label"] = _display(r["name"], r["display_name"], r["mask"])
-        result.append(r)
+        # A linked account (#181) with no balance of its own yet shows its
+        # predecessor's last one, the same amount the net worth snapshot counts.
+        links = effective_links(conn)
+        result = []
+        for row in rows:
+            r = dict(row)
+            r["label"] = _display(r["name"], r["display_name"], r["mask"])
+            pred = links.get(r.get("account_number")) if r["current"] is None else None
+            if pred:
+                last = conn.execute(
+                    "SELECT current, snapped_at FROM account_balances WHERE account_number = ? "
+                    "AND current IS NOT NULL ORDER BY snapped_at DESC LIMIT 1", (pred,)
+                ).fetchone()
+                if last:
+                    r["current"], r["snapped_at"] = last["current"], last["snapped_at"]
+            r.pop("account_number", None)
+            result.append(r)
     return result
 
 

@@ -83,35 +83,18 @@ def _balance_history(conn, series: list[list[tuple[str, float]]], parker_only: b
     return history
 
 
-@router.get("")
-def list_links(_user: str = Depends(get_current_user)):
-    """Every link, in effect or not, with both accounts' names."""
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT k.id, k.method, k.linked_at, k.unlinked_at,
-                      p.id AS predecessor_id, COALESCE(p.display_name, p.name) AS predecessor_name,
-                      p.mask AS predecessor_mask, p.institution_name AS predecessor_institution,
-                      s.id AS successor_id, COALESCE(s.display_name, s.name) AS successor_name,
-                      s.mask AS successor_mask, s.institution_name AS successor_institution
-               FROM account_links k
-               LEFT JOIN accounts p ON p.account_number = k.predecessor_account_number
-               LEFT JOIN accounts s ON s.account_number = k.successor_account_number
-               ORDER BY k.id"""
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 @router.get("/summary")
 def linked_summary(_user: str = Depends(get_current_user)):
     """Portfolio summary per bank of linked successor accounts.
 
-    Each group: the successors' account ids and total, asset category and
-    asset class allocation and top 10 holdings from their Plaid holdings, the
-    combined balance history, and where the earlier history came from.
+    Each group: the successors' total, asset category allocation and top 10
+    holdings from their Plaid holdings (with the total of all holdings, so a
+    top-10 row's share is of the whole portfolio), the combined balance
+    history, and where the earlier history came from.
     """
     with get_db() as conn:
         links = conn.execute(
-            f"""SELECT l.pred, l.succ, s.id AS succ_id, s.institution_name AS inst,
+            f"""SELECT l.pred, l.succ, s.institution_name AS inst,
                        p.institution_name AS pred_inst, p.source AS pred_source
                 FROM ({EFFECTIVE_LINKS_SQL}) l
                 JOIN accounts s ON s.account_number = l.succ
@@ -148,11 +131,10 @@ def linked_summary(_user: str = Depends(get_current_user)):
             ).fetchall() if r["snapped_at"]), default=None)
             out.append({
                 "institution": inst,
-                "account_ids": [r["succ_id"] for r in rows],
                 "total_value": sum(s[-1][1] for s in series if s),
                 "categories": allocation_from(holdings, "category"),
-                "asset_classes": allocation_from(holdings, "asset_class"),
                 "top_holdings": sorted(by_holding.values(), key=lambda h: -h["value_dollars"])[:10],
+                "holdings_total": sum(h["value_dollars"] for h in holdings),
                 "balance_history": _balance_history(conn, series, parker_only),
                 "predecessor_institution": rows[0]["pred_inst"],
                 "predecessor_as_of": pred_as_of,

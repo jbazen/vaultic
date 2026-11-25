@@ -3,10 +3,7 @@ import { fmt } from "../../utils/format.js";
 
 // ── Asset Category colors (match Investor360 palette) ─────────────────────────
 
-const CATEGORY_COLORS = [
-  "#4f8ef7", "#34d399", "#fb923c", "#a78bfa", "#22d3ee",
-  "#f59e0b", "#f87171", "#86efac", "#e879f9", "#facc15",
-];
+const CATEGORY_COLORS = Array.from({ length: 10 }, (_, i) => `var(--chart-${i + 1})`);
 
 // ── Donut Pie Tooltip ─────────────────────────────────────────────────────────
 

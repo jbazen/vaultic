@@ -5,10 +5,10 @@ import { mockAllAPIs, loginOnly } from "./helpers.js";
 // from; the Dashboard shows the Parker-style summary for the LPL accounts.
 
 const LPL_LINKED = {
-  id: 30, name: "SAM - Retirement", mask: "5312", type: "investment", subtype: "ira",
+  id: 30, name: "SAM - Retirement", mask: "9001", type: "investment", subtype: "ira",
   institution_name: "LPL Financial", source: "plaid", plaid_item_id: "item-lpl-2", current: 2000,
-  link_id: 7, link_active: 1, linked_from_id: 21, linked_from_name: "Heather Roth IRA",
-  linked_from_mask: "1959", linked_until: "2026-11-03",
+  link_id: 7, link_active: 1, linked_from_id: 21, linked_from_name: "Old Roth IRA",
+  linked_from_mask: "0002", linked_until: "2026-11-03",
 };
 
 const SUMMARY = {
@@ -55,20 +55,27 @@ test.describe("LPL accounts linked to their Parker history (#181)", () => {
   test("no summary without links", async ({ page }) => {
     await setup(page, { summary: { groups: [] } });
     await loginOnly(page);
-    await expect(page.getByText("SAM - Retirement (...5312)")).toBeVisible();
+    await expect(page.getByText("SAM - Retirement (...9001)")).toBeVisible();
     await expect(page.getByTestId("linked-portfolio")).toHaveCount(0);
   });
 
   test("linked card shows allocation and Parker tabs, and Unlink undoes the link", async ({ page }) => {
     await setup(page);
+    // After the Unlink, the server reports the link undone and no summary
+    let linked = true;
+    await page.route("**/api/accounts", r =>
+      r.fulfill({ json: [{ ...LPL_LINKED, link_active: linked ? 1 : 0 }] }));
+    await page.route("**/api/linked-accounts/summary", r =>
+      r.fulfill({ json: linked ? SUMMARY : { groups: [] } }));
     const patches = [];
     await page.route("**/api/linked-accounts/7", async r => {
       patches.push(r.request().postDataJSON());
+      linked = false;
       await r.fulfill({ json: { ok: true, active: false } });
     });
     await loginOnly(page);
-    await page.getByText("SAM - Retirement (...5312)").click();
-    await expect(page.getByText(/comes from Heather Roth IRA \(\.\.\.1959\)/)).toBeVisible();
+    await page.getByText("SAM - Retirement (...9001)").click();
+    await expect(page.getByText(/comes from Old Roth IRA \(\.\.\.0002\)/)).toBeVisible();
 
     await page.getByRole("button", { name: "Allocation", exact: true }).click();
     await expect(page.getByText("Asset Class")).toBeVisible();
@@ -77,15 +84,28 @@ test.describe("LPL accounts linked to their Parker history (#181)", () => {
     await page.getByRole("button", { name: "Parker", exact: true }).click();
     await expect(page.getByText("From Parker, as of Nov 3, 2026.")).toBeVisible();
 
-    await page.getByRole("button", { name: /Unlink history of Heather Roth IRA/ }).click();
+    await page.getByRole("button", { name: /Unlink history of Old Roth IRA/ }).click();
     await expect.poll(() => patches).toEqual([{ active: false }]);
+    // The card and the Dashboard summary both follow the change without a reload
+    await expect(page.getByRole("button", { name: /Relink history of Old Roth IRA/ })).toBeVisible();
+    await expect(page.getByTestId("linked-portfolio")).toHaveCount(0);
+  });
+
+  test("a failed Unlink shows its message", async ({ page }) => {
+    await setup(page);
+    await page.route("**/api/linked-accounts/7", r =>
+      r.fulfill({ status: 500, json: { detail: "Internal server error" } }));
+    await loginOnly(page);
+    await page.getByText("SAM - Retirement (...9001)").click();
+    await page.getByRole("button", { name: /Unlink history of Old Roth IRA/ }).click();
+    await expect(page.getByRole("alert")).toContainText("Internal server error");
   });
 
   test("an unlinked card has no extra tabs and offers Relink", async ({ page }) => {
     await setup(page, { accounts: [{ ...LPL_LINKED, link_active: 0 }] });
     await loginOnly(page);
-    await page.getByText("SAM - Retirement (...5312)").click();
-    await expect(page.getByRole("button", { name: /Relink history of Heather Roth IRA/ })).toBeVisible();
+    await page.getByText("SAM - Retirement (...9001)").click();
+    await expect(page.getByRole("button", { name: /Relink history of Old Roth IRA/ })).toBeVisible();
     await expect(page.getByRole("button", { name: "Allocation", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Parker", exact: true })).toHaveCount(0);
   });

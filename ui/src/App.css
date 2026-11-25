@@ -13,6 +13,17 @@
   --purple: #a78bfa;
   --orange: #fb923c;
   --teal: #6ee7b7;
+  /* Categorical chart series (asset category donut), Investor360 palette */
+  --chart-1: #4f8ef7;
+  --chart-2: #34d399;
+  --chart-3: #fb923c;
+  --chart-4: #a78bfa;
+  --chart-5: #22d3ee;
+  --chart-6: #f59e0b;
+  --chart-7: #f87171;
+  --chart-8: #86efac;
+  --chart-9: #e879f9;
+  --chart-10: #facc15;
   --radius: 10px;
   --sidebar-width: 220px;
   --mobile-nav-height: 64px;

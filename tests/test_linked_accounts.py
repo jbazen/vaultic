@@ -2,8 +2,10 @@
 LPL (Plaid) accounts they moved to.
 
 Every test runs on its own in-memory DB (make_isolated_db), so sums over whole
-tables are exact.
+tables are exact, and runs twice: with plain text dates and with
+PARSE_DECLTYPES (DATE columns as datetime.date), as in production.
 """
+import sqlite3
 from datetime import date, timedelta
 
 import pytest
@@ -18,13 +20,14 @@ def _days_ago(n: int) -> str:
     return (date.today() - timedelta(days=n)).isoformat()
 
 
-@pytest.fixture
-def db(monkeypatch):
-    conn, get = make_isolated_db()
+@pytest.fixture(params=[0, sqlite3.PARSE_DECLTYPES], ids=["text-dates", "decltypes"])
+def db(monkeypatch, request):
+    conn, get = make_isolated_db(request.param)
     import api.routers.accounts as accounts_router
     import api.routers.linked_accounts as linked_router
+    import api.routers.net_worth as net_worth_router
     import api.sync as sync
-    for mod in (accounts_router, linked_router, sync):
+    for mod in (accounts_router, linked_router, net_worth_router, sync):
         monkeypatch.setattr(mod, "get_db", get)
     yield conn
     conn.close()
@@ -77,8 +80,8 @@ def _plaid(conn, number, day, ticker, qty, value, sec_type="mutual fund"):
 def moved(db):
     """Three Parker accounts and the three LPL accounts they moved to, plus a decoy.
 
-    P1 -> S1 and P2 -> S2 hold the same funds and share counts; P3 and S3 are
-    empty. V (Vanguard) shares a ticker with P1 but not the share counts.
+    P1 -> S1 and P2 -> S2 hold the same funds and share counts (S2 also holds
+    a fund Parker never had); P3 and S3 are empty. V (Vanguard) shares a ticker with P1 but not the share counts.
     """
     old, gap, new = _days_ago(30), _days_ago(20), _days_ago(5)
     for n in ("P1", "P2", "P3"):
@@ -92,12 +95,14 @@ def moved(db):
     _i360(db, "P1", old, "QCASH", 50, 50, "Cash and Equivalents", "Cash and Equivalents")
     _i360(db, "P2", old, "AAA", 5, 500, "Large-Cap Growth")
     _i360(db, "P2", old, "CCC", 7, 700, "Small-Cap Blend")
+    _i360(db, "P2", old, "DDD", 4, 90, "Large-Cap Value")
 
     _plaid(db, "S1", new, "AAA", 10, 1100)
     _plaid(db, "S1", new, "BBB", 20, 2100)
     _plaid(db, "S1", new, None, 60, 60, sec_type="cash")
     _plaid(db, "S2", new, "AAA", 5, 550)
     _plaid(db, "S2", new, "CCC", 7.0001, 720)
+    _plaid(db, "S2", new, "DDD", 4, 100)
     _plaid(db, "S2", new, "ZZZ", 3, 30, sec_type="etf")
     _plaid(db, "V", new, "AAA", 99, 9900)
 
@@ -155,6 +160,8 @@ class TestAutoLink:
         _account(db, "S2B", LPL, "plaid", 1)
         _plaid(db, "S2B", moved["new"], "AAA", 5, 550)
         _plaid(db, "S2B", moved["new"], "CCC", 7, 700)
+        _plaid(db, "S2B", moved["new"], "DDD", 4, 100)
+        _plaid(db, "S2B", moved["new"], "ZZZ", 3, 30, sec_type="etf")
         auto_link_accounts(db)
         linked = {p for p, _, _ in _links(db)}
         assert "P1" not in linked and "P2" not in linked
@@ -302,7 +309,7 @@ class TestLinkedEndpoints:
         s2 = db.execute("SELECT id FROM accounts WHERE account_number = 'S2'").fetchone()[0]
         data = client.get(f"/api/linked-accounts/allocation/{s2}", headers=auth_headers).json()
         assert {c["asset_name"]: c["market_value"] for c in data["categories"]} == {
-            "Small-Cap Blend": 720, "Large-Cap Growth": 550, "ETF": 30}
+            "Small-Cap Blend": 720, "Large-Cap Growth": 550, "Large-Cap Value": 100, "ETF": 30}
         s1 = db.execute("SELECT id FROM accounts WHERE account_number = 'S1'").fetchone()[0]
         data = client.get(f"/api/linked-accounts/allocation/{s1}", headers=auth_headers).json()
         assert {c["asset_name"]: c["market_value"] for c in data["asset_classes"]} == {
@@ -334,15 +341,14 @@ class TestLinkedEndpoints:
 
     def test_unlink_and_relink(self, db, moved, client, auth_headers):
         _link_all(db)
-        links = client.get("/api/linked-accounts", headers=auth_headers).json()
-        p1 = next(k for k in links if k["predecessor_name"] == "P1")
-        assert p1["successor_name"] == "S1" and p1["unlinked_at"] is None
-        r = client.patch(f"/api/linked-accounts/{p1['id']}", json={"active": False}, headers=auth_headers)
+        link_id = db.execute(
+            "SELECT id FROM account_links WHERE predecessor_account_number = 'P1'").fetchone()[0]
+        r = client.patch(f"/api/linked-accounts/{link_id}", json={"active": False}, headers=auth_headers)
         assert r.json() == {"ok": True, "active": False}
         assert ("P1", "S1", "auto-holdings") not in _links(db)
         # Account data is untouched
         assert db.execute("SELECT COUNT(*) FROM account_balances WHERE account_number = 'P1'").fetchone()[0] == 1
-        client.patch(f"/api/linked-accounts/{p1['id']}", json={"active": True}, headers=auth_headers)
+        client.patch(f"/api/linked-accounts/{link_id}", json={"active": True}, headers=auth_headers)
         assert ("P1", "S1", "auto-holdings") in _links(db)
 
     def test_unknown_link_is_404(self, db, client, auth_headers):
@@ -350,7 +356,6 @@ class TestLinkedEndpoints:
         assert r.status_code == 404
 
     @pytest.mark.parametrize("method,path", [
-        ("get", "/api/linked-accounts"),
         ("get", "/api/linked-accounts/summary"),
         ("get", "/api/linked-accounts/allocation/1"),
         ("patch", "/api/linked-accounts/1"),
@@ -358,3 +363,118 @@ class TestLinkedEndpoints:
     def test_requires_auth(self, client, method, path):
         kwargs = {"json": {"active": True}} if method == "patch" else {}
         assert getattr(client, method)(path, **kwargs).status_code == 401
+
+
+# ── Review follow-ups ──────────────────────────────────────────────────────
+
+class TestMatchingEdges:
+    def test_superset_account_does_not_steal_or_tie(self, db):
+        """Pb holds everything Pa holds plus one more fund; each still finds its own twin."""
+        from api.account_links import auto_link_accounts
+        day = _days_ago(5)
+        for n in ("PA", "PB"):
+            _account(db, n, PARKER, "investor360", 0)
+        for n in ("SA", "SB"):
+            _account(db, n, LPL, "plaid", 1)
+        for acct, extra in (("PA", False), ("PB", True)):
+            _i360(db, acct, day, "AAA", 10, 100, "Large-Cap Growth")
+            _i360(db, acct, day, "BBB", 20, 200, "Large-Cap Value")
+            if extra:
+                _i360(db, acct, day, "CCC", 5, 50, "Small-Cap Blend")
+        for acct, extra in (("SA", False), ("SB", True)):
+            _plaid(db, acct, day, "AAA", 10, 100)
+            _plaid(db, acct, day, "BBB", 20, 200)
+            if extra:
+                _plaid(db, acct, day, "CCC", 5, 50)
+        assert auto_link_accounts(db) == 2
+        assert {(p, s) for p, s, _ in _links(db)} == {("PA", "SA"), ("PB", "SB")}
+
+    def test_one_shared_fund_is_not_a_match(self, db):
+        from api.account_links import auto_link_accounts
+        day = _days_ago(5)
+        _account(db, "PONE", PARKER, "investor360", 0)
+        _account(db, "ROBIN", "Robinhood", "plaid", 1, subtype="brokerage")
+        _i360(db, "PONE", day, "VTI", 10, 1000, "Large-Cap Blend")
+        _plaid(db, "ROBIN", day, "VTI", 10, 1000, sec_type="etf")
+        assert auto_link_accounts(db) == 0
+
+    def test_relinked_login_gets_the_link_back(self, db, moved, client, auth_headers):
+        """Removing and adding a login again gives new Plaid account ids: the link
+        follows the new account, matched against the old LPL holdings (which may
+        have drifted from Parker's by reinvested dividends)."""
+        from api.account_links import auto_link_accounts
+        _link_all(db)
+        db.execute("UPDATE accounts SET is_active = 0 WHERE account_number = 'S1'")
+        _account(db, "S1NEW", LPL, "plaid", 1)
+        day = _days_ago(1)
+        # S1's last holdings drifted from Parker's 10 / 20 shares; the new account matches S1
+        db.execute("UPDATE plaid_holdings SET quantity = quantity * 1.03 WHERE account_number = 'S1'")
+        _plaid(db, "S1NEW", day, "AAA", 10.3, 1200)
+        _plaid(db, "S1NEW", day, "BBB", 20.6, 2200)
+        _balance(db, "S1NEW", day, 3400.0)
+        assert auto_link_accounts(db) == 1
+        assert ("P1", "S1NEW", "auto-holdings") in _links(db)
+        new_id = db.execute("SELECT id FROM accounts WHERE account_number = 'S1NEW'").fetchone()[0]
+        rows = client.get(f"/api/accounts/{new_id}/balances?days=365", headers=auth_headers).json()
+        assert rows[0]["current"] == 3050.0 and rows[-1]["current"] == 3400.0
+
+    def test_owner_unlinked_pair_is_not_repointed(self, db, moved):
+        from api.account_links import auto_link_accounts
+        _link_all(db)
+        db.execute("UPDATE account_links SET unlinked_at = CURRENT_TIMESTAMP WHERE predecessor_account_number = 'P1'")
+        db.execute("UPDATE accounts SET is_active = 0 WHERE account_number = 'S1'")
+        _account(db, "S1NEW", LPL, "plaid", 1)
+        _plaid(db, "S1NEW", _days_ago(1), "AAA", 10, 1100)
+        _plaid(db, "S1NEW", _days_ago(1), "BBB", 20, 2100)
+        assert auto_link_accounts(db) == 0
+
+
+class TestRepairEdges:
+    def test_pair_linked_later_is_still_added(self, db, moved):
+        from api.account_links import repair_cutover_snapshots
+        mid = _days_ago(10)
+        db.execute("INSERT INTO net_worth_snapshots (snapped_at, total, invested) VALUES (?, 5100, 5000)", (mid,))
+        db.execute("INSERT INTO account_links (predecessor_account_number, successor_account_number, method) "
+                   "VALUES ('P1', 'S1', 'test')")
+        assert repair_cutover_snapshots(db, dates=(mid,), reason="test") == pytest.approx(3050.0)
+        db.execute("INSERT INTO account_links (predecessor_account_number, successor_account_number, method) "
+                   "VALUES ('P2', 'S2', 'test')")
+        assert repair_cutover_snapshots(db, dates=(mid,), reason="test") == pytest.approx(1200.0)
+        assert repair_cutover_snapshots(db, dates=(mid,), reason="test") == 0
+        assert db.execute("SELECT invested FROM net_worth_snapshots WHERE snapped_at = ?",
+                          (mid,)).fetchone()[0] == pytest.approx(5000 + 3050 + 1200)
+        assert db.execute("SELECT SUM(amount) FROM net_worth_snapshot_repairs").fetchone()[0] == pytest.approx(4250)
+
+    def test_today_is_left_to_the_snapshot_code(self, db, moved):
+        from api.account_links import repair_cutover_snapshots
+        _link_all(db)
+        today = date.today().isoformat()
+        db.execute("DELETE FROM account_balances WHERE account_number IN ('S1', 'S2')")
+        db.execute("INSERT INTO net_worth_snapshots (snapped_at, total, invested) VALUES (?, 100, 0)", (today,))
+        assert repair_cutover_snapshots(db, dates=(today,), reason="test") == 0
+
+
+class TestTotalsAndFallbacks:
+    def test_summary_gives_the_whole_holdings_total(self, db, moved, client, auth_headers):
+        _link_all(db)
+        g = client.get("/api/linked-accounts/summary", headers=auth_headers).json()["groups"][0]
+        assert g["holdings_total"] == pytest.approx(1100 + 2100 + 60 + 550 + 720 + 100 + 30)
+        assert "account_ids" not in g and "asset_classes" not in g
+
+    def test_account_list_shows_the_predecessor_balance_until_the_first_own(
+            self, db, moved, client, auth_headers):
+        _link_all(db)
+        db.execute("DELETE FROM account_balances WHERE account_number = 'S2'")
+        db.commit()
+        rows = {a["coinbase_uuid"]: a for a in client.get("/api/accounts", headers=auth_headers).json()}
+        assert rows["pid-S2"]["current"] == 1200.0
+        assert rows["pid-S1"]["current"] == 3260.0
+        assert "account_number" not in rows["pid-S1"]
+
+    def test_debug_breakdown_counts_an_active_predecessor_once(self, db, moved, client, auth_headers):
+        _link_all(db)
+        db.execute("UPDATE accounts SET is_active = 1 WHERE account_number = 'P1'")
+        db.commit()
+        detail = client.get("/api/net-worth/debug", headers=auth_headers).json()["plaid_accounts"]
+        p1 = next(a for a in detail if a["account_number"] == "P1")
+        assert p1["bucket"] == "counted_through_successor" and p1["contributed"] == 0

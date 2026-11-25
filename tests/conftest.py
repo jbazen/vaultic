@@ -47,14 +47,16 @@ def _test_get_db():
 db_module.get_db = _test_get_db
 
 
-def make_isolated_db():
+def make_isolated_db(detect_types: int = 0):
     """Return (conn, get_db) for a brand-new in-memory DB with SCHEMA + MIGRATIONS.
 
     For tests that need exact sums over a whole table (e.g. every manual
     liability) without the rows other test modules leave in the shared DB.
     Patch a module's `get_db` with the returned context manager to point it here.
+    Pass detect_types=sqlite3.PARSE_DECLTYPES to read DATE columns as
+    datetime.date, the way production's get_db does.
     """
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn = sqlite3.connect(":memory:", check_same_thread=False, detect_types=detect_types)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(db_module.SCHEMA)

@@ -15,6 +15,7 @@ A link is in effect while it is not unlinked and its successor is an active
 investment account (see EFFECTIVE_LINKS_SQL).
 """
 import logging
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -47,39 +48,55 @@ def _same_qty(a: float, b: float) -> bool:
     return abs(a - b) <= max(0.001, 0.005 * max(abs(a), abs(b)))
 
 
+def _positions(rows) -> dict[str, float]:
+    """{TICKER: shares}, summing rows of the same ticker."""
+    out: dict[str, float] = {}
+    for r in rows:
+        t = r[0].strip().upper()
+        out[t] = out.get(t, 0.0) + r[1]
+    return out
+
+
 def _parker_positions(conn, account_number: str) -> dict[str, float]:
     """Latest Investor360 positions {TICKER: shares}, cash left out."""
-    rows = conn.execute(
+    return _positions(conn.execute(
         """SELECT symbol, quantity FROM i360_holdings
            WHERE account_number = ?
              AND snapped_at = (SELECT MAX(snapped_at) FROM i360_holdings WHERE account_number = ?)
-             AND symbol IS NOT NULL AND symbol <> '' AND quantity > 0
+             AND symbol IS NOT NULL AND TRIM(symbol) <> '' AND quantity > 0
              AND LOWER(COALESCE(asset_category, '')) NOT IN ('cash and equivalents', 'cash')""",
         (account_number, account_number),
-    ).fetchall()
-    return {r["symbol"].strip().upper(): r["quantity"] for r in rows}
+    ).fetchall())
 
 
 def _plaid_positions(conn, account_number: str) -> dict[str, float]:
     """Latest Plaid positions {TICKER: shares}, cash left out."""
-    rows = conn.execute(
-        """SELECT s.ticker_symbol AS ticker, h.quantity
+    return _positions(conn.execute(
+        """SELECT s.ticker_symbol, h.quantity
            FROM plaid_holdings h
            JOIN plaid_securities s ON s.security_id = h.security_id
            WHERE h.account_number = ?
              AND h.snapped_at = (SELECT MAX(snapped_at) FROM plaid_holdings WHERE account_number = ?)
-             AND s.ticker_symbol IS NOT NULL AND s.ticker_symbol <> '' AND h.quantity > 0
+             AND s.ticker_symbol IS NOT NULL AND TRIM(s.ticker_symbol) <> '' AND h.quantity > 0
              AND COALESCE(s.type, '') <> 'cash'""",
         (account_number, account_number),
-    ).fetchall()
-    return {r["ticker"].strip().upper(): r["quantity"] for r in rows}
+    ).fetchall())
 
 
-def _match_score(pred: dict[str, float], succ: dict[str, float]) -> float:
-    if not pred:
+# At least this many positions must agree, so one shared fund is never a match.
+MIN_SAME_POSITIONS = 2
+
+
+def _match_score(a: dict[str, float], b: dict[str, float]) -> float:
+    """Positions with the same ticker and share count, over every ticker either holds.
+
+    Symmetric, so an account holding extra funds scores lower instead of
+    matching everything it contains.
+    """
+    same = sum(1 for t, q in a.items() if t in b and _same_qty(q, b[t]))
+    if same < MIN_SAME_POSITIONS:
         return 0.0
-    same = sum(1 for t, q in pred.items() if t in succ and _same_qty(q, succ[t]))
-    return same / len(pred)
+    return same / len(a.keys() | b.keys())
 
 
 def _latest_balance(conn, account_number: str):
@@ -91,10 +108,14 @@ def _latest_balance(conn, account_number: str):
     return row["current"] if row else None
 
 
-def _insert_link(conn, pred: str, succ: str, method: str) -> None:
+def _save_link(conn, pred: str, succ: str, method: str) -> None:
+    """Create the link, or repoint the predecessor's stale link to `succ`."""
     conn.execute(
-        "INSERT INTO account_links (predecessor_account_number, successor_account_number, method) "
-        "VALUES (?, ?, ?)",
+        """INSERT INTO account_links (predecessor_account_number, successor_account_number, method)
+           VALUES (?, ?, ?)
+           ON CONFLICT(predecessor_account_number) DO UPDATE SET
+               successor_account_number = excluded.successor_account_number,
+               method = excluded.method, linked_at = CURRENT_TIMESTAMP, unlinked_at = NULL""",
         (pred, succ, method),
     )
 
@@ -103,33 +124,51 @@ def auto_link_accounts(conn) -> int:
     """Link hidden Investor360 accounts to the Plaid accounts they moved to.
 
     1. Holdings: a predecessor links to the candidate holding the same tickers
-       with the same share counts (at least MATCH_SHARE of its non-cash
-       positions), when each is the other's single best match.
+       with the same share counts (MATCH_SHARE of all tickers either holds, at
+       least MIN_SAME_POSITIONS of them), when each is the other's single best
+       match.
     2. Empty pair: at a bank that already got a holdings match, when exactly
        one predecessor and one candidate are left and both are empty (no
        positions, balance 0 or none), they are linked.
 
-    Accounts that appear in any account_links row (linked or unlinked) are
-    skipped. Returns the number of links created. Idempotent.
+    A link whose successor is gone (inactive, e.g. the login was removed and
+    added again, which gives new Plaid account ids) and that the owner did not
+    unlink is matched again and repointed; it is compared with the old
+    successor's last Plaid holdings, which are newer than Parker's. Any other
+    account in account_links (linked, or unlinked by the owner) is skipped.
+    Returns the number of links created or repointed. Idempotent.
     """
-    preds = conn.execute(
+    stale = {r["pred"]: r["succ"] for r in conn.execute(
+        """SELECT k.predecessor_account_number AS pred, k.successor_account_number AS succ
+           FROM account_links k
+           LEFT JOIN accounts s ON s.account_number = k.successor_account_number
+           WHERE k.unlinked_at IS NULL AND COALESCE(s.is_active, 0) = 0"""
+    ).fetchall()}
+    taken = {r[0] for r in conn.execute(
+        "SELECT predecessor_account_number FROM account_links "
+        "UNION SELECT successor_account_number FROM account_links"
+    ).fetchall()}
+    preds = [p for p in conn.execute(
         """SELECT account_number, institution_name FROM accounts
            WHERE source = 'investor360' AND is_active = 0 AND type = 'investment'
-             AND account_number IS NOT NULL
-             AND account_number NOT IN (SELECT predecessor_account_number FROM account_links)
-             AND account_number NOT IN (SELECT successor_account_number FROM account_links)"""
-    ).fetchall()
-    cands = conn.execute(
+             AND account_number IS NOT NULL"""
+    ).fetchall() if p["account_number"] not in taken or p["account_number"] in stale]
+    cands = [c for c in conn.execute(
         """SELECT account_number, institution_name FROM accounts
            WHERE COALESCE(source, 'plaid') = 'plaid' AND is_active = 1 AND type = 'investment'
-             AND account_number IS NOT NULL
-             AND account_number NOT IN (SELECT successor_account_number FROM account_links)
-             AND account_number NOT IN (SELECT predecessor_account_number FROM account_links)"""
-    ).fetchall()
+             AND account_number IS NOT NULL"""
+    ).fetchall() if c["account_number"] not in taken]
     if not preds or not cands:
         return 0
 
-    pred_pos = {p["account_number"]: _parker_positions(conn, p["account_number"]) for p in preds}
+    def reference(p: str) -> dict[str, float]:
+        if p in stale:
+            old = _plaid_positions(conn, stale[p])
+            if old:
+                return old
+        return _parker_positions(conn, p)
+
+    pred_pos = {p["account_number"]: reference(p["account_number"]) for p in preds}
     cand_pos = {c["account_number"]: _plaid_positions(conn, c["account_number"]) for c in cands}
     scores = {(p, c): _match_score(pp, cp)
               for p, pp in pred_pos.items() for c, cp in cand_pos.items()}
@@ -147,7 +186,7 @@ def auto_link_accounts(conn) -> int:
     for p in pred_pos:
         pair = best(0, p)
         if pair and best(1, pair[1]) == pair:
-            _insert_link(conn, p, pair[1], "auto-holdings")
+            _save_link(conn, p, pair[1], "auto-holdings")
             linked_preds.add(p)
             linked_cands.add(pair[1])
             created += 1
@@ -160,7 +199,7 @@ def auto_link_accounts(conn) -> int:
            FROM account_links k
            JOIN accounts p ON p.account_number = k.predecessor_account_number
            JOIN accounts s ON s.account_number = k.successor_account_number
-           WHERE k.method = 'auto-holdings' AND k.unlinked_at IS NULL"""
+           WHERE k.method = 'auto-holdings' AND k.unlinked_at IS NULL AND s.is_active = 1"""
     ).fetchall()
     for m in matched:
         left_p = [p for p in pred_pos if p not in linked_preds and pred_inst[p] == m["from_inst"]]
@@ -172,7 +211,7 @@ def auto_link_accounts(conn) -> int:
             continue
         if (_latest_balance(conn, p) or 0) != 0 or (_latest_balance(conn, c) or 0) != 0:
             continue
-        _insert_link(conn, p, c, "auto-empty")
+        _save_link(conn, p, c, "auto-empty")
         linked_preds.add(p)
         linked_cands.add(c)
         created += 1
@@ -186,31 +225,29 @@ def repair_cutover_snapshots(conn, dates=CUTOVER_REPAIR_DATES,
                              reason: str = CUTOVER_REPAIR_REASON) -> float:
     """Add the hidden predecessors' value to snapshots that counted neither account.
 
-    For each date, a pair in effect whose predecessor is hidden and whose
+    For each past date, a pair in effect whose predecessor is hidden and whose
     successor had no balance on or before that date was counted by neither
     account; its predecessor's last balance on or before the date is added to
-    `invested` and `total`. The amount is recorded in
-    net_worth_snapshot_repairs, so each date is repaired once and the change
-    can be reversed by subtracting it. Returns the total added.
+    `invested` and `total`. Each pair's amount is recorded on its own in
+    net_worth_snapshot_repairs (reason plus the predecessor), so a pair linked
+    later is still added, none is added twice, and the change can be reversed
+    by subtracting the recorded amounts. Today and later are skipped: the
+    link-aware snapshot code takes those. Returns the total added.
     """
+    today = date.today().isoformat()
     added_all = 0.0
     for d in dates:
-        snap = conn.execute(
+        if d >= today or not conn.execute(
             "SELECT 1 FROM net_worth_snapshots WHERE snapped_at = ?", (d,)
-        ).fetchone()
-        done = conn.execute(
-            "SELECT 1 FROM net_worth_snapshot_repairs WHERE snapped_at = ? AND reason = ?",
-            (d, reason),
-        ).fetchone()
-        if not snap or done:
+        ).fetchone():
             continue
-        added = conn.execute(
-            f"""SELECT COALESCE(SUM((
+        missing = conn.execute(
+            f"""SELECT l.pred, (
                     SELECT b.current FROM account_balances b
                     WHERE b.account_number = l.pred AND b.current IS NOT NULL
                       AND date(b.snapped_at) <= date(?)
                     ORDER BY b.snapped_at DESC LIMIT 1
-                )), 0) AS added
+                ) AS amount
                 FROM ({EFFECTIVE_LINKS_SQL}) l
                 JOIN accounts p ON p.account_number = l.pred AND p.is_active = 0
                 WHERE NOT EXISTS (
@@ -219,19 +256,26 @@ def repair_cutover_snapshots(conn, dates=CUTOVER_REPAIR_DATES,
                       AND date(sb.snapped_at) <= date(?)
                 )""",
             (d, d),
-        ).fetchone()["added"]
-        if not added:
-            continue  # nothing to add yet (e.g. not linked yet): try again next start
-        conn.execute(
-            "INSERT INTO net_worth_snapshot_repairs (snapped_at, reason, amount) VALUES (?, ?, ?)",
-            (d, reason, added),
-        )
-        conn.execute(
-            "UPDATE net_worth_snapshots SET invested = invested + ?, total = total + ? "
-            "WHERE snapped_at = ?",
-            (added, added, d),
-        )
-        logger.info("Net worth snapshot %s: added %.2f for linked accounts (#181)", d, added)
+        ).fetchall()
+        added = 0.0
+        for m in missing:
+            if not m["amount"]:
+                continue
+            cur = conn.execute(
+                "INSERT INTO net_worth_snapshot_repairs (snapped_at, reason, amount) VALUES (?, ?, ?) "
+                "ON CONFLICT(snapped_at, reason) DO NOTHING",
+                (d, f"{reason} {m['pred']}", m["amount"]),
+            )
+            if not cur.rowcount:
+                continue  # this pair was already added
+            conn.execute(
+                "UPDATE net_worth_snapshots SET invested = invested + ?, total = total + ? "
+                "WHERE snapped_at = ?",
+                (m["amount"], m["amount"], d),
+            )
+            added += m["amount"]
+        if added:
+            logger.info("Net worth snapshot %s: added %.2f for linked accounts (#181)", d, added)
         added_all += added
     return added_all
 
@@ -252,16 +296,19 @@ _PLAID_TYPE_LABELS = {
 
 
 def parker_classes(conn) -> dict[str, tuple[str, str | None]]:
-    """{TICKER: (asset_category, primary_asset_class)} from the latest Investor360 row."""
-    out: dict[str, tuple[str, str | None]] = {}
-    for r in conn.execute(
-        """SELECT symbol, asset_category, primary_asset_class FROM i360_holdings
+    """{TICKER: (asset_category, primary_asset_class)} from the latest Investor360 row.
+
+    One grouped scan: with MAX(), SQLite takes the bare columns from the row
+    holding the maximum, i.e. each ticker's latest classification.
+    """
+    return {r["sym"]: (r["asset_category"], r["primary_asset_class"]) for r in conn.execute(
+        """SELECT UPPER(TRIM(symbol)) AS sym, asset_category, primary_asset_class,
+                  MAX(snapped_at) AS latest
+           FROM i360_holdings
            WHERE symbol IS NOT NULL AND TRIM(symbol) <> ''
              AND asset_category IS NOT NULL AND TRIM(asset_category) <> ''
-           ORDER BY snapped_at ASC, id ASC"""
-    ).fetchall():
-        out[r["symbol"].strip().upper()] = (r["asset_category"], r["primary_asset_class"])
-    return out
+           GROUP BY UPPER(TRIM(symbol))"""
+    ).fetchall()}
 
 
 def classified_holdings(conn, account_numbers: list[str]) -> list[dict]:

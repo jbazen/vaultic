@@ -2,7 +2,9 @@ import { fmt, fmtPercent as fmtPct } from "../../utils/format.js";
 
 // ── Top Holdings Table ────────────────────────────────────────────────────────
 
-export default function TopHoldingsTable({ holdings }) {
+// `total` is the whole portfolio when `holdings` is already cut to the top 10;
+// without it the share is of the holdings passed in.
+export default function TopHoldingsTable({ holdings, total: portfolioTotal }) {
   if (!holdings || holdings.length === 0) return <div style={{ color: "var(--text2)", fontSize: 13 }}>No holdings data.</div>;
 
   // Deduplicate by symbol (same fund across accounts), sum values, take top 10
@@ -13,7 +15,7 @@ export default function TopHoldingsTable({ holdings }) {
     bySymbol[key].value += h.value_dollars || 0;
   }
   const top10 = Object.values(bySymbol).sort((a, b) => b.value - a.value).slice(0, 10);
-  const total = holdings.reduce((s, h) => s + (h.value_dollars || 0), 0);
+  const total = portfolioTotal ?? holdings.reduce((s, h) => s + (h.value_dollars || 0), 0);
 
   return (
     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>

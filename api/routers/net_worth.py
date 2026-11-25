@@ -1,6 +1,7 @@
 from datetime import date
 from fastapi import APIRouter, Depends, Query
 from api.dependencies import get_current_user, admin_required
+from api.account_links import effective_links
 from api.database import get_db
 
 router = APIRouter(prefix="/api/net-worth", tags=["net-worth"])
@@ -145,11 +146,14 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
         # Plaid accounts — live balances for today
         plaid_accounts = conn.execute("""
             SELECT a.id, a.name, a.display_name, a.type, a.subtype,
-                   a.institution_name, b.current, b.snapped_at
+                   a.institution_name, a.account_number, b.current, b.snapped_at
             FROM accounts a
             LEFT JOIN account_balances b ON b.account_number = a.account_number AND b.snapped_at = ?
             WHERE a.is_active = 1 AND a.is_manual = 0
         """, (today,)).fetchall()
+
+        # A linked pair (#181) counts once, through its successor.
+        counted_through_successor = set(effective_links(conn).values())
 
         plaid_detail = []
         plaid_liquid = plaid_invested = plaid_crypto = plaid_liabilities = 0.0
@@ -158,7 +162,10 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
             bal = a.get("current") or 0
             t, s = a["type"], (a["subtype"] or "")
             bucket = "skipped"
-            if bal == 0 and a.get("current") is None:
+            if a["account_number"] in counted_through_successor:
+                bal = 0
+                bucket = "counted_through_successor"
+            elif bal == 0 and a.get("current") is None:
                 bucket = "no_balance_today"
             elif t == "crypto":
                 plaid_crypto += bal

@@ -49,7 +49,7 @@ export default function LinkedPortfolioSection() {
         </div>
         <div style={{ flex: "1 1 320px", minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>Top 10 Holdings</div>
-          <TopHoldingsTable holdings={g.top_holdings} />
+          <TopHoldingsTable holdings={g.top_holdings} total={g.holdings_total} />
         </div>
       </div>
 
