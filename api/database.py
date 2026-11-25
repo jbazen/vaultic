@@ -788,6 +788,27 @@ MIGRATIONS = [
     # Last 30-second TOTP step used to sign in, so a code works only once
     # (#165 review). NULL means none used yet.
     "ALTER TABLE users ADD COLUMN totp_last_step INTEGER",
+    # History links (#181): a hidden account (Parker, Investor360) whose money
+    # moved to another account (LPL through Plaid). Never changes either
+    # account's data; unlinking sets unlinked_at. See api/account_links.py.
+    """CREATE TABLE IF NOT EXISTS account_links (
+        id                         INTEGER PRIMARY KEY,
+        predecessor_account_number TEXT NOT NULL UNIQUE,
+        successor_account_number   TEXT NOT NULL UNIQUE,
+        method                     TEXT NOT NULL,
+        linked_at                  DATETIME DEFAULT CURRENT_TIMESTAMP,
+        unlinked_at                DATETIME
+    )""",
+    # Amounts added to a past net worth snapshot by a one-time repair (#181),
+    # so a repair is applied once and can be reversed by subtracting it.
+    """CREATE TABLE IF NOT EXISTS net_worth_snapshot_repairs (
+        id         INTEGER PRIMARY KEY,
+        snapped_at DATE NOT NULL,
+        reason     TEXT NOT NULL,
+        amount     REAL NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(snapped_at, reason)
+    )""",
 ]
 
 
@@ -1436,6 +1457,14 @@ def init_db():
             _migrate_hide_investor360_accounts(conn)
         except Exception as exc:
             logger.warning("Investor360 hide migration failed: %s", exc)
+        # Link each hidden Parker account to the LPL account it moved to, then
+        # fix the 2026-11-24 snapshot that counted neither (#181).
+        try:
+            from api.account_links import auto_link_accounts, repair_cutover_snapshots
+            auto_link_accounts(conn)
+            repair_cutover_snapshots(conn)
+        except Exception as exc:
+            logger.warning("Account history link migration failed: %s", exc)
         # Backfill Insperity per-account balance history from insperity_holdings
         # into manual_entry_snapshots — the sync only ever wrote the holdings
         # table, so the Performance chart (which reads snapshots) looked empty.

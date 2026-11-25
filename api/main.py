@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
 from api.dependencies import get_current_user, get_client_ip
-from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, push, market, ticker_feed, investor360, insperity, voya
+from api.routers import auth, plaid, accounts, net_worth, manual, pdf, crypto, push, market, ticker_feed, investor360, insperity, voya, linked_accounts
 from api import security_log
 
 logging.basicConfig(level=logging.INFO)
@@ -158,6 +158,7 @@ app.include_router(ticker_feed.router, dependencies=[Depends(get_current_user)])
 app.include_router(investor360.router)
 app.include_router(insperity.router)
 app.include_router(voya.router)
+app.include_router(linked_accounts.router, dependencies=[Depends(get_current_user)])
 
 
 @app.get("/api/health")

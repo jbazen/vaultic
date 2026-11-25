@@ -11,6 +11,7 @@ import plaid
 from plaid.model.accounts_get_request import AccountsGetRequest
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
 
+from api.account_links import auto_link_accounts, effective_links
 from api.database import get_db
 from api.encryption import decrypt
 from api import security_log
@@ -132,6 +133,14 @@ def sync_all():
     except Exception as e:
         logger.error(f"Coinbase sync failed: {e}")
         security_log.log_sync_event(f"COINBASE_FAILED  error={e}")
+
+    # Link any newly synced account to the hidden account it replaced (#181),
+    # so the snapshot below counts the pair once.
+    try:
+        with get_db() as conn:
+            auto_link_accounts(conn)
+    except Exception as e:
+        logger.warning(f"Account history link step failed (non-fatal): {e}")
 
     # Net worth snapshot is taken inside _sync_item for each Plaid item, but we
     # call it once more here to capture Coinbase + any items that may have been
@@ -575,7 +584,14 @@ def _take_net_worth_snapshot(today: str):
 
         liquid = invested = crypto = liabilities = 0.0
 
+        # A linked pair (#181) counts once: the successor's balance, or the
+        # predecessor's last balance until the successor has one.
+        links = effective_links(conn)
+        counted_through_successor = set(links.values())
+
         for acct in accounts:
+            if acct["account_number"] in counted_through_successor:
+                continue
             # Try today's balance first; fall back to most recent balance so
             # accounts aren't silently dropped when sync hasn't run yet today.
             row = conn.execute(
@@ -587,6 +603,12 @@ def _take_net_worth_snapshot(today: str):
                     "SELECT current FROM account_balances WHERE account_number = ? "
                     "AND current IS NOT NULL ORDER BY snapped_at DESC LIMIT 1",
                     (acct["account_number"],),
+                ).fetchone()
+            if (not row or row["current"] is None) and acct["account_number"] in links:
+                row = conn.execute(
+                    "SELECT current FROM account_balances WHERE account_number = ? "
+                    "AND current IS NOT NULL ORDER BY snapped_at DESC LIMIT 1",
+                    (links[acct["account_number"]],),
                 ).fetchone()
             if not row or row["current"] is None:
                 continue
