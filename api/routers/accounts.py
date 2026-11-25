@@ -7,6 +7,7 @@ All endpoints require a valid JWT (via get_current_user dependency).
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel
 from api.dependencies import get_current_user
+from api.account_links import EFFECTIVE_LINKS_SQL, effective_links
 from api.database import get_db
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -40,12 +41,19 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 a.id, a.name, a.display_name, a.mask, a.official_name,
                 a.type, a.subtype, a.institution_name, a.is_manual,
                 a.plaid_account_id AS coinbase_uuid,
-                a.source, a.notes, p.item_id AS plaid_item_id,
+                a.source, a.notes, p.item_id AS plaid_item_id, a.account_number,
                 b.current, b.available, b.limit_amount,
                 b.native_balance, b.unit_price,
                 b.snapped_at,
                 m.registration_type, m.registration_group,
-                m.investment_objective, m.open_date
+                m.investment_objective, m.open_date,
+                k.id AS link_id,
+                CASE WHEN k.id IS NULL THEN NULL ELSE k.unlinked_at IS NULL END AS link_active,
+                pa.id AS linked_from_id,
+                COALESCE(pa.display_name, pa.name) AS linked_from_name,
+                pa.mask AS linked_from_mask,
+                (SELECT MAX(snapped_at) FROM account_balances
+                 WHERE account_number = pa.account_number) AS linked_until
             FROM accounts a
             LEFT JOIN account_balances b ON b.account_number = a.account_number
                 AND b.snapped_at = (
@@ -54,14 +62,28 @@ async def list_accounts(_user: str = Depends(get_current_user)):
                 )
             LEFT JOIN i360_account_map m ON m.account_id = a.id
             LEFT JOIN plaid_items p ON p.id = a.plaid_item_id
+            LEFT JOIN account_links k ON k.successor_account_number = a.account_number
+            LEFT JOIN accounts pa ON pa.account_number = k.predecessor_account_number
             WHERE a.is_active = 1
             ORDER BY a.institution_name, a.name
         """).fetchall()
-    result = []
-    for row in rows:
-        r = dict(row)
-        r["label"] = _display(r["name"], r["display_name"], r["mask"])
-        result.append(r)
+        # A linked account (#181) with no balance of its own yet shows its
+        # predecessor's last one, the same amount the net worth snapshot counts.
+        links = effective_links(conn)
+        result = []
+        for row in rows:
+            r = dict(row)
+            r["label"] = _display(r["name"], r["display_name"], r["mask"])
+            pred = links.get(r.get("account_number")) if r["current"] is None else None
+            if pred:
+                last = conn.execute(
+                    "SELECT current, snapped_at FROM account_balances WHERE account_number = ? "
+                    "AND current IS NOT NULL ORDER BY snapped_at DESC LIMIT 1", (pred,)
+                ).fetchone()
+                if last:
+                    r["current"], r["snapped_at"] = last["current"], last["snapped_at"]
+            r.pop("account_number", None)
+            result.append(r)
     return result
 
 
@@ -206,16 +228,25 @@ async def portfolio_performance(
         # The hidden Investor360 (Parker) accounts (#179) keep their past points
         # but stop at their last balance (`until`), so their final value is not
         # carried forward onto dates after Parker moved to LPL.
-        src_cte = """
-            SELECT 'a:' || b.account_number AS entity, b.snapped_at AS d, b.current AS value,
-                   CASE WHEN a.is_active = 1 THEN NULL ELSE (
+        # A linked predecessor (#181) is the same line as its successor: its
+        # points come before the successor's first balance and its last value
+        # carries until then, so the move between providers is not a dip.
+        src_cte = f"""
+            SELECT 'a:' || COALESCE(l.succ, b.account_number) AS entity,
+                   b.snapped_at AS d, b.current AS value,
+                   CASE WHEN a.is_active = 1 OR l.succ IS NOT NULL THEN NULL ELSE (
                        SELECT MAX(b2.snapped_at) FROM account_balances b2
                        WHERE b2.account_number = a.account_number
                    ) END AS until
             FROM account_balances b
             JOIN accounts a ON a.account_number = b.account_number
+            LEFT JOIN ({EFFECTIVE_LINKS_SQL}) l ON l.pred = a.account_number
             WHERE a.type = 'investment' AND b.current IS NOT NULL
-              AND (a.is_active = 1 OR a.source = 'investor360')
+              AND (a.is_active = 1 OR a.source = 'investor360' OR l.succ IS NOT NULL)
+              AND (l.succ IS NULL OR b.snapped_at < COALESCE(
+                  (SELECT MIN(sb.snapped_at) FROM account_balances sb
+                   WHERE sb.account_number = l.succ AND sb.current IS NOT NULL),
+                  '9999-12-31'))
         """
         baseline = 0.0
         if has_snapshots:
@@ -269,20 +300,36 @@ async def balance_history(
     days: int = Query(default=90, le=1825),
     _user: str = Depends(get_current_user),
 ):
-    """Balance history for one account. Returns ASC (oldest first) for chart rendering."""
+    """Balance history for one account. Returns ASC (oldest first) for chart rendering.
+
+    An account linked to an earlier one (#181) starts with that account's
+    balances, up to the day before its own first balance.
+    """
     with get_db() as conn:
         acct = conn.execute(
             "SELECT account_number FROM accounts WHERE id = ?", (account_id,)
         ).fetchone()
         if not acct or not acct["account_number"]:
             return []
+        acct_num = acct["account_number"]
+        pred = effective_links(conn).get(acct_num)
         rows = conn.execute("""
             SELECT snapped_at, current, available
             FROM account_balances
             WHERE account_number = ?
               AND snapped_at >= date('now', '-' || ? || ' days')
             ORDER BY snapped_at ASC
-        """, (acct["account_number"], days)).fetchall()
+        """, (acct_num, days)).fetchall()
+        if pred:
+            rows = conn.execute("""
+                SELECT snapped_at, current, available FROM account_balances
+                WHERE account_number = ?
+                  AND snapped_at >= date('now', '-' || ? || ' days')
+                  AND snapped_at < COALESCE(
+                      (SELECT MIN(snapped_at) FROM account_balances
+                       WHERE account_number = ? AND current IS NOT NULL), '9999-12-31')
+                ORDER BY snapped_at ASC
+            """, (pred, days, acct_num)).fetchall() + rows
     return [dict(row) for row in rows]
 
 

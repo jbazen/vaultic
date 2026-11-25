@@ -711,6 +711,23 @@ export async function i360SyncLog(limit = 20) {
   return res.json();
 }
 
+// ── Linked accounts (#181): LPL accounts joined to their Parker history ──────
+export async function getLinkedSummary() {
+  const res = await apiFetch("/api/linked-accounts/summary");
+  return res.json();
+}
+export async function getAccountAllocation(accountId) {
+  const res = await apiFetch(`/api/linked-accounts/allocation/${accountId}`);
+  return res.json();
+}
+export async function setAccountLinkActive(linkId, active) {
+  const res = await apiFetch(`/api/linked-accounts/${linkId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ active }),
+  });
+  return res.json();
+}
+
 
 // ── Insperity 401K ──────────────────────────────────────────────────────────
 export async function insperitySync(curlCommand) {

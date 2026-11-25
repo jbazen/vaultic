@@ -17,6 +17,7 @@ import NewsFeedPanel from "../components/dashboard/NewsFeedPanel.jsx";
 import I360SyncModal from "../components/dashboard/I360SyncModal.jsx";
 import InsperitySyncModal from "../components/dashboard/InsperitySyncModal.jsx";
 import I360SummarySection from "../components/dashboard/I360SummarySection.jsx";
+import LinkedPortfolioSection from "../components/dashboard/LinkedPortfolioSection.jsx";
 import MarketSummaryCard from "../components/dashboard/MarketSummaryCard.jsx";
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
@@ -40,7 +41,15 @@ export default function Dashboard() {
   const [i360LastSync, setI360LastSync] = useState(null);
   const [savedOrder, setSavedOrder] = useState([]);
   const mountedRef = useRef(true);
+  const linkKeyRef = useRef(null);
   const { hash } = useLocation();
+
+  // Which LPL accounts are joined to their Parker history (#181). An Unlink or
+  // Relink changes it; the summary remounts (key) and the performance chart reloads.
+  const linkKey = accounts
+    .filter(a => a.link_id != null)
+    .map(a => `${a.link_id}:${a.link_active ? 1 : 0}`)
+    .join(",");
 
   // Full reload: first load, Sync All, Coinbase and the Parker / Insperity syncs.
   async function loadAll() {
@@ -123,6 +132,16 @@ export default function Dashboard() {
     }
     return stop;
   }, [loading, hash]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (linkKeyRef.current !== null && linkKeyRef.current !== linkKey) {
+      getPortfolioPerformance(1825)
+        .then(perf => { if (mountedRef.current) setPortfolioPerf(perf); })
+        .catch(() => { /* non-fatal: the chart keeps what it has */ });
+    }
+    linkKeyRef.current = linkKey;
+  }, [linkKey, loading]);
 
   async function handleSync() {
     setSyncing(true);
@@ -244,6 +263,9 @@ export default function Dashboard() {
 
       {/* ── Parker Financial Portfolio Summary (only while its accounts are shown, #179) ── */}
       {hasParker && <I360SummarySection />}
+
+      {/* ── Portfolio summary of the accounts Parker moved to, with Parker's history (#181) ── */}
+      <LinkedPortfolioSection key={linkKey} />
 
       {/* ── Accounts: full-width list; every block (institution + manual section) draggable ── */}
       <AccountsSection accounts={accounts} manualEntries={manualEntries} plaidItems={plaidItems}
