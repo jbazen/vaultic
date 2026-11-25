@@ -52,9 +52,9 @@ def db(monkeypatch):
 
 def _mock_api(monkeypatch, accounts, portfolios):
     """portfolios: {uuid: (spot_positions, deleted)}"""
-    def fake_get(_key, _pk, path):
+    def fake_get(_key, _pk, path, params=None):
         if path == "/api/v3/brokerage/accounts":
-            return {"accounts": accounts}
+            return {"accounts": accounts, "has_next": False}
         if path == "/api/v3/brokerage/portfolios":
             return {"portfolios": [
                 {"uuid": u, "name": u, "deleted": deleted}
@@ -149,7 +149,7 @@ def test_staked_summed_across_portfolios_and_deleted_portfolio_ignored(db, monke
 
 def test_breakdown_failure_fails_sync_without_partial_snapshot(db, monkeypatch):
     """A failed staked lookup must not write a too-low snapshot."""
-    def fake_get(_key, _pk, path):
+    def fake_get(_key, _pk, path, params=None):
         if path == "/api/v3/brokerage/accounts":
             return {"accounts": [_acct(WALLET_SOL, "SOL", "5")]}
         raise RuntimeError("portfolio API down")
@@ -175,3 +175,108 @@ def test_existing_account_keeps_its_row_and_history(db, monkeypatch):
     assert len(rows) == 1
     assert rows[0]["account_id"] == acct_id
     assert rows[0]["native_balance"] == pytest.approx(22)
+
+
+def test_existing_row_kept_when_wallet_missing_from_accounts(db, monkeypatch):
+    """Review finding: a staked-only sync must not add a second coinbaseETH row."""
+    from api import sync as sync_module
+    _mock_api(monkeypatch, [_acct(WALLET_ETH, "ETH", "1")], {"p1": ([], False)})
+    cb.sync_coinbase()
+
+    _mock_api(monkeypatch, [], {"p1": ([_staked("ETH", "1")], False)})
+    cb.sync_coinbase()
+
+    rows = db.execute(
+        "SELECT plaid_account_id FROM accounts WHERE account_number = 'coinbaseETH'"
+    ).fetchall()
+    assert [r["plaid_account_id"] for r in rows] == [WALLET_ETH]
+    assert _latest(db, "ETH")["native_balance"] == pytest.approx(1)
+
+    monkeypatch.setattr(sync_module, "get_db", cb.get_db)
+    sync_module._take_net_worth_snapshot("2099-01-01")
+    crypto = db.execute(
+        "SELECT crypto FROM net_worth_snapshots WHERE snapped_at = '2099-01-01'"
+    ).fetchone()["crypto"]
+    assert crypto == pytest.approx(2000.0)
+
+
+def test_breakdown_position_already_in_accounts_not_counted_twice(db, monkeypatch):
+    """Review finding: if a staked account ever shows up in /accounts too, count it once."""
+    _mock_api(monkeypatch,
+              [_acct(WALLET_SOL, "SOL", "5"), _acct("staked-sol", "SOL", "17")],
+              {"p1": ([_staked("SOL", "17", uuid="staked-sol")], False)})
+
+    cb.sync_coinbase()
+
+    assert _latest(db, "SOL")["native_balance"] == pytest.approx(22)
+
+
+def test_accounts_pagination_followed_and_query_not_signed(db, monkeypatch):
+    calls = []
+
+    def fake_get(_key, _pk, path, params=None):
+        calls.append((path, dict(params or {})))
+        if path == "/api/v3/brokerage/accounts":
+            if not (params or {}).get("cursor"):
+                return {"accounts": [_acct(WALLET_BTC, "BTC", "0.1")], "has_next": True, "cursor": "c2"}
+            return {"accounts": [_acct(WALLET_SOL, "SOL", "2")], "has_next": False, "cursor": ""}
+        if path == "/api/v3/brokerage/portfolios":
+            return {"portfolios": []}
+        raise AssertionError(path)
+    monkeypatch.setattr(cb, "_coinbase_get", fake_get)
+
+    cb.sync_coinbase()
+
+    assert _latest(db, "SOL")["native_balance"] == pytest.approx(2)
+    assert _latest(db, "BTC")["native_balance"] == pytest.approx(0.1)
+    account_calls = [c for c in calls if c[0] == "/api/v3/brokerage/accounts"]
+    assert account_calls[1][1]["cursor"] == "c2"
+
+
+def test_coinbase_get_signs_path_without_query(monkeypatch):
+    signed = {}
+    monkeypatch.setattr(cb, "_generate_jwt", lambda k, p, m, path: signed.setdefault("path", path) or "tok")
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {}
+
+    sent = {}
+
+    def fake_httpx_get(url, params=None, **_kw):
+        sent.update(url=url, params=params)
+        return _Resp()
+    monkeypatch.setattr(cb.httpx, "get", fake_httpx_get)
+
+    cb._coinbase_get("k", "p", "/api/v3/brokerage/accounts", {"limit": 250, "cursor": "c2"})
+
+    assert signed["path"] == "/api/v3/brokerage/accounts"
+    assert sent["url"].endswith("/api/v3/brokerage/accounts")
+    assert sent["params"] == {"limit": 250, "cursor": "c2"}
+
+
+def test_unknown_position_type_is_logged_not_counted(db, monkeypatch, caplog):
+    pos = dict(_staked("ETH", "0.5", uuid="unbonding-eth"), account_type="ACCOUNT_TYPE_SOMETHING_NEW")
+    _mock_api(monkeypatch, [_acct(WALLET_ETH, "ETH", "1")], {"p1": ([pos], False)})
+
+    with caplog.at_level("WARNING", logger="vaultic.coinbase"):
+        cb.sync_coinbase()
+
+    assert _latest(db, "ETH")["native_balance"] == pytest.approx(1)
+    assert "ACCOUNT_TYPE_SOMETHING_NEW" in caplog.text
+
+
+def test_missing_fields_and_uuid_are_tolerated(db, monkeypatch):
+    acct = {"uuid": WALLET_SOL, "currency": "SOL",
+            "available_balance": {"value": None}}  # no hold at all
+    no_uuid = _staked("SOL", "9")
+    no_uuid.pop("account_uuid")
+    no_total = _staked("SOL", None, uuid="staked-sol-2")
+    _mock_api(monkeypatch, [acct], {"p1": ([no_uuid, no_total, _staked("SOL", "3")], False)})
+
+    cb.sync_coinbase()
+
+    assert _latest(db, "SOL")["native_balance"] == pytest.approx(3)

@@ -50,10 +50,12 @@ def _generate_jwt(key_name: str, private_key: str, method: str, path: str) -> st
     )
 
 
-def _coinbase_get(key_name: str, private_key: str, path: str) -> dict:
+def _coinbase_get(key_name: str, private_key: str, path: str, params: dict | None = None) -> dict:
+    # The JWT's uri claim is signed over the path only, never the query string.
     token = _generate_jwt(key_name, private_key, "GET", path)
     resp = httpx.get(
         f"{COINBASE_API_BASE}{path}",
+        params=params,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         timeout=15,
     )
@@ -87,7 +89,21 @@ def _amount(field: dict | None) -> float:
     return float((field or {}).get("value") or 0)
 
 
-def _staked_balances(key_name: str, private_key: str) -> dict[str, tuple[str, float]]:
+def _list_accounts(key_name: str, private_key: str) -> list[dict]:
+    """Every /api/v3/brokerage/accounts entry, following has_next/cursor pages."""
+    accounts: list[dict] = []
+    params: dict = {"limit": 250}
+    while True:
+        page = _coinbase_get(key_name, private_key, "/api/v3/brokerage/accounts", params)
+        accounts.extend(page.get("accounts", []))
+        if not (page.get("has_next") and page.get("cursor")):
+            return accounts
+        params = {"limit": 250, "cursor": page["cursor"]}
+
+
+def _staked_balances(
+    key_name: str, private_key: str, known_uuids: set[str]
+) -> dict[str, tuple[str, float]]:
     """
     Staked coins per currency, as {currency: (staked_account_uuid, amount)}.
 
@@ -96,6 +112,12 @@ def _staked_balances(key_name: str, private_key: str) -> dict[str, tuple[str, fl
     portfolio breakdown lists it as a separate spot position with
     account_type ACCOUNT_TYPE_STAKED_FUNDS and the amount in
     total_balance_crypto (confirmed against the live API for #184).
+
+    Positions whose account is already in /accounts (known_uuids) are
+    skipped so nothing is counted twice. Every non-deleted portfolio is
+    walked; with the one Default portfolio this matches /accounts exactly.
+    A positive non-wallet position of any other type is logged, so coins
+    that move somewhere new (for example while unstaking) are noticed.
     """
     portfolios = _coinbase_get(key_name, private_key, "/api/v3/brokerage/portfolios")
     staked: dict[str, tuple[str, float]] = {}
@@ -106,13 +128,21 @@ def _staked_balances(key_name: str, private_key: str) -> dict[str, tuple[str, fl
             key_name, private_key, f"/api/v3/brokerage/portfolios/{portfolio['uuid']}"
         ).get("breakdown", {})
         for pos in breakdown.get("spot_positions", []):
-            if pos.get("account_type") != "ACCOUNT_TYPE_STAKED_FUNDS":
+            acct_uuid = pos.get("account_uuid") or ""
+            if not acct_uuid or acct_uuid in known_uuids:
                 continue
             currency = pos.get("asset", "")
             amount = float(pos.get("total_balance_crypto") or 0)
             if not currency or amount <= 0:
                 continue
-            prev_uuid, prev_amount = staked.get(currency, (pos.get("account_uuid", ""), 0.0))
+            account_type = pos.get("account_type")
+            if account_type != "ACCOUNT_TYPE_STAKED_FUNDS":
+                if account_type != "ACCOUNT_TYPE_WALLET":
+                    logger.warning(
+                        f"Coinbase {currency} position of type {account_type} not counted"
+                    )
+                continue
+            prev_uuid, prev_amount = staked.get(currency, (acct_uuid, 0.0))
             staked[currency] = (prev_uuid, prev_amount + amount)
     return staked
 
@@ -165,13 +195,13 @@ def sync_coinbase() -> dict:
         return {"skipped": True}
 
     try:
-        data = _coinbase_get(key_name, private_key, "/api/v3/brokerage/accounts")
-        staked = _staked_balances(key_name, private_key)
+        accounts = _list_accounts(key_name, private_key)
+        staked = _staked_balances(key_name, private_key, {a["uuid"] for a in accounts})
     except Exception as e:
         logger.error(f"Coinbase API error: {e}")
         raise
 
-    holdings = _combine_holdings(data.get("accounts", []), staked)
+    holdings = _combine_holdings(accounts, staked)
     today = date.today().isoformat()
     synced = 0
     total_usd = 0.0
@@ -189,8 +219,18 @@ def sync_coinbase() -> dict:
 
             display_name = f"Coinbase {currency}"
 
-            # Upsert account — plaid_account_id used as generic external ID
+            # Upsert account — plaid_account_id used as generic external ID.
+            # A currency that already has a row keeps it, whichever UUID the
+            # API led with this time, so there is only ever one row per
+            # currency and net worth never counts a coin twice.
             acct_number = f"coinbase{currency.upper()}"
+            existing = conn.execute(
+                "SELECT plaid_account_id FROM accounts "
+                "WHERE source = 'coinbase' AND account_number = ? ORDER BY id LIMIT 1",
+                (acct_number,),
+            ).fetchone()
+            if existing:
+                acct_uuid = existing["plaid_account_id"]
             conn.execute("""
                 INSERT INTO accounts
                     (plaid_account_id, name, display_name, type, subtype,
