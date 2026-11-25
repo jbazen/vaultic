@@ -280,3 +280,23 @@ def test_missing_fields_and_uuid_are_tolerated(db, monkeypatch):
     cb.sync_coinbase()
 
     assert _latest(db, "SOL")["native_balance"] == pytest.approx(3)
+
+
+def test_accounts_pagination_stops_on_repeated_cursor(monkeypatch):
+    def fake_get(_key, _pk, path, params=None):
+        return {"accounts": [], "has_next": True, "cursor": "same"}
+    monkeypatch.setattr(cb, "_coinbase_get", fake_get)
+
+    with pytest.raises(RuntimeError, match="repeated a cursor"):
+        cb._list_accounts("k", "p")
+
+
+def test_accounts_pagination_capped(monkeypatch):
+    pages = iter(range(1000))
+
+    def fake_get(_key, _pk, path, params=None):
+        return {"accounts": [], "has_next": True, "cursor": f"c{next(pages)}"}
+    monkeypatch.setattr(cb, "_coinbase_get", fake_get)
+
+    with pytest.raises(RuntimeError, match="50 pages"):
+        cb._list_accounts("k", "p")

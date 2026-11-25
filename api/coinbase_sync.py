@@ -90,15 +90,26 @@ def _amount(field: dict | None) -> float:
 
 
 def _list_accounts(key_name: str, private_key: str) -> list[dict]:
-    """Every /api/v3/brokerage/accounts entry, following has_next/cursor pages."""
+    """
+    Every /api/v3/brokerage/accounts entry, following has_next/cursor pages.
+
+    Raises if a cursor repeats or there are more than 50 pages, so a bad
+    response can never hang the scheduled sync.
+    """
     accounts: list[dict] = []
     params: dict = {"limit": 250}
-    while True:
+    seen_cursors: set[str] = set()
+    for _ in range(50):
         page = _coinbase_get(key_name, private_key, "/api/v3/brokerage/accounts", params)
         accounts.extend(page.get("accounts", []))
-        if not (page.get("has_next") and page.get("cursor")):
+        cursor = page.get("cursor")
+        if not (page.get("has_next") and cursor):
             return accounts
-        params = {"limit": 250, "cursor": page["cursor"]}
+        if cursor in seen_cursors:
+            raise RuntimeError("Coinbase accounts pagination repeated a cursor")
+        seen_cursors.add(cursor)
+        params = {"limit": 250, "cursor": cursor}
+    raise RuntimeError("Coinbase accounts pagination exceeded 50 pages")
 
 
 def _staked_balances(
@@ -155,9 +166,9 @@ def _combine_holdings(
 
     The amount is the wallet's available_balance plus hold (coins held for
     pending transfers) plus any staked amount, so staking a coin no longer
-    makes it vanish from net worth. The wallet account's UUID stays the
-    external ID, so the account row and its history are unchanged; the
-    staked position's UUID is used only when there is no wallet account.
+    makes it vanish from net worth. The UUID is the wallet's, or the staked
+    position's when there is no wallet; sync_coinbase uses it only for a
+    currency that has no account row yet.
     """
     holdings: dict[str, tuple[str, float]] = {}
     for acct in accounts:
