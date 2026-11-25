@@ -7,6 +7,9 @@ import AccountMetaLine from "./AccountMetaLine.jsx";
 import AccountBalanceChart from "./AccountBalanceChart.jsx";
 import PlaidHoldingsTable from "./PlaidHoldingsTable.jsx";
 import InvestmentTransactionsTable from "./InvestmentTransactionsTable.jsx";
+import AccountAllocationPanel from "./AccountAllocationPanel.jsx";
+import ParkerHistoryPanel from "./ParkerHistoryPanel.jsx";
+import LinkedHistoryNote from "./LinkedHistoryNote.jsx";
 
 // ── Plaid Investment Card ──────────────────────────────────────────────────────
 // Expandable row for Plaid investment/retirement accounts. Uses the same bordered
@@ -23,6 +26,14 @@ export default function PlaidInvestmentCard({ account, onRenamed }) {
 
   const label = account.display_name || account.name;
   const mask = account.mask ? ` (...${account.mask})` : "";
+  // Linked to the Parker account it moved from (#181): Allocation and Parker tabs.
+  const linked = account.link_id != null && !!account.link_active;
+  const tabs = [
+    ["holdings", "Holdings"], ["transactions", "Transactions"], ["performance", "Performance"],
+    ...(linked ? [["allocation", "Allocation"], ["parker", "Parker"]] : []),
+  ];
+  // A tab that went away (the link was undone) falls back to Holdings.
+  const shownTab = tabs.some(([key]) => key === activeTab) ? activeTab : "holdings";
 
   async function handleToggle() {
     const next = !expanded;
@@ -95,16 +106,21 @@ export default function PlaidInvestmentCard({ account, onRenamed }) {
       {/* Expanded panel */}
       {expanded && (
         <div style={{ marginTop: 14 }}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-            <button style={tabBtn(activeTab === "holdings")} onClick={() => handleTabChange("holdings")}>Holdings</button>
-            <button style={tabBtn(activeTab === "transactions")} onClick={() => handleTabChange("transactions")}>Transactions</button>
-            <button style={tabBtn(activeTab === "performance")} onClick={() => handleTabChange("performance")}>Performance</button>
+          {account.link_id != null && <LinkedHistoryNote account={account} onChanged={onRenamed} />}
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            {tabs.map(([key, text]) => (
+              <button key={key} style={tabBtn(shownTab === key)} onClick={() => handleTabChange(key)}>{text}</button>
+            ))}
           </div>
-          {activeTab === "performance" ? (
-            <AccountBalanceChart accountId={account.id} />
+          {shownTab === "performance" ? (
+            <AccountBalanceChart key={account.link_active ? "linked" : "own"} accountId={account.id} />
+          ) : shownTab === "allocation" ? (
+            <AccountAllocationPanel accountId={account.id} />
+          ) : shownTab === "parker" ? (
+            <ParkerHistoryPanel accountId={account.linked_from_id} asOf={account.linked_until} />
           ) : loading ? (
             <div style={{ color: "var(--text2)", fontSize: 13, padding: "8px 0" }}>Loading…</div>
-          ) : activeTab === "holdings" ? (
+          ) : shownTab === "holdings" ? (
             <PlaidHoldingsTable holdings={holdings?.holdings} totals={holdings?.totals} />
           ) : (
             <InvestmentTransactionsTable transactions={transactions} />

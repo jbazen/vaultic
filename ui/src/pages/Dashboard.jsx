@@ -17,6 +17,7 @@ import NewsFeedPanel from "../components/dashboard/NewsFeedPanel.jsx";
 import I360SyncModal from "../components/dashboard/I360SyncModal.jsx";
 import InsperitySyncModal from "../components/dashboard/InsperitySyncModal.jsx";
 import I360SummarySection from "../components/dashboard/I360SummarySection.jsx";
+import LinkedPortfolioSection from "../components/dashboard/LinkedPortfolioSection.jsx";
 import MarketSummaryCard from "../components/dashboard/MarketSummaryCard.jsx";
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
@@ -244,6 +245,9 @@ export default function Dashboard() {
 
       {/* ── Parker Financial Portfolio Summary (only while its accounts are shown, #179) ── */}
       {hasParker && <I360SummarySection />}
+
+      {/* ── Portfolio summary of the accounts Parker moved to, with Parker's history (#181) ── */}
+      <LinkedPortfolioSection />
 
       {/* ── Accounts: full-width list; every block (institution + manual section) draggable ── */}
       <AccountsSection accounts={accounts} manualEntries={manualEntries} plaidItems={plaidItems}

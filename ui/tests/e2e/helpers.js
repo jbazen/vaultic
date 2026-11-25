@@ -48,6 +48,10 @@ export async function mockAllAPIs(page) {
   await page.route("**/api/accounts", r =>
     r.fulfill({ json: [{ id: 1, name: "Chase Checking", display_name: null, mask: "1234", type: "depository", subtype: "checking", institution_name: "Chase", current: 5000, available: 4900 }] }));
 
+  // ── Linked accounts (#181): no links unless a test adds them ──
+  await page.route("**/api/linked-accounts/summary", r =>
+    r.fulfill({ json: { groups: [] } }));
+
   // ── Other data endpoints ──
   await page.route("**/api/manual", r =>
     r.fulfill({ json: [{ id: 1, name: "Primary Home", category: "home_value", value: 450000, entered_at: "2026-03-01" }] }));
