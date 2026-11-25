@@ -82,11 +82,74 @@ def _get_usd_price(currency: str) -> float:
         return 0.0
 
 
+def _amount(field: dict | None) -> float:
+    """Read a Coinbase Amount object ({"value": "1.23", ...}) as a float."""
+    return float((field or {}).get("value") or 0)
+
+
+def _staked_balances(key_name: str, private_key: str) -> dict[str, tuple[str, float]]:
+    """
+    Staked coins per currency, as {currency: (staked_account_uuid, amount)}.
+
+    Staked SOL/ETH is not in /api/v3/brokerage/accounts at all: the wallet
+    account's available_balance and hold drop by the staked amount. The
+    portfolio breakdown lists it as a separate spot position with
+    account_type ACCOUNT_TYPE_STAKED_FUNDS and the amount in
+    total_balance_crypto (confirmed against the live API for #184).
+    """
+    portfolios = _coinbase_get(key_name, private_key, "/api/v3/brokerage/portfolios")
+    staked: dict[str, tuple[str, float]] = {}
+    for portfolio in portfolios.get("portfolios", []):
+        if portfolio.get("deleted"):
+            continue
+        breakdown = _coinbase_get(
+            key_name, private_key, f"/api/v3/brokerage/portfolios/{portfolio['uuid']}"
+        ).get("breakdown", {})
+        for pos in breakdown.get("spot_positions", []):
+            if pos.get("account_type") != "ACCOUNT_TYPE_STAKED_FUNDS":
+                continue
+            currency = pos.get("asset", "")
+            amount = float(pos.get("total_balance_crypto") or 0)
+            if not currency or amount <= 0:
+                continue
+            prev_uuid, prev_amount = staked.get(currency, (pos.get("account_uuid", ""), 0.0))
+            staked[currency] = (prev_uuid, prev_amount + amount)
+    return staked
+
+
+def _combine_holdings(
+    accounts: list[dict], staked: dict[str, tuple[str, float]]
+) -> dict[str, tuple[str, float]]:
+    """
+    One holding per currency: {currency: (account_uuid, native_amount)}.
+
+    The amount is the wallet's available_balance plus hold (coins held for
+    pending transfers) plus any staked amount, so staking a coin no longer
+    makes it vanish from net worth. The wallet account's UUID stays the
+    external ID, so the account row and its history are unchanged; the
+    staked position's UUID is used only when there is no wallet account.
+    """
+    holdings: dict[str, tuple[str, float]] = {}
+    for acct in accounts:
+        currency = acct.get("currency", "")
+        amount = _amount(acct.get("available_balance")) + _amount(acct.get("hold"))
+        if currency in holdings:
+            uuid, prev = holdings[currency]
+            holdings[currency] = (uuid, prev + amount)
+        else:
+            holdings[currency] = (acct["uuid"], amount)
+    for currency, (staked_uuid, amount) in staked.items():
+        uuid, prev = holdings.get(currency, (staked_uuid, 0.0))
+        holdings[currency] = (uuid, prev + amount)
+    return holdings
+
+
 def sync_coinbase() -> dict:
     """
     Sync Coinbase portfolio to the database.
 
-    Fetches all accounts, converts non-zero balances to USD, and upserts into
+    Fetches all accounts plus staked balances (one total per currency:
+    available + hold + staked), converts non-zero totals to USD, and upserts into
     the standard accounts + account_balances tables. Uses the account UUID as
     the external ID (stored in plaid_account_id column) and source='coinbase'
     to distinguish from Plaid-sourced accounts.
@@ -103,20 +166,18 @@ def sync_coinbase() -> dict:
 
     try:
         data = _coinbase_get(key_name, private_key, "/api/v3/brokerage/accounts")
+        staked = _staked_balances(key_name, private_key)
     except Exception as e:
         logger.error(f"Coinbase API error: {e}")
         raise
 
-    accounts = data.get("accounts", [])
+    holdings = _combine_holdings(data.get("accounts", []), staked)
     today = date.today().isoformat()
     synced = 0
     total_usd = 0.0
 
     with get_db() as conn:
-        for acct in accounts:
-            currency = acct.get("currency", "")
-            balance = float(acct.get("available_balance", {}).get("value", "0") or "0")
-
+        for currency, (acct_uuid, balance) in holdings.items():
             if balance <= 0:
                 continue
 
@@ -126,7 +187,6 @@ def sync_coinbase() -> dict:
             if usd_value < 0.01:
                 continue  # skip dust balances
 
-            acct_uuid = acct["uuid"]
             display_name = f"Coinbase {currency}"
 
             # Upsert account — plaid_account_id used as generic external ID
