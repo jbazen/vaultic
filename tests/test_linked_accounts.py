@@ -238,19 +238,20 @@ class TestCutoverRepair:
         assert added == pytest.approx(1200.0)
         row = db.execute("SELECT total, invested FROM net_worth_snapshots WHERE snapped_at = ?", (mid,)).fetchone()
         assert (row["invested"], row["total"]) == (pytest.approx(6200.0), pytest.approx(6300.0))
-        assert db.execute("SELECT amount FROM net_worth_snapshot_repairs WHERE snapped_at = ?",
-                          (mid,)).fetchone()[0] == pytest.approx(1200.0)
+        # One row per pair looked at; only P2's carries an amount
+        assert dict(db.execute("SELECT reason, amount FROM net_worth_snapshot_repairs WHERE snapped_at = ?",
+                               (mid,)).fetchall()) == {"test P1": 0, "test P2": 1200.0, "test P3": 0}
         # Second run: already recorded, nothing changes
         assert repair_cutover_snapshots(db, dates=(mid,), reason="test") == 0
         assert db.execute("SELECT invested FROM net_worth_snapshots WHERE snapped_at = ?",
                           (mid,)).fetchone()[0] == pytest.approx(6200.0)
 
-    def test_nothing_to_add_records_nothing(self, db, moved):
+    def test_nothing_to_add_records_zero_per_pair(self, db, moved):
         from api.account_links import repair_cutover_snapshots
         _link_all(db)
         self._snap(db, moved["new"], 5000.0)
         assert repair_cutover_snapshots(db, dates=(moved["new"],), reason="test") == 0
-        assert db.execute("SELECT COUNT(*) FROM net_worth_snapshot_repairs").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*), SUM(amount) FROM net_worth_snapshot_repairs").fetchone()[:] == (3, 0)
 
     def test_without_links_nothing_is_added(self, db, moved):
         from api.account_links import repair_cutover_snapshots
@@ -445,6 +446,22 @@ class TestRepairEdges:
                           (mid,)).fetchone()[0] == pytest.approx(5000 + 3050 + 1200)
         assert db.execute("SELECT SUM(amount) FROM net_worth_snapshot_repairs").fetchone()[0] == pytest.approx(4250)
 
+    def test_repointed_pair_is_not_added_again(self, db, moved):
+        """A pair counted through its old successor stays counted after a repoint
+        to a new account that has no balance on that date."""
+        from api.account_links import auto_link_accounts, repair_cutover_snapshots
+        _link_all(db)
+        d = moved["new"]
+        db.execute("INSERT INTO net_worth_snapshots (snapped_at, total, invested) VALUES (?, 100, 0)", (d,))
+        assert repair_cutover_snapshots(db, dates=(d,), reason="test") == 0
+        db.execute("UPDATE accounts SET is_active = 0 WHERE account_number = 'S1'")
+        _account(db, "S1NEW", LPL, "plaid", 1)
+        _plaid(db, "S1NEW", _days_ago(1), "AAA", 10, 1100)
+        _plaid(db, "S1NEW", _days_ago(1), "BBB", 20, 2100)
+        assert auto_link_accounts(db) == 1
+        assert repair_cutover_snapshots(db, dates=(d,), reason="test") == 0
+        assert db.execute("SELECT invested FROM net_worth_snapshots WHERE snapped_at = ?", (d,)).fetchone()[0] == 0
+
     def test_today_is_left_to_the_snapshot_code(self, db, moved):
         from api.account_links import repair_cutover_snapshots
         _link_all(db)
@@ -476,5 +493,6 @@ class TestTotalsAndFallbacks:
         db.execute("UPDATE accounts SET is_active = 1 WHERE account_number = 'P1'")
         db.commit()
         detail = client.get("/api/net-worth/debug", headers=auth_headers).json()["plaid_accounts"]
-        p1 = next(a for a in detail if a["account_number"] == "P1")
+        p1 = next(a for a in detail if a["name"] == "P1")
+        assert "account_number" not in p1
         assert p1["bucket"] == "counted_through_successor" and p1["contributed"] == 0

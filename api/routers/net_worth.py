@@ -184,6 +184,7 @@ async def debug_breakdown(_user: str = Depends(get_current_user)):
                 bucket = "liquid (catch-all)"
             a["bucket"] = bucket
             a["contributed"] = bal
+            del a["account_number"]  # internal key, not shown (same as GET /api/accounts)
             plaid_detail.append(a)
 
         # Manual entries

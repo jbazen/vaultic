@@ -109,7 +109,13 @@ def _latest_balance(conn, account_number: str):
 
 
 def _save_link(conn, pred: str, succ: str, method: str) -> None:
-    """Create the link, or repoint the predecessor's stale link to `succ`."""
+    """Create the link, or repoint the predecessor's stale link to `succ`.
+
+    A repoint joins Parker straight to the new account: the old LPL account's
+    balances drop out of the chain, as they would for any Plaid login added
+    again, so the charts carry Parker's last value until the new account's
+    first balance.
+    """
     conn.execute(
         """INSERT INTO account_links (predecessor_account_number, successor_account_number, method)
            VALUES (?, ?, ?)
@@ -228,11 +234,14 @@ def repair_cutover_snapshots(conn, dates=CUTOVER_REPAIR_DATES,
     For each past date, a pair in effect whose predecessor is hidden and whose
     successor had no balance on or before that date was counted by neither
     account; its predecessor's last balance on or before the date is added to
-    `invested` and `total`. Each pair's amount is recorded on its own in
-    net_worth_snapshot_repairs (reason plus the predecessor), so a pair linked
-    later is still added, none is added twice, and the change can be reversed
-    by subtracting the recorded amounts. Today and later are skipped: the
-    link-aware snapshot code takes those. Returns the total added.
+    `invested` and `total`. Every pair is recorded on its own in
+    net_worth_snapshot_repairs (reason plus the predecessor) the first time it
+    is looked at, with amount 0 when its successor already counted it. So a
+    pair linked later is still added, and none is added twice, not even after
+    a repoint gives it a new successor with no balance on that date. The
+    change can be reversed by subtracting the recorded amounts. Today and
+    later are skipped: the link-aware snapshot code takes those. Returns the
+    total added.
     """
     today = date.today().isoformat()
     added_all = 0.0
@@ -241,33 +250,30 @@ def repair_cutover_snapshots(conn, dates=CUTOVER_REPAIR_DATES,
             "SELECT 1 FROM net_worth_snapshots WHERE snapped_at = ?", (d,)
         ).fetchone():
             continue
-        missing = conn.execute(
-            f"""SELECT l.pred, (
+        pairs = conn.execute(
+            f"""SELECT l.pred, CASE WHEN EXISTS (
+                    SELECT 1 FROM account_balances sb
+                    WHERE sb.account_number = l.succ AND sb.current IS NOT NULL
+                      AND date(sb.snapped_at) <= date(?)
+                ) THEN 0 ELSE COALESCE((
                     SELECT b.current FROM account_balances b
                     WHERE b.account_number = l.pred AND b.current IS NOT NULL
                       AND date(b.snapped_at) <= date(?)
                     ORDER BY b.snapped_at DESC LIMIT 1
-                ) AS amount
+                ), 0) END AS amount
                 FROM ({EFFECTIVE_LINKS_SQL}) l
-                JOIN accounts p ON p.account_number = l.pred AND p.is_active = 0
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM account_balances sb
-                    WHERE sb.account_number = l.succ AND sb.current IS NOT NULL
-                      AND date(sb.snapped_at) <= date(?)
-                )""",
+                JOIN accounts p ON p.account_number = l.pred AND p.is_active = 0""",
             (d, d),
         ).fetchall()
         added = 0.0
-        for m in missing:
-            if not m["amount"]:
-                continue
+        for m in pairs:
             cur = conn.execute(
                 "INSERT INTO net_worth_snapshot_repairs (snapped_at, reason, amount) VALUES (?, ?, ?) "
                 "ON CONFLICT(snapped_at, reason) DO NOTHING",
                 (d, f"{reason} {m['pred']}", m["amount"]),
             )
-            if not cur.rowcount:
-                continue  # this pair was already added
+            if not cur.rowcount or not m["amount"]:
+                continue  # already looked at, or its successor counted it
             conn.execute(
                 "UPDATE net_worth_snapshots SET invested = invested + ?, total = total + ? "
                 "WHERE snapped_at = ?",
